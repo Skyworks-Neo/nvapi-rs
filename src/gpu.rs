@@ -30,8 +30,30 @@ impl PhysicalGpu {
     pub fn enumerate() -> crate::NvapiResult<Vec<Self>> {
         trace!("gpu.enumerate()");
         let mut handles = [Default::default(); sys::types::NVAPI_MAX_PHYSICAL_GPUS];
-        match unsafe { nvcall!(NvAPI_EnumPhysicalGPUs@get(&mut handles)) } {
+        let mut gpus = match unsafe { nvcall!(NvAPI_EnumPhysicalGPUs@get(&mut handles)) } {
+            Err(crate::NvapiError { status: crate::Status::NvidiaDeviceNotFound, .. }) => Vec::new(),
+            Ok(len) => handles[..len as usize].iter().cloned().map(PhysicalGpu).collect(),
+            Err(e) => return Err(e),
+        };
+
+        let tcc_gpus = Self::enumerate_tcc()?;
+        for gpu in tcc_gpus {
+            let handle = gpu.handle().as_ptr();
+            if !gpus.iter().any(|existing| existing.handle().as_ptr() == handle) {
+                gpus.push(gpu);
+            }
+        }
+
+        Ok(gpus)
+    }
+
+    fn enumerate_tcc() -> crate::NvapiResult<Vec<Self>> {
+        trace!("gpu.enumerate_tcc()");
+        let mut handles = [Default::default(); sys::types::NVAPI_MAX_PHYSICAL_GPUS];
+        match unsafe { nvcall!(NvAPI_EnumTCCPhysicalGPUs@get(&mut handles)) } {
             Err(crate::NvapiError { status: crate::Status::NvidiaDeviceNotFound, .. }) => Ok(Vec::new()),
+            Err(crate::NvapiError { status: crate::Status::NoImplementation, .. }) => Ok(Vec::new()),
+            Err(crate::NvapiError { status: crate::Status::NotSupported, .. }) => Ok(Vec::new()),
             Ok(len) => Ok(handles[..len as usize].iter().cloned().map(PhysicalGpu).collect()),
             Err(e) => Err(e),
         }

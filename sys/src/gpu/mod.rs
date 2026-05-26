@@ -58,6 +58,13 @@ nvapi! {
 }
 
 nvapi! {
+    pub type EnumTCCPhysicalGPUsFn = extern "C" fn(nvGPUHandle: *mut [NvPhysicalGpuHandle; NVAPI_MAX_PHYSICAL_GPUS], pGpuCount: *mut u32) -> NvAPI_Status;
+
+    /// This function returns an array of physical GPU handles operating in TCC mode.
+    pub unsafe fn NvAPI_EnumTCCPhysicalGPUs;
+}
+
+nvapi! {
     pub type GPU_GetFullNameFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, szName: *mut NvAPI_ShortString) -> NvAPI_Status;
 
     /// This function retrieves the full GPU name as an ASCII string - for example, "Quadro FX 1400".
