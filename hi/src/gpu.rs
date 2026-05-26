@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 
 use nvapi::{
     self, BaseVoltage, ClockEntry, ClockFrequencyType, ClockRange, ClockTable, PStates, PffStatus,
-    PowerInfoEntry, Sensor, ThermalInfo, ThermalLimit, ThermalPolicyId, VfpCurve, VfpEntry,
-    VfpInfo,
+    PowerInfoEntry, Sensor, ThermalInfo, ThermalLimit, ThermalPolicyId,
+    VfpCurve, VfpEntry, VfpInfo,
 };
 pub use nvapi::{
     ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies, ClockLockEntry,
@@ -16,7 +16,7 @@ pub use nvapi::{
     Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
     PciIdentifiers, Percentage, PerfInfo, PerfLimitId, PerfStatus, PffCurve, PffPoint, PhysicalGpu,
     PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType, ThermalController,
-    ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain,
+    ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain,
     VoltageStatus, VoltageTable,
 };
 
@@ -391,6 +391,10 @@ impl Gpu {
                     )
                     .map_err(Into::into)
             })
+    }
+
+    pub fn thermal_sensors(&self, mask: i32) -> nvapi::Result<ThermalSensors> {
+        self.gpu.thermal_sensors(mask).map_err(Into::into)
     }
 
     pub fn set_cooler_levels<I: IntoIterator<Item = (FanCoolerId, CoolerSettings)>>(

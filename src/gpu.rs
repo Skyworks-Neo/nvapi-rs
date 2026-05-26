@@ -2,6 +2,7 @@ use crate::clock::{ClockDomain, ClockDomainInfo, VfpMask};
 use crate::pstate::PState;
 use crate::sys::gpu::{clock, cooler, display, ecc, power, pstate, thermal};
 use crate::sys::{self, driverapi, i2c};
+use crate::sys::api::NvVersion;
 use crate::types::{
     Kibibytes, Kilohertz2Delta, KilohertzDelta, Percentage, Percentage1000, RawConversion,
 };
@@ -605,6 +606,27 @@ impl PhysicalGpu {
 
         unsafe {
             nvcall!(NvAPI_GPU_GetThermalSettings@get(self.0, index.unwrap_or(thermal::NVAPI_THERMAL_TARGET_ALL as _)) => raw)
+        }
+    }
+
+    pub fn thermal_sensors(
+        &self,
+        mask: i32,
+    ) -> crate::Result<
+        <thermal::private::NV_GPU_THERMAL_SENSORS as RawConversion>::Target,
+    > {
+        trace!("gpu.thermal_sensors({})", mask);
+        let data = thermal::private::NV_GPU_THERMAL_SENSORS_V1 {
+            version: NvVersion::new(
+                size_of::<thermal::private::NV_GPU_THERMAL_SENSORS_V1>(),
+                2,
+            ),
+            mask,
+            values: [0; 40],
+        };
+
+        unsafe {
+            nvcall!(NvAPI_GPU_GetThermalSensors@get{data}(self.0) => raw)
         }
     }
 

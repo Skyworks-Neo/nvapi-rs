@@ -306,4 +306,34 @@ pub mod private {
             &self.points[..count]
         }
     }
+
+    nvstruct! {
+        pub struct NV_GPU_THERMAL_SENSORS_V1 {
+            pub version: NvVersion,
+            pub mask: i32,
+            pub values: [i32; 40],
+        }
+    }
+
+    impl NV_GPU_THERMAL_SENSORS_V1 {
+        pub fn get_temp(&self, index: usize) -> Option<i32> {
+            self.values.get(index)
+                .map(|&v| v / 256)
+                .filter(|&v| v > 0 && v < 255)
+        }
+
+        pub fn hotspot(&self) -> Option<i32> {
+            self.get_temp(9)
+        }
+
+        pub fn vram(&self) -> Option<i32> {
+            self.get_temp(15)
+        }
+    }
+
+    nvversion! { @=NV_GPU_THERMAL_SENSORS NV_GPU_THERMAL_SENSORS_V1(2) }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_GetThermalSensors(hPhysicalGPU: NvPhysicalGpuHandle, pSensors: *mut NV_GPU_THERMAL_SENSORS) -> NvAPI_Status;
+    }
 }

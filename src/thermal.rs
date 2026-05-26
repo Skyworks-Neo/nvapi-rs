@@ -804,3 +804,26 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1 {
             .collect()
     }
 }
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
+pub struct ThermalSensors {
+    pub hotspot: Option<Celsius>,
+    pub vram: Option<Celsius>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub values: Vec<i32>,
+}
+
+impl RawConversion for thermal::private::NV_GPU_THERMAL_SENSORS {
+    type Target = ThermalSensors;
+    type Error = sys::ArgumentRangeError;
+
+    fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
+        trace!("convert_raw({:#?})", self);
+        Ok(ThermalSensors {
+            hotspot: self.hotspot().map(Celsius),
+            vram: self.vram().map(Celsius),
+            values: self.values.to_vec(),
+        })
+    }
+}

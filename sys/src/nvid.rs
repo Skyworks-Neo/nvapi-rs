@@ -675,6 +675,7 @@ NvAPI_GPU_SetDeepIdleState = 0x568a2292,
 
 NvAPI_GetScalingCaps = 0x8e875cf9,
 NvAPI_GPU_GetThermalTable = 0xc729203c,
+NvAPI_GPU_GetThermalSensors = 0x65fe3aad, // undocumented: hotspot, VRAM, etc.
 NvAPI_SYS_SetPostOutput = 0xd3a092b1,
 
 // source: PX18 ManagedNvApi.dll (see also: ccminer/nvapi.cpp)
