@@ -1,17 +1,17 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::{iter, slice, fmt};
+use std::fmt;
 use crate::sys::gpu::{clock, power};
 use crate::sys;
 #[cfg(feature = "serde")]
 use serde::{Serialize, Deserialize};
 use log::trace;
-use crate::sys::types::{ClockMask, ClockMaskIter};
+use crate::sys::types::ClockMask;
 use crate::gpu::VfpInfo;
-use crate::types::{Kilohertz, Kilohertz2, KilohertzDelta, Kilohertz2Delta, Percentage, Percentage1000, Microvolts, Range, RawConversion};
+use crate::types::{Kilohertz, KilohertzDelta, Kilohertz2Delta, Percentage, Percentage1000, Microvolts, Range, RawConversion};
 
 pub use sys::gpu::clock::PublicClockId as ClockDomain;
-pub use sys::gpu::clock::private::{PerfLimitId, NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_TYPE as VfPointType};
+pub use sys::gpu::clock::private::{PerfLimitId, VfPointType};
 pub use sys::gpu::power::private::{PerfFlags, PowerTopologyChannelId};
 
 impl RawConversion for clock::NV_GPU_CLOCK_FREQUENCIES {
@@ -55,7 +55,7 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_CL
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        VfPointType::from_raw(self.clock_type)
+        VfPointType::from_raw(self.clock_type as i32)
     }
 }
 
@@ -99,9 +99,8 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_
         trace!("convert_raw({:#?})", self);
         match *self {
             clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_V1 {
-                clock_type, freqDeltaKHz, rsvd, padding,
+                clock_type: _, freqDeltaKHz, rsvd: _, padding: _,
             } => Ok(freqDeltaKHz.into()),
-            _ => Err(sys::ArgumentRangeError),
         }
     }
 }
@@ -137,7 +136,7 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_ENTR
         match *self {
             clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_ENTRY {
                 disabled: 0, clockType, rangeMax, rangeMin, vfpIndexMin, vfpIndexMax,
-                unknown0, unknown1, padding,
+                unknown0: _, unknown1: _, padding: _,
             } => Ok(ClockRange {
                 domain: ClockDomain::from_raw(clockType)?,
                 range: Range {
@@ -274,9 +273,8 @@ impl RawConversion for power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V
         trace!("convert_raw({:#?})", self);
         match *self {
             power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1 {
-                clock_type, point, unknown,
+                clock_type: _, point, unknown: _,
             } => point.convert_raw().map_err(Into::into),
-            _ => Err(sys::ArgumentRangeError),
         }
     }
 }
@@ -292,12 +290,11 @@ impl RawConversion for power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V
             power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V3 {
                 clock_type, point, point_default, point_overclocked, ..
             } => Ok(VfpEntry {
-                point_type: VfPointType::from_raw(clock_type)?,
+                point_type: VfPointType::from_raw(clock_type as i32)?,
                 current: point.convert_raw()?,
                 default: point_default.convert_raw()?,
                 overclocked: point_overclocked.convert_raw()?,
             }),
-            _ => Err(sys::ArgumentRangeError),
         }
     }
 }
@@ -403,7 +400,6 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V
                 },
                 default_limit: Percentage1000(def_power),
             }),
-            _ => Err(sys::ArgumentRangeError),
         }
     }
 }
@@ -427,7 +423,6 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V
                 },
                 default_limit: Percentage1000(def_power),
             }),
-            _ => Err(sys::ArgumentRangeError),
         }
     }
 }
@@ -455,9 +450,8 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_ENTRY
         trace!("convert_raw({:#?})", self);
         match *self {
             power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_ENTRY {
-                channel, power, unknown0, unknown1,
+                channel, power, unknown0: _, unknown1: _,
             } => Ok((channel.try_into()?, Percentage1000(power))),
-            _ => Err(sys::ArgumentRangeError),
         }
     }
 }
@@ -482,9 +476,8 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY
         trace!("convert_raw({:#?})", self);
         match *self {
             power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V1 {
-                policy_id, power_target, ..
+                policy_id: _, power_target, ..
             } => Ok(Percentage1000(power_target)),
-            _ => Err(sys::ArgumentRangeError),
         }
     }
 }
@@ -498,9 +491,8 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY
         trace!("convert_raw({:#?})", self);
         match *self {
             power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V2 {
-                policy_id, power_target, ..
+                policy_id: _, power_target, ..
             } => Ok(Percentage1000(power_target)),
-            _ => Err(sys::ArgumentRangeError),
         }
     }
 }
@@ -597,13 +589,12 @@ impl RawConversion for clock::private::NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
         trace!("convert_raw({:#?})", self);
         match *self {
             clock::private::NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
-                id, mode, value, clock_id, ..
+                id, mode: _, value: _, clock_id, ..
             } => Ok(ClockLockEntry {
                 limit: id.try_into()?,
                 clock: clock_id.try_into()?,
                 lock_value: ClockLockValue::from_raw(self)?,
             }),
-            _ => Err(sys::ArgumentRangeError),
         }
     }
 }

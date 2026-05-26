@@ -8,7 +8,7 @@ use nvapi::{self,
     ClockTable, VfpCurve, VfpEntry, Sensor, ThermalInfo, PowerInfoEntry,
     ClockFrequencyType, ClockEntry,
     BaseVoltage, PStates, ClockRange, VfpInfo,
-    ThermalLimit, ThermalPolicyId, PffStatus, VfPointType,
+    ThermalLimit, ThermalPolicyId, PffStatus,
 };
 pub use nvapi::{
     PhysicalGpu,
@@ -206,7 +206,7 @@ impl Gpu {
             },
             coolers: match allowable_result(self.gpu.cooler_info())? {
                 Ok(c) => c,
-                Err(e) => Default::default(),
+                Err(_e) => Default::default(),
             },
             perf: self.gpu.perf_info()?,
             sensor_limits: match allowable_result(self.gpu.thermal_limit_info())? {
@@ -264,7 +264,7 @@ impl Gpu {
             },
             coolers: match allowable_result(self.gpu.cooler_status())? {
                 Ok(c) => c,
-                Err(e) => Default::default(),
+                Err(_e) => Default::default(),
             },
             perf: self.gpu.perf_status()?,
             vfp: match &vfp_info {
@@ -300,7 +300,7 @@ impl Gpu {
             },
             coolers: match allowable_result(self.gpu.cooler_control())? {
                 Ok(c) => c,
-                Err(e) => Default::default(),
+                Err(_e) => Default::default(),
             },
             vfp: match &vfp_info {
                 Ok(info) => allowable_result(self.gpu.vfp_table(info))?.map(From::from).ok(),

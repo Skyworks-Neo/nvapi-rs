@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 use log::trace;
-use crate::sys::{self, gsync, handles::NvGSyncDeviceHandle};
+use crate::sys::{gsync, handles::NvGSyncDeviceHandle};
 use crate::types::RawConversion;
 use crate::PhysicalGpu;
 

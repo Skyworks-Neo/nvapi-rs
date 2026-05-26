@@ -27,7 +27,7 @@
           ++ [ generate ];
 
         shellHook = nixlib.optionalString hostPlatform.isLinux ''
-          if [[ -e /run/opengl-driver/lib ]]; then
+          if [[ -_e /run/opengl-driver/lib ]]; then
             export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/run/opengl-driver/lib"
           fi
         '';

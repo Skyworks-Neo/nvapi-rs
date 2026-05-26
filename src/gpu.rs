@@ -6,7 +6,7 @@ use log::trace;
 use serde::{Serialize, Deserialize};
 use crate::sys::gpu::{pstate, clock, power, cooler, thermal, display, ecc};
 use crate::sys::{self, driverapi, i2c};
-use crate::types::{Kibibytes, KilohertzDelta, Kilohertz2Delta, Microvolts, Percentage, Percentage1000, RawConversion};
+use crate::types::{Kibibytes, KilohertzDelta, Kilohertz2Delta, Percentage, Percentage1000, RawConversion};
 use crate::clock::{ClockDomain, ClockDomainInfo, VfpMask};
 use crate::pstate::PState;
 
@@ -330,7 +330,7 @@ impl PhysicalGpu {
     pub fn clock_frequencies(&self, clock_type: ClockFrequencyType) -> crate::NvapiResult<ClockFrequencies> {
         trace!("gpu.clock_frequencies({:?})", clock_type);
         let mut clocks = clock::NV_GPU_CLOCK_FREQUENCIES::default();
-        clocks.set_ClockType(clock_type.raw());
+        clocks.set_clock_type(clock_type.raw());
 
         unsafe {
             nvcall!(NvAPI_GPU_GetAllClockFrequencies@get{clocks}(self.0) => raw)
@@ -424,7 +424,7 @@ impl PhysicalGpu {
         self.vfp_table_raw(info).and_then(|raw| crate::clock::ClockTable::from_raw(&raw, info))
     }
 
-    pub fn set_vfp_table<I: Iterator<Item=(usize, Kilohertz2Delta)>, M: Iterator<Item=(usize, Kilohertz2Delta)>>(&self, info: &VfpInfo, clocks: I, memory: M) -> crate::Result<()> {
+    pub fn set_vfp_table<I: Iterator<Item=(usize, Kilohertz2Delta)>, M: Iterator<Item=(usize, Kilohertz2Delta)>>(&self, info: &VfpInfo, clocks: I, _memory: M) -> crate::Result<()> {
         trace!("gpu.set_vfp_table({:?})", info);
         let mut data = self.vfp_table_raw(info)?;
         data.mask = info.mask.mask;
