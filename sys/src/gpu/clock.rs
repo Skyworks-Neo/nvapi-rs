@@ -35,11 +35,11 @@ nvstruct! {
 }
 
 impl NV_GPU_CLOCK_FREQUENCIES_V1 {
-    pub fn ClockType(&self) -> NV_GPU_CLOCK_FREQUENCIES_CLOCK_TYPE {
+    pub fn clock_type(&self) -> NV_GPU_CLOCK_FREQUENCIES_CLOCK_TYPE {
         (self.reserved & 3) as _
     }
 
-    pub fn set_ClockType(&mut self, value: NV_GPU_CLOCK_FREQUENCIES_CLOCK_TYPE) {
+    pub fn set_clock_type(&mut self, value: NV_GPU_CLOCK_FREQUENCIES_CLOCK_TYPE) {
         self.reserved = (value as u32) & 3;
     }
 }
@@ -153,10 +153,10 @@ pub mod private {
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_V1 {
             pub clock_type: u32,
-            pub unknown0: Padding<[u32; 4]>,
+            pub rsvd: Padding<[u32; 4]>,
             /// offsetFrequencyKhz
             pub freqDeltaKHz: NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_PROG_V1,
-            pub unknown1: Padding<[u32; 3]>,
+            pub padding: Padding<[u32; 3]>,
         }
     }
 
@@ -212,13 +212,27 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClockClientClkDomainsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pClockRanges: *mut NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO) -> NvAPI_Status;
     }
 
+    nvenum! {
+        pub enum NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_TYPE / VfPointType {
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_TYPE_PROG / Prog = 0,
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_TYPE_FIXED / Fixed = 1,
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_TYPE_DYN / Dyn = 2,
+        }
+    }
+
+    nvenum_display! {
+        VfPointType => {
+            Prog = "Prog",
+            Fixed = "Fixed",
+            Dyn = "Dyn",
+        }
+    }
+
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_CLOCK {
-            /// 1 for mem
-            pub memDelta: u32,
-            /// 1 for gpu
-            pub gpuDelta: u32,
-            pub unknown: Padding<[u32; 4]>,
+            pub clock_type: u32,
+            pub b_voltage_based: u8,
+            pub rsvd: Padding<[u8; 19]>,
         }
     }
 

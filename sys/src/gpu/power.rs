@@ -49,7 +49,7 @@ pub mod private {
 
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1 {
-            pub clock_type: u32, // 0, 1 for idle mem values?
+            pub clock_type: u32,
             pub point: NV_GPU_CLOCK_CLIENT_CLK_VF_POINT,
             pub unknown: Padding<[u32; 4]>,
         }
@@ -57,7 +57,7 @@ pub mod private {
 
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V3 {
-            pub clock_type: u32, // 0, 1?
+            pub clock_type: u32,
             pub point: NV_GPU_CLOCK_CLIENT_CLK_VF_POINT,
             pub point_default: NV_GPU_CLOCK_CLIENT_CLK_VF_POINT,
             pub unknown0: Padding<[u32; 8]>,

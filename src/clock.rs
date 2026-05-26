@@ -11,7 +11,7 @@ use crate::gpu::VfpInfo;
 use crate::types::{Kilohertz, Kilohertz2, KilohertzDelta, Kilohertz2Delta, Percentage, Percentage1000, Microvolts, Range, RawConversion};
 
 pub use sys::gpu::clock::PublicClockId as ClockDomain;
-pub use sys::gpu::clock::private::PerfLimitId;
+pub use sys::gpu::clock::private::{PerfLimitId, NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_TYPE as VfPointType};
 pub use sys::gpu::power::private::{PerfFlags, PowerTopologyChannelId};
 
 impl RawConversion for clock::NV_GPU_CLOCK_FREQUENCIES {
@@ -44,53 +44,18 @@ impl RawConversion for clock::private::NV_USAGES_INFO {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
-pub enum VfpMaskType {
-    Graphics,
-    Memory,
-    Unknown,
-}
-
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
 pub struct VfpMask {
     pub mask: ClockMask,
-    pub types: Vec<VfpMaskType>,
-}
-
-impl VfpMask {
-    pub fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
-        self.into_iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a VfpMask {
-    type Item = (usize, VfpMaskType);
-    type IntoIter = iter::Zip<ClockMaskIter<'a>, iter::Cloned<slice::Iter<'a, VfpMaskType>>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.mask.iter().zip(self.types.iter().cloned())
-    }
 }
 
 impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_CLOCK {
-    type Target = VfpMaskType;
+    type Target = VfPointType;
     type Error = sys::ArgumentRangeError;
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_CLOCK {
-                memDelta: 1, gpuDelta: 0, unknown,
-            } => Ok(VfpMaskType::Memory),
-            clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_CLOCK {
-                memDelta: 0, gpuDelta: 1, unknown,
-            } => Ok(VfpMaskType::Graphics),
-            clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_CLOCK {
-                memDelta: 0, gpuDelta: 0, unknown,
-            } => Ok(VfpMaskType::Unknown),
-            _ => Err(sys::ArgumentRangeError),
-        }
+        VfPointType::from_raw(self.clock_type)
     }
 }
 
@@ -100,14 +65,9 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        // TODO: validate everything else is 0!
 
         Ok(VfpMask {
             mask: self.mask,
-            types: self.mask.iter()
-                .filter_map(|i| self.clocks.get(i))
-                .map(RawConversion::convert_raw)
-                .collect::<Result<_, _>>()?,
         })
     }
 }
@@ -139,7 +99,7 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_
         trace!("convert_raw({:#?})", self);
         match *self {
             clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_V1 {
-                clock_type, freqDeltaKHz, unknown0, unknown1,
+                clock_type, freqDeltaKHz, rsvd, padding,
             } => Ok(freqDeltaKHz.into()),
             _ => Err(sys::ArgumentRangeError),
         }
@@ -234,19 +194,29 @@ impl<T> VfPoint<T> {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Default, Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
 pub struct VfpEntry<K> {
-    /// 1 for idle values / low pstates? only populated for memory clocks
-    pub unknown: u32,
+    pub point_type: VfPointType,
     pub current: VfPoint<K>,
     pub default: VfPoint<K>,
     pub overclocked: VfPoint<K>,
 }
 
+impl<K: Default> Default for VfpEntry<K> {
+    fn default() -> Self {
+        Self {
+            point_type: VfPointType::Prog,
+            current: Default::default(),
+            default: Default::default(),
+            overclocked: Default::default(),
+        }
+    }
+}
+
 impl<T> VfpEntry<T> {
     pub fn from_entry<K>(e: VfpEntry<K>) -> Self where T: From<K> {
         VfpEntry {
-            unknown: e.unknown,
+            point_type: e.point_type,
             current: VfPoint::from_entry(e.current),
             default: VfPoint::from_entry(e.default),
             overclocked: VfPoint::from_entry(e.overclocked),
@@ -273,7 +243,7 @@ impl<T: Default + PartialEq> VfpEntry<T> {
 impl<T: Default> From<VfPoint<T>> for VfpEntry<T> {
     fn from(current: VfPoint<T>) -> Self {
         Self {
-            unknown: 0,
+            point_type: VfPointType::Prog,
             current,
             default: Default::default(),
             overclocked: Default::default(),
@@ -322,7 +292,7 @@ impl RawConversion for power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V
             power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V3 {
                 clock_type, point, point_default, point_overclocked, ..
             } => Ok(VfpEntry {
-                unknown: clock_type,
+                point_type: VfPointType::from_raw(clock_type)?,
                 current: point.convert_raw()?,
                 default: point_default.convert_raw()?,
                 overclocked: point_overclocked.convert_raw()?,

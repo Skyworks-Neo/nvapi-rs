@@ -8,7 +8,7 @@ use nvapi::{self,
     ClockTable, VfpCurve, VfpEntry, Sensor, ThermalInfo, PowerInfoEntry,
     ClockFrequencyType, ClockEntry,
     BaseVoltage, PStates, ClockRange, VfpInfo,
-    ThermalLimit, ThermalPolicyId, PffStatus,
+    ThermalLimit, ThermalPolicyId, PffStatus, VfPointType,
 };
 pub use nvapi::{
     PhysicalGpu,
@@ -25,7 +25,7 @@ pub use nvapi::{
     Percentage, Celsius, Rpm,
     Range,
     Kibibytes, Microvolts, MicrovoltsDelta, Kilohertz, KilohertzDelta,
-    PState,
+    PState, VfPointType,
 };
 
 pub struct Gpu {
@@ -560,9 +560,16 @@ impl From<Sensor> for SensorDesc {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct VfpPoint {
+    pub point_type: VfPointType,
     pub default_frequency: Kilohertz,
     pub frequency: Kilohertz,
     pub voltage: Microvolts,
+}
+
+impl VfpPoint {
+    pub fn is_editable(&self) -> bool {
+        self.point_type == VfPointType::Prog
+    }
 }
 
 impl<T: Default + PartialEq + Copy> From<VfpEntry<T>> for VfpPoint where Kilohertz: From<T> {
@@ -573,6 +580,7 @@ impl<T: Default + PartialEq + Copy> From<VfpEntry<T>> for VfpPoint where Kiloher
         }
         debug_assert!(v.current.frequency == v.overclocked.frequency);
         VfpPoint {
+            point_type: v.point_type,
             default_frequency: v.default.frequency.into(),
             frequency: v.configured().frequency.into(),
             voltage: v.configured().voltage,
@@ -627,6 +635,7 @@ impl From<ClockTable> for VfpDeltas {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct VfPoint {
+    pub point_type: VfPointType,
     pub voltage: Microvolts,
     pub frequency: Kilohertz,
     pub delta: KilohertzDelta,
@@ -636,10 +645,15 @@ pub struct VfPoint {
 impl VfPoint {
     pub fn new(point: VfpPoint, delta: KilohertzDelta) -> Self {
         VfPoint {
+            point_type: point.point_type,
             voltage: point.voltage,
             frequency: point.frequency,
             default_frequency: point.default_frequency,
             delta,
         }
+    }
+
+    pub fn is_editable(&self) -> bool {
+        self.point_type == VfPointType::Prog
     }
 }
