@@ -468,8 +468,8 @@ impl Gpu {
                 },
                 ClockLockEntry {
                     limit: match gpu {
-                        true => PerfLimitId::GpuUnknown,
-                        false => PerfLimitId::MemoryUnknown,
+                        true => PerfLimitId::GpuLowerbound,
+                        false => PerfLimitId::MemoryLowerbound,
                     },
                     clock: domain,
                     lock_value: frequency.map(ClockLockValue::Frequency),
