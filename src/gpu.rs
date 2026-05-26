@@ -247,6 +247,7 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetFoundry@get(self.0) => try) }
     }
 
+    #[allow(deprecated)]
     pub fn memory_info(&self) -> crate::NvapiResult<MemoryInfo> {
         trace!("gpu.memory_info()");
 
@@ -539,6 +540,7 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientVoltRailsSetControl(self.0, &data)) }
     }
 
+    #[allow(unused_assignments)]
     pub fn power_usage<C: IntoIterator<Item = crate::clock::PowerTopologyChannelId>>(
         &self,
         channels: C,

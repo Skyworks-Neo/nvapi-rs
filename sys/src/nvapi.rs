@@ -21,7 +21,7 @@ pub unsafe fn set_query_interface(ptr: QueryInterfaceFn) {
     QUERY_INTERFACE_CACHE.store(ptr as usize, Ordering::Relaxed);
 }
 
-#[cfg(macos)]
+#[cfg(target_os = "macos")]
 pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
     // TODO: Apparently nvapi is available for macOS?
     Err(Status::LibraryNotFound)

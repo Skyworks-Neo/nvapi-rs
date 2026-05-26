@@ -124,14 +124,14 @@ impl<const N: usize> NvString<N> {
         CStr::from_bytes_with_nul(self.str_bytes())
     }
 
-    pub fn to_cstr(&self) -> Cow<CStr> {
+    pub fn to_cstr(&self) -> Cow<'_, CStr> {
         match self.as_cstr() {
             Ok(str) => Cow::Borrowed(str),
             Err(..) => Cow::Owned(unsafe { CString::from_vec_unchecked(self.str_bytes().into()) }),
         }
     }
 
-    pub fn to_string_lossy(&self) -> Cow<str> {
+    pub fn to_string_lossy(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(self.str_bytes())
     }
 }

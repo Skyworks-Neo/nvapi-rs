@@ -5,6 +5,7 @@ macro_rules! nv_declare_handle {
     ) => {
         $(#[$meta])*
         #[derive(Copy, Clone, Debug)]
+        #[repr(transparent)]
         pub struct $name(*const ::std::os::raw::c_void);
 
         impl $name {
