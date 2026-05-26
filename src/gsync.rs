@@ -1,8 +1,8 @@
-use std::convert::Infallible;
-use log::trace;
+use crate::PhysicalGpu;
 use crate::sys::{gsync, handles::NvGSyncDeviceHandle};
 use crate::types::RawConversion;
-use crate::PhysicalGpu;
+use log::trace;
+use std::convert::Infallible;
 
 #[derive(Debug)]
 pub struct GSyncDevice {
@@ -11,9 +11,7 @@ pub struct GSyncDevice {
 
 impl GSyncDevice {
     pub fn with_handle(handle: NvGSyncDeviceHandle) -> Self {
-        Self {
-            handle,
-        }
+        Self { handle }
     }
 
     pub fn handle(&self) -> &NvGSyncDeviceHandle {
@@ -24,24 +22,32 @@ impl GSyncDevice {
         trace!("gsync.enumerate()");
         let mut handles = [Default::default(); gsync::NVAPI_MAX_GSYNC_DEVICES];
         match unsafe { nvcall!(NvAPI_GSync_EnumSyncDevices@get(&mut handles)) } {
-            Err(crate::NvapiError { status: crate::Status::NvidiaDeviceNotFound, .. }) => Ok(Vec::new()),
-            Ok(len) => Ok(handles[..len as usize].iter().cloned().map(GSyncDevice::with_handle).collect()),
+            Err(crate::NvapiError {
+                status: crate::Status::NvidiaDeviceNotFound,
+                ..
+            }) => Ok(Vec::new()),
+            Ok(len) => Ok(handles[..len as usize]
+                .iter()
+                .cloned()
+                .map(GSyncDevice::with_handle)
+                .collect()),
             Err(e) => Err(e),
         }
     }
 
-    pub fn sync_status(&self, gpu: &PhysicalGpu) -> crate::NvapiResult<<gsync::NV_GSYNC_STATUS as RawConversion>::Target> {
+    pub fn sync_status(
+        &self,
+        gpu: &PhysicalGpu,
+    ) -> crate::NvapiResult<<gsync::NV_GSYNC_STATUS as RawConversion>::Target> {
         trace!("gsync.sync_status()");
-        unsafe {
-            nvcall!(NvAPI_GSync_GetSyncStatus@get(*self.handle(), *gpu.handle()) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GSync_GetSyncStatus@get(*self.handle(), *gpu.handle()) => raw) }
     }
 
-    pub fn capabilities(&self) -> crate::NvapiResult<<gsync::NV_GSYNC_CAPABILITIES as RawConversion>::Target> {
+    pub fn capabilities(
+        &self,
+    ) -> crate::NvapiResult<<gsync::NV_GSYNC_CAPABILITIES as RawConversion>::Target> {
         trace!("gsync.capabilities()");
-        unsafe {
-            nvcall!(NvAPI_GSync_QueryCapabilities@get(*self.handle()) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GSync_QueryCapabilities@get(*self.handle()) => raw) }
     }
 }
 
@@ -83,7 +89,7 @@ impl RawConversion for gsync::NV_GSYNC_CAPABILITIES_V1 {
         Ok(GSyncCapabilities {
             board_id: self.boardId,
             revision: self.revision,
-            .. Default::default()
+            ..Default::default()
         })
     }
 }
@@ -95,7 +101,7 @@ impl RawConversion for gsync::NV_GSYNC_CAPABILITIES_V2 {
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         self.v1.convert_raw().map(|v1| GSyncCapabilities {
             extended_revision: self.extendedRevision,
-            .. v1
+            ..v1
         })
     }
 }
@@ -107,7 +113,7 @@ impl RawConversion for gsync::NV_GSYNC_CAPABILITIES_V3 {
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         self.v2.convert_raw().map(|v2| GSyncCapabilities {
             max_mul_div: self.maxMulDiv(),
-            .. v2
+            ..v2
         })
     }
 }

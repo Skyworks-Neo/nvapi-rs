@@ -1,6 +1,6 @@
-use std::cmp;
-use std::borrow::Borrow;
 use crate::{PhysicalGpu, sys};
+use std::borrow::Borrow;
+use std::cmp;
 
 pub struct I2c<G = PhysicalGpu> {
     inner: G,
@@ -15,7 +15,7 @@ impl<G> I2c<G> {
     pub fn new(gpu: G, display_mask: u32) -> Self {
         I2c {
             inner: gpu,
-            display_mask: display_mask,
+            display_mask,
             port: None,
             port_is_ddc: false,
             address: 0,
@@ -46,9 +46,11 @@ impl<G: Borrow<PhysicalGpu>> I2c<G> {
         // TODO: use i2c_read_ex if port_is_ddc is false? docs say it must be true here
         self.inner.borrow().i2c_read(
             self.display_mask,
-            self.port, self.port_is_ddc,
+            self.port,
+            self.port_is_ddc,
             self.address,
-            register, bytes,
+            register,
+            bytes,
             self.speed,
         )
     }
@@ -57,9 +59,11 @@ impl<G: Borrow<PhysicalGpu>> I2c<G> {
         // TODO: use i2c_write_ex if port_is_ddc is false? docs say it must be true here
         self.inner.borrow().i2c_write(
             self.display_mask,
-            self.port, self.port_is_ddc,
+            self.port,
+            self.port_is_ddc,
             self.address,
-            register, bytes,
+            register,
+            bytes,
             self.speed,
         )
     }
@@ -82,13 +86,11 @@ impl<G> i2c::Address for I2c<G> {
 
 impl<G: Borrow<PhysicalGpu>> i2c::ReadWrite for I2c<G> {
     fn i2c_read(&mut self, value: &mut [u8]) -> Result<usize, Self::Error> {
-        self.nvapi_read(&[], value)
-            .map_err(Into::into)
+        self.nvapi_read(&[], value).map_err(Into::into)
     }
 
     fn i2c_write(&mut self, value: &[u8]) -> Result<(), Self::Error> {
-        self.nvapi_write(&[], value)
-            .map_err(Into::into)
+        self.nvapi_write(&[], value).map_err(Into::into)
     }
 }
 
@@ -98,7 +100,8 @@ impl<G: Borrow<PhysicalGpu>> i2c::Smbus for I2c<G> {
             self.nvapi_read(&[], &mut []).map(drop)
         } else {
             self.nvapi_write(&[], &[])
-        }.map_err(Into::into)
+        }
+        .map_err(Into::into)
     }
 
     fn smbus_read_byte(&mut self) -> Result<u8, Self::Error> {
@@ -109,8 +112,7 @@ impl<G: Borrow<PhysicalGpu>> i2c::Smbus for I2c<G> {
     }
 
     fn smbus_write_byte(&mut self, value: u8) -> Result<(), Self::Error> {
-        self.nvapi_write(&[], &[value])
-            .map_err(Into::into)
+        self.nvapi_write(&[], &[value]).map_err(Into::into)
     }
 
     fn smbus_read_byte_data(&mut self, command: u8) -> Result<u8, Self::Error> {
@@ -121,8 +123,7 @@ impl<G: Borrow<PhysicalGpu>> i2c::Smbus for I2c<G> {
     }
 
     fn smbus_write_byte_data(&mut self, command: u8, value: u8) -> Result<(), Self::Error> {
-        self.nvapi_write(&[command], &[value])
-            .map_err(Into::into)
+        self.nvapi_write(&[command], &[value]).map_err(Into::into)
     }
 
     fn smbus_read_word_data(&mut self, command: u8) -> Result<u16, Self::Error> {
@@ -141,7 +142,11 @@ impl<G: Borrow<PhysicalGpu>> i2c::Smbus for I2c<G> {
         unimplemented!()
     }
 
-    fn smbus_read_block_data(&mut self, command: u8, value: &mut [u8]) -> Result<usize, Self::Error> {
+    fn smbus_read_block_data(
+        &mut self,
+        command: u8,
+        value: &mut [u8],
+    ) -> Result<usize, Self::Error> {
         let mut buf = [0; 33];
         self.nvapi_read(&[command], &mut buf)
             .map_err(Into::into)
@@ -161,13 +166,11 @@ impl<G: Borrow<PhysicalGpu>> i2c::Smbus for I2c<G> {
 impl<G: Borrow<PhysicalGpu>> i2c::BlockTransfer for I2c<G> {
     fn i2c_read_block_data(&mut self, command: u8, value: &mut [u8]) -> Result<usize, Self::Error> {
         // TODO: nvapi docs say with register set, value cannot be longer than 16 bytes??
-        self.nvapi_read(&[command], value)
-            .map_err(Into::into)
+        self.nvapi_read(&[command], value).map_err(Into::into)
     }
 
     fn i2c_write_block_data(&mut self, command: u8, value: &[u8]) -> Result<(), Self::Error> {
         // TODO: nvapi docs say with register set, value cannot be longer than 16 bytes??
-        self.nvapi_write(&[command], value)
-            .map_err(Into::into)
+        self.nvapi_write(&[command], value).map_err(Into::into)
     }
 }

@@ -1,9 +1,9 @@
+use crate::sys;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::ops::RangeInclusive;
 use std::{fmt, ops};
-use std::convert::Infallible;
-#[cfg(feature = "serde")]
-use serde::{Serialize, Deserialize};
-use crate::sys;
 
 pub trait RawConversion {
     type Target;
@@ -472,21 +472,30 @@ impl<T: fmt::Debug> fmt::Debug for Range<T> {
 }
 
 impl<T> Range<T> {
-    pub fn range_from<U>(r: Range<U>) -> Self where T: From<U> {
+    pub fn range_from<U>(r: Range<U>) -> Self
+    where
+        T: From<U>,
+    {
         Range {
             min: r.min.into(),
             max: r.max.into(),
         }
     }
 
-    pub fn from_scalar(v: T) -> Self where T: Clone {
+    pub fn from_scalar(v: T) -> Self
+    where
+        T: Clone,
+    {
         Range {
             min: v.clone(),
             max: v,
         }
     }
 
-    pub fn range(&self) -> RangeInclusive<T> where T: Clone{
+    pub fn range(&self) -> RangeInclusive<T>
+    where
+        T: Clone,
+    {
         self.min.clone()..=self.max.clone()
     }
 }

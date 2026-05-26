@@ -10,4 +10,3 @@ nvapi! {
     /// This API gets a handle to a resource.
     pub unsafe fn NvAPI_D3D_GetObjectHandleForResource;
 }
-

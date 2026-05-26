@@ -192,8 +192,8 @@ nvapi! {
 
 /// Undocumented API
 pub mod private {
-    use crate::prelude_::*;
     use super::NV_I2C_SPEED;
+    use crate::prelude_::*;
 
     nvstruct! {
         /// Used in NvAPI_I2CRead() and NvAPI_I2CWrite()

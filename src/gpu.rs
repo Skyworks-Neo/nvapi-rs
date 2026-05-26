@@ -1,25 +1,30 @@
-use std::{ptr, fmt};
-use std::convert::Infallible;
-use std::collections::BTreeMap;
-use log::trace;
-#[cfg(feature = "serde")]
-use serde::{Serialize, Deserialize};
-use crate::sys::gpu::{pstate, clock, power, cooler, thermal, display, ecc};
-use crate::sys::{self, driverapi, i2c};
-use crate::types::{Kibibytes, KilohertzDelta, Kilohertz2Delta, Percentage, Percentage1000, RawConversion};
 use crate::clock::{ClockDomain, ClockDomainInfo, VfpMask};
 use crate::pstate::PState;
+use crate::sys::gpu::{clock, cooler, display, ecc, power, pstate, thermal};
+use crate::sys::{self, driverapi, i2c};
+use crate::types::{
+    Kibibytes, Kilohertz2Delta, KilohertzDelta, Percentage, Percentage1000, RawConversion,
+};
+use log::trace;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::convert::Infallible;
+use std::{fmt, ptr};
 
 #[derive(Debug)]
 pub struct PhysicalGpu(sys::handles::NvPhysicalGpuHandle);
 
-unsafe impl Send for PhysicalGpu { }
+unsafe impl Send for PhysicalGpu {}
 
-pub use sys::gpu::{SystemType, GpuType, BusType, PerformanceDecreaseReason, WorkstationFeatureMask, ArchitectureId, ChipRevision};
-pub use sys::gpu::private::{RamType, RamMaker, Foundry, VendorId as Vendor};
 pub use sys::gpu::clock::ClockFrequencyType;
 pub use sys::gpu::display::{ConnectedIdsFlags, DisplayIdsFlags, MonitorConnectorType};
-pub type ClockFrequencies = <sys::gpu::clock::NV_GPU_CLOCK_FREQUENCIES as RawConversion>::Target;
+pub use sys::gpu::private::{Foundry, RamMaker, RamType, VendorId as Vendor};
+pub use sys::gpu::{
+    ArchitectureId, BusType, ChipRevision, GpuType, PerformanceDecreaseReason, SystemType,
+    WorkstationFeatureMask,
+};
+pub type ClockFrequencies = <clock::NV_GPU_CLOCK_FREQUENCIES as RawConversion>::Target;
 pub type Utilizations = <pstate::NV_GPU_DYNAMIC_PSTATES_INFO_EX as RawConversion>::Target;
 
 impl PhysicalGpu {
@@ -31,15 +36,25 @@ impl PhysicalGpu {
         trace!("gpu.enumerate()");
         let mut handles = [Default::default(); sys::types::NVAPI_MAX_PHYSICAL_GPUS];
         let mut gpus = match unsafe { nvcall!(NvAPI_EnumPhysicalGPUs@get(&mut handles)) } {
-            Err(crate::NvapiError { status: crate::Status::NvidiaDeviceNotFound, .. }) => Vec::new(),
-            Ok(len) => handles[..len as usize].iter().cloned().map(PhysicalGpu).collect(),
+            Err(crate::NvapiError {
+                status: crate::Status::NvidiaDeviceNotFound,
+                ..
+            }) => Vec::new(),
+            Ok(len) => handles[..len as usize]
+                .iter()
+                .cloned()
+                .map(PhysicalGpu)
+                .collect(),
             Err(e) => return Err(e),
         };
 
         let tcc_gpus = Self::enumerate_tcc()?;
         for gpu in tcc_gpus {
             let handle = gpu.handle().as_ptr();
-            if !gpus.iter().any(|existing| existing.handle().as_ptr() == handle) {
+            if !gpus
+                .iter()
+                .any(|existing| existing.handle().as_ptr() == handle)
+            {
                 gpus.push(gpu);
             }
         }
@@ -51,70 +66,79 @@ impl PhysicalGpu {
         trace!("gpu.enumerate_tcc()");
         let mut handles = [Default::default(); sys::types::NVAPI_MAX_PHYSICAL_GPUS];
         match unsafe { nvcall!(NvAPI_EnumTCCPhysicalGPUs@get(&mut handles)) } {
-            Err(crate::NvapiError { status: crate::Status::NvidiaDeviceNotFound, .. }) => Ok(Vec::new()),
-            Err(crate::NvapiError { status: crate::Status::NoImplementation, .. }) => Ok(Vec::new()),
-            Err(crate::NvapiError { status: crate::Status::NotSupported, .. }) => Ok(Vec::new()),
-            Ok(len) => Ok(handles[..len as usize].iter().cloned().map(PhysicalGpu).collect()),
+            Err(crate::NvapiError {
+                status: crate::Status::NvidiaDeviceNotFound,
+                ..
+            }) => Ok(Vec::new()),
+            Err(crate::NvapiError {
+                status: crate::Status::NoImplementation,
+                ..
+            }) => Ok(Vec::new()),
+            Err(crate::NvapiError {
+                status: crate::Status::NotSupported,
+                ..
+            }) => Ok(Vec::new()),
+            Ok(len) => Ok(handles[..len as usize]
+                .iter()
+                .cloned()
+                .map(PhysicalGpu)
+                .collect()),
             Err(e) => Err(e),
         }
     }
 
     pub fn tachometer(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.tachometer()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetTachReading@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetTachReading@get(self.0)) }
     }
 
     pub fn short_name(&self) -> crate::NvapiResult<String> {
         trace!("gpu.short_name()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetShortName@get(self.0) => into)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetShortName@get(self.0) => into) }
     }
 
     pub fn full_name(&self) -> crate::NvapiResult<String> {
         trace!("gpu.full_name()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetFullName@get(self.0) => into)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetFullName@get(self.0) => into) }
     }
 
     pub fn vbios_version(&self) -> crate::NvapiResult<(u32, u32)> {
         trace!("gpu.vbios_revision()");
         Ok(unsafe {
-            (nvcall!(NvAPI_GPU_GetVbiosRevision@get(self.0))?, nvcall!(NvAPI_GPU_GetVbiosOEMRevision@get(self.0))?)
+            (
+                nvcall!(NvAPI_GPU_GetVbiosRevision@get(self.0))?,
+                nvcall!(NvAPI_GPU_GetVbiosOEMRevision@get(self.0))?,
+            )
         })
     }
 
     pub fn vbios_version_string(&self) -> crate::NvapiResult<String> {
         trace!("gpu.vbios_version_string()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetVbiosVersionString@get(self.0) => into)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetVbiosVersionString@get(self.0) => into) }
     }
 
     pub fn driver_model(&self) -> crate::NvapiResult<DriverModel> {
         trace!("gpu.driver_model()");
-        unsafe {
-            nvcall!(NvAPI_GetDriverModel@get(self.0))
-                .map(DriverModel::new)
-        }
+        unsafe { nvcall!(NvAPI_GetDriverModel@get(self.0)).map(DriverModel::new) }
     }
 
     pub fn gpu_id(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.gpu_id()");
-        unsafe {
-            nvcall!(NvAPI_GetGPUIDfromPhysicalGPU@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GetGPUIDfromPhysicalGPU@get(self.0)) }
     }
 
     pub fn pci_identifiers(&self) -> crate::NvapiResult<PciIdentifiers> {
         trace!("gpu.pci_identifiers()");
         let mut pci = PciIdentifiers::default();
         unsafe {
-            nvcall!(NvAPI_GPU_GetPCIIdentifiers(self.0, &mut pci.device_id, &mut pci.subsystem_id, &mut pci.revision_id, &mut pci.ext_device_id))
-                .map(|()| pci)
+            nvcall!(NvAPI_GPU_GetPCIIdentifiers(
+                self.0,
+                &mut pci.device_id,
+                &mut pci.subsystem_id,
+                &mut pci.revision_id,
+                &mut pci.ext_device_id
+            ))
+            .map(|()| pci)
         }
     }
 
@@ -140,173 +164,143 @@ impl PhysicalGpu {
 
     pub fn gpu_type(&self) -> crate::Result<GpuType> {
         trace!("gpu.gpu_type()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetGPUType@get(self.0) => try)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetGPUType@get(self.0) => try) }
     }
 
     pub fn bus_type(&self) -> crate::Result<BusType> {
         trace!("gpu.bus_type()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetBusType@get(self.0) => try)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetBusType@get(self.0) => try) }
     }
 
     pub fn bus_id(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.bus_id()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetBusId@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetBusId@get(self.0)) }
     }
 
     pub fn bus_slot_id(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.bus_slot_id()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetBusSlotId@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetBusSlotId@get(self.0)) }
     }
 
     pub fn irq(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.irq()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetIRQ@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetIRQ@get(self.0)) }
     }
 
     pub fn pcie_lanes(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.pcie_lanes()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetCurrentPCIEDownstreamWidth@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetCurrentPCIEDownstreamWidth@get(self.0)) }
     }
 
     pub fn board_number(&self) -> crate::NvapiResult<[u8; 0x10]> {
         trace!("gpu.board_number()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetBoardInfo@get(self.0))
-                .map(|data| *data.BoardNum)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetBoardInfo@get(self.0)).map(|data| *data.BoardNum) }
     }
 
     pub fn system_type(&self) -> crate::Result<SystemType> {
         trace!("gpu.system_type()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetSystemType@get(self.0) => try)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetSystemType@get(self.0) => try) }
     }
 
     pub fn core_count(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.core_count()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetGpuCoreCount@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetGpuCoreCount@get(self.0)) }
     }
 
     pub fn shader_pipe_count(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.shader_pipe_count()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetShaderPipeCount@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetShaderPipeCount@get(self.0)) }
     }
 
     pub fn shader_sub_pipe_count(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.shader_sub_pipe_count()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetShaderSubPipeCount@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetShaderSubPipeCount@get(self.0)) }
     }
 
     pub fn ram_type(&self) -> crate::Result<RamType> {
         trace!("gpu.ram_type()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetRamType@get(self.0) => try)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetRamType@get(self.0) => try) }
     }
 
     pub fn ram_maker(&self) -> crate::Result<RamMaker> {
         trace!("gpu.ram_maker()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetRamMaker@get(self.0) => try)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetRamMaker@get(self.0) => try) }
     }
 
     pub fn ram_bus_width(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.ram_bus_width()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetRamBusWidth@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetRamBusWidth@get(self.0)) }
     }
 
     pub fn ram_bank_count(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.ram_bank_count()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetRamBankCount@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetRamBankCount@get(self.0)) }
     }
 
     pub fn ram_partition_count(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.ram_partition_count()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetPartitionCount@get(self.0))
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetPartitionCount@get(self.0)) }
     }
 
     pub fn foundry(&self) -> crate::Result<Foundry> {
         trace!("gpu.foundry()");
-        unsafe {
-            nvcall!(NvAPI_GPU_GetFoundry@get(self.0) => try)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetFoundry@get(self.0) => try) }
     }
 
     pub fn memory_info(&self) -> crate::NvapiResult<MemoryInfo> {
         trace!("gpu.memory_info()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetMemoryInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetMemoryInfo@get(self.0) => raw) }
     }
 
     pub fn architecture(&self) -> crate::NvapiResult<ArchInfo> {
         trace!("gpu.architecture()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetArchInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetArchInfo@get(self.0) => raw) }
     }
 
-    pub fn workstation_features(&self) -> crate::NvapiResult<(WorkstationFeatureMask, WorkstationFeatureMask)> {
+    pub fn workstation_features(
+        &self,
+    ) -> crate::NvapiResult<(WorkstationFeatureMask, WorkstationFeatureMask)> {
         trace!("gpu.workstation_features()");
 
         unsafe {
-            nvcall!(NvAPI_GPU_WorkstationFeatureQuery@get2(self.0))
-                .map(|(configured, consistent)| (
-                    WorkstationFeatureMask::from_bits_truncate(configured),
-                    WorkstationFeatureMask::from_bits_truncate(consistent),
-                ))
+            nvcall!(NvAPI_GPU_WorkstationFeatureQuery@get2(self.0)).map(
+                |(configured, consistent)| {
+                    (
+                        WorkstationFeatureMask::from_bits_truncate(configured),
+                        WorkstationFeatureMask::from_bits_truncate(consistent),
+                    )
+                },
+            )
         }
     }
 
-    pub fn ecc_status(&self) -> crate::Result<<ecc::NV_GPU_ECC_STATUS_INFO as RawConversion>::Target> {
+    pub fn ecc_status(
+        &self,
+    ) -> crate::Result<<ecc::NV_GPU_ECC_STATUS_INFO as RawConversion>::Target> {
         trace!("gpu.ecc_status()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetECCStatusInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetECCStatusInfo@get(self.0) => raw) }
     }
 
-    pub fn ecc_errors(&self) -> crate::NvapiResult<<ecc::NV_GPU_ECC_ERROR_INFO as RawConversion>::Target> {
+    pub fn ecc_errors(
+        &self,
+    ) -> crate::NvapiResult<<ecc::NV_GPU_ECC_ERROR_INFO as RawConversion>::Target> {
         trace!("gpu.ecc_errors()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetECCErrorInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetECCErrorInfo@get(self.0) => raw) }
     }
 
     pub fn ecc_reset(&self, current: bool, aggregate: bool) -> crate::NvapiResult<()> {
         trace!("gpu.ecc_reset({:?}, {:?})", current, aggregate);
 
         unsafe {
-            nvcall!(NvAPI_GPU_ResetECCErrorInfo(self.0, current.into(), aggregate.into()))
+            nvcall!(NvAPI_GPU_ResetECCErrorInfo(
+                self.0,
+                current.into(),
+                aggregate.into()
+            ))
         }
     }
 
@@ -323,37 +317,43 @@ impl PhysicalGpu {
         trace!("gpu.ecc_configure()");
 
         unsafe {
-            nvcall!(NvAPI_GPU_SetECCConfiguration(self.0, enable.into(), immediately.into()))
+            nvcall!(NvAPI_GPU_SetECCConfiguration(
+                self.0,
+                enable.into(),
+                immediately.into()
+            ))
         }
     }
 
-    pub fn clock_frequencies(&self, clock_type: ClockFrequencyType) -> crate::NvapiResult<ClockFrequencies> {
+    pub fn clock_frequencies(
+        &self,
+        clock_type: ClockFrequencyType,
+    ) -> crate::NvapiResult<ClockFrequencies> {
         trace!("gpu.clock_frequencies({:?})", clock_type);
         let mut clocks = clock::NV_GPU_CLOCK_FREQUENCIES::default();
         clocks.set_clock_type(clock_type.raw());
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetAllClockFrequencies@get{clocks}(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetAllClockFrequencies@get{clocks}(self.0) => raw) }
     }
 
     pub fn current_pstate(&self) -> crate::Result<PState> {
         trace!("gpu.current_pstate()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetCurrentPstate@get(self.0) => try)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetCurrentPstate@get(self.0) => try) }
     }
 
-    pub fn pstates(&self) -> crate::Result<<pstate::NV_GPU_PERF_PSTATES20_INFO as RawConversion>::Target> {
+    pub fn pstates(
+        &self,
+    ) -> crate::Result<<pstate::NV_GPU_PERF_PSTATES20_INFO as RawConversion>::Target> {
         trace!("gpu.pstates()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetPstates20@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetPstates20@get(self.0) => raw) }
     }
 
-    pub fn set_pstates<I: IntoIterator<Item=(PState, ClockDomain, KilohertzDelta)>>(&self, deltas: I) -> crate::NvapiResult<()> {
+    pub fn set_pstates<I: IntoIterator<Item = (PState, ClockDomain, KilohertzDelta)>>(
+        &self,
+        deltas: I,
+    ) -> crate::NvapiResult<()> {
         trace!("gpu.set_pstates()");
 
         let mut info = pstate::NV_GPU_PERF_PSTATES20_INFO::default();
@@ -371,36 +371,34 @@ impl PhysicalGpu {
             map.1 += 1;
         }
         info.numPstates = map.len() as _;
-        info.numClocks = map.iter().map(|v| (v.1).1).max().unwrap_or(0) as _;
+        info.numClocks = map.iter().map(|v| v.1.1).max().unwrap_or(0) as _;
 
-        unsafe {
-            nvcall!(NvAPI_GPU_SetPstates20(self.0, &info))
-        }
+        unsafe { nvcall!(NvAPI_GPU_SetPstates20(self.0, &info)) }
     }
 
     pub fn dynamic_pstates_info(&self) -> crate::Result<Utilizations> {
         trace!("gpu.dynamic_pstates_info()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetDynamicPstatesInfoEx@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetDynamicPstatesInfoEx@get(self.0) => raw) }
     }
 
     /// Private and deprecated, use `dynamic_pstates_info()` instead.
-    pub fn usages(&self) -> crate::Result<<clock::private::NV_USAGES_INFO as RawConversion>::Target> {
+    pub fn usages(
+        &self,
+    ) -> crate::Result<<clock::private::NV_USAGES_INFO as RawConversion>::Target> {
         trace!("gpu.usages()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetUsages@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetUsages@get(self.0) => raw) }
     }
 
-    pub fn vfp_mask(&self) -> crate::Result<<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO as RawConversion>::Target> {
+    pub fn vfp_mask(
+        &self,
+    ) -> crate::Result<
+        <clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO as RawConversion>::Target,
+    > {
         trace!("gpu.vfp_mask()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetInfo@get(self.0) => raw) }
     }
 
     pub fn vfp_info(&self) -> crate::Result<VfpInfo> {
@@ -410,21 +408,31 @@ impl PhysicalGpu {
         })
     }
 
-    pub(crate) fn vfp_table_raw(&self, info: &VfpInfo) -> crate::Result<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL> {
+    pub(crate) fn vfp_table_raw(
+        &self,
+        info: &VfpInfo,
+    ) -> crate::Result<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL> {
         trace!("gpu.vfp_table({:?})", info);
         let mut data = clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
         data.mask = info.mask.mask;
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetControl@get{data}(self.0) => err)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetControl@get{data}(self.0) => err) }
     }
 
     pub fn vfp_table(&self, info: &VfpInfo) -> crate::Result<crate::clock::ClockTable> {
-        self.vfp_table_raw(info).and_then(|raw| crate::clock::ClockTable::from_raw(&raw, info))
+        self.vfp_table_raw(info)
+            .and_then(|raw| crate::clock::ClockTable::from_raw(&raw, info))
     }
 
-    pub fn set_vfp_table<I: Iterator<Item=(usize, Kilohertz2Delta)>, M: Iterator<Item=(usize, Kilohertz2Delta)>>(&self, info: &VfpInfo, clocks: I, _memory: M) -> crate::Result<()> {
+    pub fn set_vfp_table<
+        I: Iterator<Item = (usize, Kilohertz2Delta)>,
+        M: Iterator<Item = (usize, Kilohertz2Delta)>,
+    >(
+        &self,
+        info: &VfpInfo,
+        clocks: I,
+        _memory: M,
+    ) -> crate::Result<()> {
         trace!("gpu.set_vfp_table({:?})", info);
         let mut data = self.vfp_table_raw(info)?;
         data.mask = info.mask.mask;
@@ -438,20 +446,23 @@ impl PhysicalGpu {
             data.memDeltas[i] = delta.0;
         }*/
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClockClientClkVfPointsSetControl(self.0, &data) => err)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClockClientClkVfPointsSetControl(self.0, &data) => err) }
     }
 
-    pub fn vfp_ranges(&self) -> crate::Result<<clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO as RawConversion>::Target> {
+    pub fn vfp_ranges(
+        &self,
+    ) -> crate::Result<
+        <clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO as RawConversion>::Target,
+    > {
         trace!("gpu.vfp_ranges()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClockClientClkDomainsGetInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClockClientClkDomainsGetInfo@get(self.0) => raw) }
     }
 
-    pub fn vfp_locks<I: IntoIterator<Item=crate::clock::PerfLimitId>>(&self, limits: I) -> crate::Result<<clock::private::NV_GPU_PERF_CLIENT_LIMITS as RawConversion>::Target> {
+    pub fn vfp_locks<I: IntoIterator<Item = crate::clock::PerfLimitId>>(
+        &self,
+        limits: I,
+    ) -> crate::Result<<clock::private::NV_GPU_PERF_CLIENT_LIMITS as RawConversion>::Target> {
         trace!("gpu.vfp_locks()");
         let mut status = clock::private::NV_GPU_PERF_CLIENT_LIMITS::default();
         for (limit, entry) in limits.into_iter().zip(&mut status.entries) {
@@ -459,12 +470,13 @@ impl PhysicalGpu {
             status.count += 1;
         }
 
-        unsafe {
-            nvcall!(NvAPI_GPU_PerfClientLimitsGetStatus@get{status}(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_PerfClientLimitsGetStatus@get{status}(self.0) => raw) }
     }
 
-    pub fn set_vfp_locks<I: IntoIterator<Item=crate::clock::ClockLockEntry>>(&self, values: I) -> crate::NvapiResult<()> {
+    pub fn set_vfp_locks<I: IntoIterator<Item = crate::clock::ClockLockEntry>>(
+        &self,
+        values: I,
+    ) -> crate::NvapiResult<()> {
         trace!("gpu.set_vfp_locks()");
         use clock::private::ClockLockMode;
 
@@ -474,10 +486,12 @@ impl PhysicalGpu {
             data.count += 1;
             entry.id = lock.limit.into();
             let (mode, value) = match lock.lock_value {
-                Some(crate::clock::ClockLockValue::Frequency(v)) =>
-                    (ClockLockMode::ManualFrequency.raw(), v.0),
-                Some(crate::clock::ClockLockValue::Voltage(v)) =>
-                    (ClockLockMode::ManualVoltage.raw(), v.0),
+                Some(crate::clock::ClockLockValue::Frequency(v)) => {
+                    (ClockLockMode::ManualFrequency.raw(), v.0)
+                }
+                Some(crate::clock::ClockLockValue::Voltage(v)) => {
+                    (ClockLockMode::ManualVoltage.raw(), v.0)
+                }
                 None => (ClockLockMode::None.raw(), 0),
             };
             entry.mode = mode;
@@ -485,9 +499,7 @@ impl PhysicalGpu {
             entry.clock_id = lock.clock.into();
         }
 
-        unsafe {
-            nvcall!(NvAPI_GPU_PerfClientLimitsSetStatus(self.0, &data))
-        }
+        unsafe { nvcall!(NvAPI_GPU_PerfClientLimitsSetStatus(self.0, &data)) }
     }
 
     pub fn vfp_curve(&self, info: &VfpInfo) -> crate::Result<crate::clock::VfpCurve> {
@@ -501,20 +513,22 @@ impl PhysicalGpu {
         }
     }
 
-    pub fn core_voltage(&self) -> crate::Result<<power::private::NV_GPU_CLIENT_VOLT_RAILS_STATUS as RawConversion>::Target> {
+    pub fn core_voltage(
+        &self,
+    ) -> crate::Result<<power::private::NV_GPU_CLIENT_VOLT_RAILS_STATUS as RawConversion>::Target>
+    {
         trace!("gpu.core_voltage()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientVoltRailsGetStatus@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientVoltRailsGetStatus@get(self.0) => raw) }
     }
 
-    pub fn core_voltage_boost(&self) -> crate::Result<<power::private::NV_GPU_CLIENT_VOLT_RAILS_CONTROL as RawConversion>::Target> {
+    pub fn core_voltage_boost(
+        &self,
+    ) -> crate::Result<<power::private::NV_GPU_CLIENT_VOLT_RAILS_CONTROL as RawConversion>::Target>
+    {
         trace!("gpu.core_voltage_boost()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientVoltRailsGetControl@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientVoltRailsGetControl@get(self.0) => raw) }
     }
 
     pub fn set_core_voltage_boost(&self, value: Percentage) -> crate::NvapiResult<()> {
@@ -522,12 +536,14 @@ impl PhysicalGpu {
         let mut data = power::private::NV_GPU_CLIENT_VOLT_RAILS_CONTROL::default();
         data.percent = value.0;
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientVoltRailsSetControl(self.0, &data))
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientVoltRailsSetControl(self.0, &data)) }
     }
 
-    pub fn power_usage<C: IntoIterator<Item=crate::clock::PowerTopologyChannelId>>(&self, channels: C) -> crate::Result<<power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS as RawConversion>::Target> {
+    pub fn power_usage<C: IntoIterator<Item = crate::clock::PowerTopologyChannelId>>(
+        &self,
+        channels: C,
+    ) -> crate::Result<<power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS as RawConversion>::Target>
+    {
         trace!("gpu.power_usage()");
         let mut status = power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS::default();
         status.count = 0;
@@ -537,35 +553,36 @@ impl PhysicalGpu {
         }
         status.count = status.count.saturating_sub(1);
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientPowerTopologyGetStatus@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientPowerTopologyGetStatus@get(self.0) => raw) }
     }
 
     pub fn power_usage_channels(&self) -> crate::Result<Vec<crate::clock::PowerTopologyChannelId>> {
         trace!("gpu.power_usage_channels()");
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientPowerTopologyGetInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientPowerTopologyGetInfo@get(self.0) => raw) }
     }
 
-    pub fn power_limit_info(&self) -> crate::Result<<power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO as RawConversion>::Target> {
+    pub fn power_limit_info(
+        &self,
+    ) -> crate::Result<<power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO as RawConversion>::Target>
+    {
         trace!("gpu.power_limit_info()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientPowerPoliciesGetInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesGetInfo@get(self.0) => raw) }
     }
 
-    pub fn power_limit(&self) -> crate::Result<<power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS as RawConversion>::Target> {
+    pub fn power_limit(
+        &self,
+    ) -> crate::Result<<power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS as RawConversion>::Target>
+    {
         trace!("gpu.power_limit()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientPowerPoliciesGetStatus@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesGetStatus@get(self.0) => raw) }
     }
 
-    pub fn set_power_limit<I: IntoIterator<Item=Percentage1000>>(&self, values: I) -> crate::NvapiResult<()> {
+    pub fn set_power_limit<I: IntoIterator<Item = Percentage1000>>(
+        &self,
+        values: I,
+    ) -> crate::NvapiResult<()> {
         trace!("gpu.set_power_limit()");
         let mut data = power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS::default();
         //data.valid = 1;
@@ -575,12 +592,13 @@ impl PhysicalGpu {
             data.count += 1;
         }
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientPowerPoliciesSetStatus(self.0, &data))
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesSetStatus(self.0, &data)) }
     }
 
-    pub fn thermal_settings(&self, index: Option<u32>) -> crate::Result<<thermal::NV_GPU_THERMAL_SETTINGS as RawConversion>::Target> {
+    pub fn thermal_settings(
+        &self,
+        index: Option<u32>,
+    ) -> crate::Result<<thermal::NV_GPU_THERMAL_SETTINGS as RawConversion>::Target> {
         trace!("gpu.thermal_settings({:?})", index);
 
         unsafe {
@@ -588,23 +606,30 @@ impl PhysicalGpu {
         }
     }
 
-    pub fn thermal_limit_info(&self) -> crate::Result<<thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO as RawConversion>::Target> {
+    pub fn thermal_limit_info(
+        &self,
+    ) -> crate::Result<
+        <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO as RawConversion>::Target,
+    > {
         trace!("gpu.thermal_limit_info()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientThermalPoliciesGetInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesGetInfo@get(self.0) => raw) }
     }
 
-    pub fn thermal_limit(&self) -> crate::Result<<thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS as RawConversion>::Target> {
+    pub fn thermal_limit(
+        &self,
+    ) -> crate::Result<
+        <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS as RawConversion>::Target,
+    > {
         trace!("gpu.thermal_limit()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientThermalPoliciesGetStatus@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesGetStatus@get(self.0) => raw) }
     }
 
-    pub fn set_thermal_limit<I: IntoIterator<Item=crate::thermal::ThermalLimit>>(&self, value: I) -> crate::NvapiResult<()> {
+    pub fn set_thermal_limit<I: IntoIterator<Item = crate::thermal::ThermalLimit>>(
+        &self,
+        value: I,
+    ) -> crate::NvapiResult<()> {
         trace!("gpu.set_thermal_limit()");
         let mut data = thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS::default();
         for (entry, v) in data.entries.iter_mut().zip(value) {
@@ -613,63 +638,70 @@ impl PhysicalGpu {
             data.count += 1;
         }
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientThermalPoliciesSetStatus(self.0, &data))
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesSetStatus(self.0, &data)) }
     }
 
-    pub fn cooler_info(&self) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::CoolerInfo>> {
+    pub fn cooler_info(
+        &self,
+    ) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::CoolerInfo>> {
         trace!("gpu.cooler_info()");
 
-        let res = unsafe {
-            nvcall!(NvAPI_GPU_ClientFanCoolersGetInfo@get(self.0) => raw)
-        };
+        let res = unsafe { nvcall!(NvAPI_GPU_ClientFanCoolersGetInfo@get(self.0) => raw) };
 
         match res {
-            Err(crate::Error::Nvapi(crate::NvapiError { status: crate::Status::NotSupported, .. })) => (),
+            Err(crate::Error::Nvapi(crate::NvapiError {
+                status: crate::Status::NotSupported,
+                ..
+            })) => (),
             res => return res,
         }
 
-        self.cooler_settings_().map(|c| c.into_iter()
-            .map(|(i, c)| (i, c.info)).collect()
-        )
+        self.cooler_settings_()
+            .map(|c| c.into_iter().map(|(i, c)| (i, c.info)).collect())
     }
 
-    pub fn cooler_status(&self) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::CoolerStatus>> {
+    pub fn cooler_status(
+        &self,
+    ) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::CoolerStatus>> {
         trace!("gpu.cooler_status()");
 
-        let res = unsafe {
-            nvcall!(NvAPI_GPU_ClientFanCoolersGetStatus@get(self.0) => raw)
-        };
+        let res = unsafe { nvcall!(NvAPI_GPU_ClientFanCoolersGetStatus@get(self.0) => raw) };
 
         match res {
-            Err(crate::Error::Nvapi(crate::NvapiError { status: crate::Status::NotSupported, .. })) => (),
+            Err(crate::Error::Nvapi(crate::NvapiError {
+                status: crate::Status::NotSupported,
+                ..
+            })) => (),
             res => return res,
         }
 
-        self.cooler_settings_().map(|c| c.into_iter()
-            .map(|(i, c)| (i, c.status)).collect()
-        )
+        self.cooler_settings_()
+            .map(|c| c.into_iter().map(|(i, c)| (i, c.status)).collect())
     }
 
-    pub fn cooler_control(&self) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::CoolerSettings>> {
+    pub fn cooler_control(
+        &self,
+    ) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::CoolerSettings>> {
         trace!("gpu.cooler_status()");
 
-        let res = unsafe {
-            nvcall!(NvAPI_GPU_ClientFanCoolersGetControl@get(self.0) => raw)
-        };
+        let res = unsafe { nvcall!(NvAPI_GPU_ClientFanCoolersGetControl@get(self.0) => raw) };
 
         match res {
-            Err(crate::Error::Nvapi(crate::NvapiError { status: crate::Status::NotSupported, .. })) => (),
+            Err(crate::Error::Nvapi(crate::NvapiError {
+                status: crate::Status::NotSupported,
+                ..
+            })) => (),
             res => return res,
         }
 
-        self.cooler_settings_().map(|c| c.into_iter()
-            .map(|(i, c)| (i, c.control)).collect()
-        )
+        self.cooler_settings_()
+            .map(|c| c.into_iter().map(|(i, c)| (i, c.control)).collect())
     }
 
-    pub fn getcooler_settings(&self, index: Option<u32>) -> crate::Result<Vec<crate::thermal::Cooler>> {
+    pub fn getcooler_settings(
+        &self,
+        index: Option<u32>,
+    ) -> crate::Result<Vec<crate::thermal::Cooler>> {
         trace!("gpu.getcooler_settings({:?})", index);
 
         let index = match index {
@@ -678,42 +710,61 @@ impl PhysicalGpu {
                 cooler::private::NVAPI_COOLER_TARGET_ALL as _,
             None => 0,
         };
-        unsafe {
-            nvcall!(NvAPI_GPU_GetCoolerSettings@get(self.0, index) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetCoolerSettings@get(self.0, index) => raw) }
     }
 
-    fn cooler_settings_(&self) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::Cooler>> {
-        self.getcooler_settings(None).and_then(|c| c.into_iter().enumerate()
-            .map(|(i, c)| (i as i32 + 1).try_into().map_err(Into::into)
-                .map(|i| (i, c))
-            )
-            .collect()
-        )
+    fn cooler_settings_(
+        &self,
+    ) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::Cooler>> {
+        self.getcooler_settings(None).and_then(|c| {
+            c.into_iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    (i as i32 + 1)
+                        .try_into()
+                        .map_err(Into::into)
+                        .map(|i| (i, c))
+                })
+                .collect()
+        })
     }
 
-    pub fn cooler_settings(&self) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::Cooler>> {
+    pub fn cooler_settings(
+        &self,
+    ) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::Cooler>> {
         match self.cooler_settings_() {
-            Err(crate::Error::Nvapi(crate::NvapiError { status: crate::Status::NotSupported, .. })) => (),
+            Err(crate::Error::Nvapi(crate::NvapiError {
+                status: crate::Status::NotSupported,
+                ..
+            })) => (),
             res => return res,
         }
 
-        self.cooler_info()?.into_iter()
+        self.cooler_info()?
+            .into_iter()
             .zip(self.cooler_status()?.into_iter())
             .zip(self.cooler_control()?.into_iter())
             .map(|(((id, info), (ids, status)), (idc, control))| match id {
-                id if id == ids && id == idc => Ok((id, crate::thermal::Cooler {
-                    info,
-                    status,
-                    control,
-                    unknown: 0,
-                })),
+                id if id == ids && id == idc => Ok((
+                    id,
+                    crate::thermal::Cooler {
+                        info,
+                        status,
+                        control,
+                        unknown: 0,
+                    },
+                )),
                 _ => Err(sys::ArgumentRangeError.into()),
-            }).collect()
+            })
+            .collect()
     }
 
     #[deprecated]
-    pub fn set_cooler_levels<I: IntoIterator<Item=crate::thermal::CoolerSettings>>(&self, index: Option<u32>, values: I) -> crate::NvapiResult<()> {
+    pub fn set_cooler_levels<I: IntoIterator<Item = crate::thermal::CoolerSettings>>(
+        &self,
+        index: Option<u32>,
+        values: I,
+    ) -> crate::NvapiResult<()> {
         trace!("gpu.set_cooler_levels({:?})", index);
         let mut data = cooler::private::NV_GPU_SETCOOLER_LEVEL::default();
         for (entry, level) in data.cooler.iter_mut().zip(values) {
@@ -723,16 +774,29 @@ impl PhysicalGpu {
         }
 
         unsafe {
-            nvcall!(NvAPI_GPU_SetCoolerLevels(self.0, index.unwrap_or(cooler::private::NVAPI_COOLER_TARGET_ALL as _), &data))
+            nvcall!(NvAPI_GPU_SetCoolerLevels(
+                self.0,
+                index.unwrap_or(cooler::private::NVAPI_COOLER_TARGET_ALL as _),
+                &data
+            ))
         }
     }
 
-    pub fn set_cooler<I: IntoIterator<Item=(crate::thermal::FanCoolerId, crate::thermal::CoolerSettings)>>(&self, values: I) -> crate::NvapiResult<()> {
+    pub fn set_cooler<
+        I: IntoIterator<Item = (crate::thermal::FanCoolerId, crate::thermal::CoolerSettings)>,
+    >(
+        &self,
+        values: I,
+    ) -> crate::NvapiResult<()> {
         trace!("gpu.set_cooler()");
         let mut backup = cooler::private::NV_GPU_SETCOOLER_LEVEL::default();
         let mut data = cooler::private::NV_GPU_CLIENT_FAN_COOLERS_CONTROL::default();
 
-        for (entry, (backup_entry, (id, settings))) in data.coolers.iter_mut().zip(backup.cooler.iter_mut().zip(values)) {
+        for (entry, (backup_entry, (id, settings))) in data
+            .coolers
+            .iter_mut()
+            .zip(backup.cooler.iter_mut().zip(values))
+        {
             trace!("gpu.set_cooler({:?})", settings);
             *entry = settings.to_raw(id);
             data.count += 1;
@@ -741,13 +805,18 @@ impl PhysicalGpu {
             backup_entry.currentPolicy = settings.policy.raw();
         }
 
-        let res = unsafe {
-            nvcall!(NvAPI_GPU_ClientFanCoolersSetControl(self.0, &data))
-        };
+        let res = unsafe { nvcall!(NvAPI_GPU_ClientFanCoolersSetControl(self.0, &data)) };
 
         match res {
-            Err(crate::NvapiError { status: crate::Status::NotSupported, .. }) => unsafe {
-                nvcall!(NvAPI_GPU_SetCoolerLevels(self.0, cooler::private::NVAPI_COOLER_TARGET_ALL as _, &backup))
+            Err(crate::NvapiError {
+                status: crate::Status::NotSupported,
+                ..
+            }) => unsafe {
+                nvcall!(NvAPI_GPU_SetCoolerLevels(
+                    self.0,
+                    cooler::private::NVAPI_COOLER_TARGET_ALL as _,
+                    &backup
+                ))
             },
             res => res,
         }
@@ -755,108 +824,152 @@ impl PhysicalGpu {
 
     pub fn restore_cooler_settings(&self, index: &[u32]) -> crate::NvapiResult<()> {
         trace!("gpu.restore_cooler_settings({:?})", index);
-        let ptr = if index.is_empty() { ptr::null() } else { index.as_ptr() };
+        let ptr = if index.is_empty() {
+            ptr::null()
+        } else {
+            index.as_ptr()
+        };
         unsafe {
-            nvcall!(NvAPI_GPU_RestoreCoolerSettings(self.0, ptr, index.len() as u32))
+            nvcall!(NvAPI_GPU_RestoreCoolerSettings(
+                self.0,
+                ptr,
+                index.len() as u32
+            ))
         }
     }
 
-    pub fn cooler_policy_table(&self, index: u32, policy: crate::thermal::CoolerPolicy) -> crate::Result<<cooler::private::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target> {
+    pub fn cooler_policy_table(
+        &self,
+        index: u32,
+        policy: crate::thermal::CoolerPolicy,
+    ) -> crate::Result<<cooler::private::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target> {
         trace!("gpu.cooler_policy_table({:?})", index);
         let mut data = cooler::private::NV_GPU_COOLER_POLICY_TABLE::default();
         data.policy = policy.raw();
 
         unsafe {
-            nvcall!(NvAPI_GPU_GetCoolerPolicyTable@get(self.0, index, &mut data) => err)
-                .and_then(|count| data.convert_raw().map_err(From::from).map(|mut c| {
-                    c.levels.truncate(count as usize);
-                    // TODO: ensure remaining levels are null?
-                    c
-                }))
+            nvcall!(NvAPI_GPU_GetCoolerPolicyTable@get(self.0, index, &mut data) => err).and_then(
+                |count| {
+                    data.convert_raw().map_err(From::from).map(|mut c| {
+                        c.levels.truncate(count as usize);
+                        // TODO: ensure remaining levels are null?
+                        c
+                    })
+                },
+            )
         }
     }
 
-    pub fn set_cooler_policy_table(&self, index: u32, value: &<cooler::private::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target) -> crate::NvapiResult<()> {
+    pub fn set_cooler_policy_table(
+        &self,
+        index: u32,
+        value: &<cooler::private::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target,
+    ) -> crate::NvapiResult<()> {
         trace!("gpu.set_cooler_policy_table({:?}, {:?})", index, value);
         let mut data = cooler::private::NV_GPU_COOLER_POLICY_TABLE::default();
         data.policy = value.policy.raw();
         // TODO: data.policyCoolerLevel
 
         unsafe {
-            nvcall!(NvAPI_GPU_SetCoolerPolicyTable(self.0, index, &data, value.levels.len() as u32))
+            nvcall!(NvAPI_GPU_SetCoolerPolicyTable(
+                self.0,
+                index,
+                &data,
+                value.levels.len() as u32
+            ))
         }
     }
 
-    pub fn restore_cooler_policy_table(&self, index: &[u32], policy: crate::thermal::CoolerPolicy) -> crate::NvapiResult<()> {
+    pub fn restore_cooler_policy_table(
+        &self,
+        index: &[u32],
+        policy: crate::thermal::CoolerPolicy,
+    ) -> crate::NvapiResult<()> {
         trace!("gpu.restore_cooler_policy_table({:?}, {:?})", index, policy);
-        let ptr = if index.is_empty() { ptr::null() } else { index.as_ptr() };
+        let ptr = if index.is_empty() {
+            ptr::null()
+        } else {
+            index.as_ptr()
+        };
         unsafe {
-            nvcall!(NvAPI_GPU_RestoreCoolerPolicyTable(self.0, ptr, index.len() as u32, policy.raw()))
+            nvcall!(NvAPI_GPU_RestoreCoolerPolicyTable(
+                self.0,
+                ptr,
+                index.len() as u32,
+                policy.raw()
+            ))
         }
     }
 
-    pub fn fan_arbiter_info(&self) -> crate::Result<<cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_INFO_V1 as RawConversion>::Target> {
+    pub fn fan_arbiter_info(
+        &self,
+    ) -> crate::Result<<cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_INFO_V1 as RawConversion>::Target>
+    {
         trace!("gpu.fan_arbiter_info()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientFanArbitersGetInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientFanArbitersGetInfo@get(self.0) => raw) }
     }
 
-    pub fn fan_arbiter_status(&self) -> crate::Result<<cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_STATUS_V1 as RawConversion>::Target> {
+    pub fn fan_arbiter_status(
+        &self,
+    ) -> crate::Result<
+        <cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_STATUS_V1 as RawConversion>::Target,
+    > {
         trace!("gpu.fan_arbiter_status()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientFanArbitersGetStatus@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientFanArbitersGetStatus@get(self.0) => raw) }
     }
 
-    pub fn fan_arbiter_control(&self) -> crate::Result<<cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1 as RawConversion>::Target> {
+    pub fn fan_arbiter_control(
+        &self,
+    ) -> crate::Result<
+        <cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1 as RawConversion>::Target,
+    > {
         trace!("gpu.fan_arbiter_control()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_ClientFanArbitersGetControl@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_ClientFanArbitersGetControl@get(self.0) => raw) }
     }
 
-    pub fn perf_info(&self) -> crate::Result<<power::private::NV_GPU_PERF_POLICIES_INFO_PARAMS as RawConversion>::Target> {
+    pub fn perf_info(
+        &self,
+    ) -> crate::Result<<power::private::NV_GPU_PERF_POLICIES_INFO_PARAMS as RawConversion>::Target>
+    {
         trace!("gpu.perf_info()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_PerfPoliciesGetInfo@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_PerfPoliciesGetInfo@get(self.0) => raw) }
     }
 
-    pub fn perf_status(&self) -> crate::Result<<power::private::NV_GPU_PERF_POLICIES_STATUS_PARAMS as RawConversion>::Target> {
+    pub fn perf_status(
+        &self,
+    ) -> crate::Result<<power::private::NV_GPU_PERF_POLICIES_STATUS_PARAMS as RawConversion>::Target>
+    {
         trace!("gpu.perf_status()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_PerfPoliciesGetStatus@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_PerfPoliciesGetStatus@get(self.0) => raw) }
     }
 
-    pub fn voltage_domains_status(&self) -> crate::Result<<power::private::NV_VOLT_STATUS as RawConversion>::Target> {
+    pub fn voltage_domains_status(
+        &self,
+    ) -> crate::Result<<power::private::NV_VOLT_STATUS as RawConversion>::Target> {
         trace!("gpu.voltage_domains_status()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetVoltageDomainsStatus@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetVoltageDomainsStatus@get(self.0) => raw) }
     }
 
-    pub fn voltage_step(&self) -> crate::Result<<power::private::NV_VOLT_STATUS as RawConversion>::Target> {
+    pub fn voltage_step(
+        &self,
+    ) -> crate::Result<<power::private::NV_VOLT_STATUS as RawConversion>::Target> {
         trace!("gpu.voltage_step()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetVoltageStep@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetVoltageStep@get(self.0) => raw) }
     }
 
-    pub fn voltage_table(&self) -> crate::Result<<power::private::NV_VOLT_TABLE as RawConversion>::Target> {
+    pub fn voltage_table(
+        &self,
+    ) -> crate::Result<<power::private::NV_VOLT_TABLE as RawConversion>::Target> {
         trace!("gpu.voltage_table()");
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetVoltages@get(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetVoltages@get(self.0) => raw) }
     }
 
     pub fn performance_decrease(&self) -> crate::NvapiResult<PerformanceDecreaseReason> {
@@ -868,11 +981,12 @@ impl PhysicalGpu {
         }
     }
 
-    pub fn display_ids_all(&self) -> crate::Result<Vec<<display::NV_GPU_DISPLAYIDS as RawConversion>::Target>> {
+    pub fn display_ids_all(
+        &self,
+    ) -> crate::Result<Vec<<display::NV_GPU_DISPLAYIDS as RawConversion>::Target>> {
         trace!("gpu.display_ids_all()");
-        let mut count = unsafe {
-            nvcall!(NvAPI_GPU_GetAllDisplayIds@get(self.0, ptr::null_mut()))
-        }?;
+        let mut count =
+            unsafe { nvcall!(NvAPI_GPU_GetAllDisplayIds@get(self.0, ptr::null_mut())) }?;
         if count == 0 {
             return Ok(Vec::new());
         }
@@ -880,16 +994,28 @@ impl PhysicalGpu {
 
         unsafe {
             nvcall!(NvAPI_GPU_GetAllDisplayIds(self.0, data.as_mut_ptr(), &mut count) => err)
-                .and_then(|()| data.into_iter().map(|v| v.convert_raw().map_err(From::from)).collect())
+                .and_then(|()| {
+                    data.into_iter()
+                        .map(|v| v.convert_raw().map_err(From::from))
+                        .collect()
+                })
         }
     }
 
-    pub fn display_ids_connected(&self, flags: ConnectedIdsFlags) -> crate::Result<Vec<<display::NV_GPU_DISPLAYIDS as RawConversion>::Target>> {
+    pub fn display_ids_connected(
+        &self,
+        flags: ConnectedIdsFlags,
+    ) -> crate::Result<Vec<<display::NV_GPU_DISPLAYIDS as RawConversion>::Target>> {
         trace!("gpu.display_ids_connected({:?})", flags);
         let mut count = unsafe {
             let mut count = 0;
-            nvcall!(NvAPI_GPU_GetConnectedDisplayIds(self.0, ptr::null_mut(), &mut count, flags.bits()))
-                .map(|()| count)
+            nvcall!(NvAPI_GPU_GetConnectedDisplayIds(
+                self.0,
+                ptr::null_mut(),
+                &mut count,
+                flags.bits()
+            ))
+            .map(|()| count)
         }?;
         if count == 0 {
             return Ok(Vec::new());
@@ -902,13 +1028,33 @@ impl PhysicalGpu {
         }
     }
 
-    pub fn i2c_read(&self, display_mask: u32, port: Option<u8>, port_is_ddc: bool, address: u8, register: &[u8], bytes: &mut [u8], speed: i2c::I2cSpeed) -> crate::NvapiResult<usize> {
-        trace!("i2c_read({}, {:?}, {:?}, 0x{:02x}, {:?}, {:?})", display_mask, port, port_is_ddc, address, register, speed);
+    pub fn i2c_read(
+        &self,
+        display_mask: u32,
+        port: Option<u8>,
+        port_is_ddc: bool,
+        address: u8,
+        register: &[u8],
+        bytes: &mut [u8],
+        speed: i2c::I2cSpeed,
+    ) -> crate::NvapiResult<usize> {
+        trace!(
+            "i2c_read({}, {:?}, {:?}, 0x{:02x}, {:?}, {:?})",
+            display_mask, port, port_is_ddc, address, register, speed
+        );
         let mut data = i2c::NV_I2C_INFO::default();
         data.displayMask = display_mask;
-        data.bIsDDCPort = if port_is_ddc { sys::NV_TRUE } else { sys::NV_FALSE } as _;
+        data.bIsDDCPort = if port_is_ddc {
+            sys::NV_TRUE
+        } else {
+            sys::NV_FALSE
+        } as _;
         data.i2cDevAddress = address << 1;
-        data.pbI2cRegAddress = if register.is_empty() { ptr::null_mut() } else { register.as_ptr() as *mut _ };
+        data.pbI2cRegAddress = if register.is_empty() {
+            ptr::null_mut()
+        } else {
+            register.as_ptr() as *mut _
+        };
         data.regAddrSize = register.len() as _;
         data.pbData = bytes.as_mut_ptr();
         data.cbSize = bytes.len() as _;
@@ -920,18 +1066,37 @@ impl PhysicalGpu {
         }
 
         unsafe {
-            nvcall!(NvAPI_I2CRead(self.0, &mut data))
-                .map(|()| data.cbSize as usize) // TODO: not actually sure if this ever changes?
+            nvcall!(NvAPI_I2CRead(self.0, &mut data)).map(|()| data.cbSize as usize) // TODO: not actually sure if this ever changes?
         }
     }
 
-    pub fn i2c_write(&self, display_mask: u32, port: Option<u8>, port_is_ddc: bool, address: u8, register: &[u8], bytes: &[u8], speed: i2c::I2cSpeed) -> crate::NvapiResult<()> {
-        trace!("i2c_write({}, {:?}, {:?}, 0x{:02x}, {:?}, {:?})", display_mask, port, port_is_ddc, address, register, speed);
+    pub fn i2c_write(
+        &self,
+        display_mask: u32,
+        port: Option<u8>,
+        port_is_ddc: bool,
+        address: u8,
+        register: &[u8],
+        bytes: &[u8],
+        speed: i2c::I2cSpeed,
+    ) -> crate::NvapiResult<()> {
+        trace!(
+            "i2c_write({}, {:?}, {:?}, 0x{:02x}, {:?}, {:?})",
+            display_mask, port, port_is_ddc, address, register, speed
+        );
         let mut data = i2c::NV_I2C_INFO::default();
         data.displayMask = display_mask;
-        data.bIsDDCPort = if port_is_ddc { sys::NV_TRUE } else { sys::NV_FALSE } as _;
+        data.bIsDDCPort = if port_is_ddc {
+            sys::NV_TRUE
+        } else {
+            sys::NV_FALSE
+        } as _;
         data.i2cDevAddress = address << 1;
-        data.pbI2cRegAddress = if register.is_empty() { ptr::null_mut() } else { register.as_ptr() as *mut _ };
+        data.pbI2cRegAddress = if register.is_empty() {
+            ptr::null_mut()
+        } else {
+            register.as_ptr() as *mut _
+        };
         data.regAddrSize = register.len() as _;
         data.pbData = bytes.as_ptr() as *mut _;
         data.cbSize = bytes.len() as _;
@@ -942,9 +1107,7 @@ impl PhysicalGpu {
             data.bIsPortIdSet = sys::NV_TRUE as _;
         }
 
-        unsafe {
-            nvcall!(NvAPI_I2CWrite(self.0, &mut data))
-        }
+        unsafe { nvcall!(NvAPI_I2CWrite(self.0, &mut data)) }
     }
 }
 
@@ -959,7 +1122,11 @@ pub struct PciIdentifiers {
 
 impl fmt::Display for PciIdentifiers {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:08x} - {:08x} - {:08x} - {:x}", self.device_id, self.subsystem_id, self.ext_device_id, self.revision_id)
+        write!(
+            f,
+            "{:08x} - {:08x} - {:08x} - {:x}",
+            self.device_id, self.subsystem_id, self.ext_device_id, self.revision_id
+        )
     }
 }
 
@@ -984,7 +1151,7 @@ impl PciIdentifiers {
                     pid
                 } else {
                     spid
-                }
+                },
             )
         } else {
             (vid, pid)
@@ -1013,20 +1180,19 @@ impl BusInfo {
 
 impl fmt::Display for BusInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} ({}:{} routed to IRQ {})", self.bus, self.id, self.slot_id, self.irq)
+        write!(
+            f,
+            "{} ({}:{} routed to IRQ {})",
+            self.bus, self.id, self.slot_id, self.irq
+        )
     }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum Bus {
-    Pci {
-        ids: PciIdentifiers,
-    },
-    PciExpress {
-        ids: PciIdentifiers,
-        lanes: u32,
-    },
+    Pci { ids: PciIdentifiers },
+    PciExpress { ids: PciIdentifiers, lanes: u32 },
     Other(BusType),
 }
 
@@ -1064,7 +1230,7 @@ impl fmt::Display for Bus {
                     write!(f, " x{}", lanes)?;
                 }
                 Ok(())
-            },
+            }
             Bus::Pci { .. } => fmt::Display::fmt(&BusType::Pci, f),
             Bus::Other(ty) => fmt::Display::fmt(ty, f),
         }
@@ -1114,9 +1280,7 @@ pub struct DriverModel {
 
 impl DriverModel {
     pub fn new(value: u32) -> Self {
-        DriverModel {
-            value,
-        }
+        DriverModel { value }
     }
 
     pub fn wddm(&self) -> (u8, u8) {
@@ -1124,7 +1288,11 @@ impl DriverModel {
         let major = ((self.value >> 12) & 0xf) as u8;
         (
             major,
-            if major == 2 { 0 } else { (self.value >> 8) as u8 & 0xf }
+            if major == 2 {
+                0
+            } else {
+                (self.value >> 8) as u8 & 0xf
+            },
         )
     }
 }
@@ -1201,19 +1369,25 @@ impl Default for Architecture {
 }
 
 impl Architecture {
-    pub fn new<I: Into<sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID>>(id: ArchitectureId, implementation: I) -> Self {
+    pub fn new<I: Into<sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID>>(
+        id: ArchitectureId,
+        implementation: I,
+    ) -> Self {
         Self::from_raw(id.into(), implementation.into())
     }
 
-    pub fn from_raw(id: sys::gpu::NV_GPU_ARCHITECTURE_ID, implementation: sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID) -> Self {
+    pub fn from_raw(
+        id: sys::gpu::NV_GPU_ARCHITECTURE_ID,
+        implementation: sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID,
+    ) -> Self {
         Self::from_raw_inner(id, implementation)
-            .unwrap_or_else(|_| Self::Unknown {
-                id,
-                implementation,
-            })
+            .unwrap_or_else(|_| Self::Unknown { id, implementation })
     }
 
-    fn from_raw_inner(id: sys::gpu::NV_GPU_ARCHITECTURE_ID, implementation: sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID) -> Result<Self, sys::ArgumentRangeError> {
+    fn from_raw_inner(
+        id: sys::gpu::NV_GPU_ARCHITECTURE_ID,
+        implementation: sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID,
+    ) -> Result<Self, sys::ArgumentRangeError> {
         Ok(match id {
             sys::gpu::NV_GPU_ARCHITECTURE_T2X => Architecture::T2X(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_T3X => Architecture::T3X(implementation.try_into()?),
@@ -1313,14 +1487,13 @@ impl fmt::Display for Architecture {
             Architecture::TU100(i) => fmt::Display::fmt(i, f),
             Architecture::GA100(i) => fmt::Display::fmt(i, f),
             Architecture::G78(implementation)
-                | Architecture::GM000(implementation)
-                | Architecture::GV110(implementation)
-                | Architecture::Unknown { implementation, .. }
-                => match self.id() {
-                    Ok(ref id) if *implementation == 0 => fmt::Display::fmt(id, f),
-                    Ok(id) => write!(f, "{}:{}", id, implementation),
-                    Err(id) => write!(f, "Unknown:{}:{}", id, implementation),
-                },
+            | Architecture::GM000(implementation)
+            | Architecture::GV110(implementation)
+            | Architecture::Unknown { implementation, .. } => match self.id() {
+                Ok(ref id) if *implementation == 0 => fmt::Display::fmt(id, f),
+                Ok(id) => write!(f, "{}:{}", id, implementation),
+                Err(id) => write!(f, "Unknown:{}:{}", id, implementation),
+            },
         }
     }
 }
@@ -1369,23 +1542,40 @@ pub struct VfpInfo {
 }
 
 impl VfpInfo {
-    pub fn iter<'s>(&'s self, domain: ClockDomain) -> impl Iterator<Item=usize> + 's {
-        self.domains.get(domain)
+    pub fn iter<'s>(&'s self, domain: ClockDomain) -> impl Iterator<Item = usize> + 's {
+        self.domains
+            .get(domain)
             .into_iter()
             .flat_map(|d| d.vfp_index.range().filter(|&i| self.mask.mask.get_bit(i)))
     }
 
-    pub fn index<'s, 'a, T: 'static>(&'s self, domain: ClockDomain, entries: &'a [T]) -> impl Iterator<Item=(usize, &'a T)> + 's where 'a: 's {
+    pub fn index<'s, 'a, T: 'static>(
+        &'s self,
+        domain: ClockDomain,
+        entries: &'a [T],
+    ) -> impl Iterator<Item = (usize, &'a T)> + 's
+    where
+        'a: 's,
+    {
         self.iter(domain).map(move |i| (i, &entries[i]))
     }
 
-    pub fn index_mut<'s, 'a, T: 'static>(&'s self, domain: ClockDomain, entries: &'a mut [T]) -> impl Iterator<Item=(usize, &'a mut T)> + 's where 'a: 's {
+    pub fn index_mut<'s, 'a, T: 'static>(
+        &'s self,
+        domain: ClockDomain,
+        entries: &'a mut [T],
+    ) -> impl Iterator<Item = (usize, &'a mut T)> + 's
+    where
+        'a: 's,
+    {
         let mut entries = entries.iter_mut().enumerate();
-        self.iter(domain).map(move |i| loop {
-            match entries.next() {
-                None => panic!("entries out of range of {:?}", self),
-                Some((ei, _)) if ei < i => (),
-                Some(t) => break t,
+        self.iter(domain).map(move |i| {
+            loop {
+                match entries.next() {
+                    None => panic!("entries out of range of {:?}", self),
+                    Some((ei, _)) if ei < i => (),
+                    Some(t) => break t,
+                }
             }
         })
     }

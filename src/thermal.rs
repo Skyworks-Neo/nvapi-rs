@@ -1,16 +1,16 @@
+use crate::sys;
+use crate::sys::gpu::{cooler, thermal};
+use crate::types::{Celsius, CelsiusShifted, Kilohertz, Percentage, Range, RawConversion, Rpm};
+use log::trace;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt;
-#[cfg(feature = "serde")]
-use serde::{Serialize, Deserialize};
-use log::trace;
-use crate::sys::gpu::{thermal, cooler};
-use crate::sys;
-use crate::types::{Percentage, Rpm, Celsius, CelsiusShifted, Kilohertz, Range, RawConversion};
 
-pub use sys::gpu::thermal::{ThermalController, ThermalTarget};
+pub use sys::gpu::cooler::private::{FanArbiterInfoFlags, FanCoolerId};
 pub use sys::gpu::thermal::private::ThermalPolicyId;
-pub use sys::gpu::cooler::private::{FanCoolerId, FanArbiterInfoFlags};
+pub use sys::gpu::thermal::{ThermalController, ThermalTarget};
 
 #[derive(Debug, Copy, Clone)]
 pub struct Sensor {
@@ -44,7 +44,10 @@ impl RawConversion for thermal::NV_GPU_THERMAL_SETTINGS {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.sensor[..self.count as usize].iter().map(RawConversion::convert_raw).collect()
+        self.sensor[..self.count as usize]
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }
 
@@ -108,7 +111,8 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V2 
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.entries().iter()
+        self.entries()
+            .iter()
             .map(RawConversion::convert_raw)
             .collect::<Result<_, _>>()
     }
@@ -120,7 +124,8 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V3 
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.entries().iter()
+        self.entries()
+            .iter()
             .map(RawConversion::convert_raw)
             .collect::<Result<_, _>>()
     }
@@ -159,8 +164,11 @@ pub struct PffStatus {
 }
 
 impl PffStatus {
-    pub fn points<'a>(&'a self) -> impl Iterator<Item=PffPoint> + 'a {
-        self.curve.points.iter().copied()
+    pub fn points<'a>(&'a self) -> impl Iterator<Item = PffPoint> + 'a {
+        self.curve
+            .points
+            .iter()
+            .copied()
             .zip(self.values.iter().copied())
             .map(|(point, value)| PffPoint {
                 x: point.x,
@@ -209,10 +217,14 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 
             pff: match self.has_pff() {
                 true => Some(PffStatus {
                     curve: self.pff_curve.convert_raw()?,
-                    values: self.pff_freqs().iter().map(|&c| Kilohertz(c as _)).collect(),
+                    values: self
+                        .pff_freqs()
+                        .iter()
+                        .map(|&c| Kilohertz(c as _))
+                        .collect(),
                 }),
                 false => None,
-            }
+            },
         })
     }
 }
@@ -223,7 +235,8 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.entries().iter()
+        self.entries()
+            .iter()
             .map(RawConversion::convert_raw)
             .collect::<Result<_, _>>()
     }
@@ -235,7 +248,8 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.entries().iter()
+        self.entries()
+            .iter()
             .map(RawConversion::convert_raw)
             .collect::<Result<_, _>>()
     }
@@ -285,7 +299,9 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_PFF_CURVE_V1 {
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
         Ok(PffCurve {
-            points: self.points().iter()
+            points: self
+                .points()
+                .iter()
                 .map(RawConversion::convert_raw)
                 .collect::<Result<_, _>>()?,
         })
@@ -303,7 +319,7 @@ impl PffCurve {
 }
 
 impl FromIterator<PffPoint> for PffCurve {
-    fn from_iter<T: IntoIterator<Item=PffPoint>>(iter: T) -> Self {
+    fn from_iter<T: IntoIterator<Item = PffPoint>>(iter: T) -> Self {
         Self {
             points: Vec::from_iter(iter),
         }
@@ -328,7 +344,9 @@ impl fmt::Display for PffCurve {
     }
 }
 
-pub use sys::gpu::cooler::private::{CoolerType, CoolerController, CoolerPolicy, CoolerTarget, CoolerControl};
+pub use sys::gpu::cooler::private::{
+    CoolerControl, CoolerController, CoolerPolicy, CoolerTarget, CoolerType,
+};
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
@@ -378,15 +396,23 @@ impl CoolerSettings {
         }
     }
 
-    pub fn to_raw(&self, cooler_id: FanCoolerId) -> cooler::private::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
+    pub fn to_raw(
+        &self,
+        cooler_id: FanCoolerId,
+    ) -> cooler::private::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
         let mut raw = cooler::private::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
             cooler_id: cooler_id.into(),
             level: self.level.unwrap_or_default().0,
-            .. Default::default()
+            ..Default::default()
         };
         raw.set_manual(match (self.policy, self.level) {
             (_, None) => false,
-            (CoolerPolicy::Performance | CoolerPolicy::TemperatureDiscrete | CoolerPolicy::TemperatureContinuous, _) => true,
+            (
+                CoolerPolicy::Performance
+                | CoolerPolicy::TemperatureDiscrete
+                | CoolerPolicy::TemperatureContinuous,
+                _,
+            ) => true,
             _ => false,
         });
         raw
@@ -466,7 +492,10 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTINGS_V4 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.coolers().iter().map(RawConversion::convert_raw).collect()
+        self.coolers()
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }
 
@@ -476,7 +505,10 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTINGS_V3 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.coolers().iter().map(RawConversion::convert_raw).collect()
+        self.coolers()
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }
 
@@ -486,7 +518,10 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTINGS_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.coolers().iter().map(RawConversion::convert_raw).collect()
+        self.coolers()
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }
 
@@ -496,21 +531,24 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLER_INFO_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        Ok((self.cooler_id.try_into()?, CoolerInfo {
-            controller: CoolerController::Internal,
-            kind: CoolerType::Fan,
-            target: CoolerTarget::GPU,
-            control: CoolerControl::Variable,
-            default_policy: CoolerPolicy::None,
-            default_level_range: None,
-            tach_range: match self.tach_supported.get() {
-                true => Some(Range {
-                    min: Rpm(self.tach_min_rpm),
-                    max: Rpm(self.tach_max_rpm),
-                }),
-                false => None,
+        Ok((
+            self.cooler_id.try_into()?,
+            CoolerInfo {
+                controller: CoolerController::Internal,
+                kind: CoolerType::Fan,
+                target: CoolerTarget::GPU,
+                control: CoolerControl::Variable,
+                default_policy: CoolerPolicy::None,
+                default_level_range: None,
+                tach_range: match self.tach_supported.get() {
+                    true => Some(Range {
+                        min: Rpm(self.tach_min_rpm),
+                        max: Rpm(self.tach_max_rpm),
+                    }),
+                    false => None,
+                },
             },
-        }))
+        ))
     }
 }
 
@@ -520,7 +558,10 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLERS_INFO_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.coolers().iter().map(RawConversion::convert_raw).collect()
+        self.coolers()
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }
 
@@ -530,15 +571,18 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLER_STATUS_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        Ok((self.cooler_id.try_into()?, CoolerStatus {
-            active: self.level != 0,
-            current_level: Percentage::from_raw(self.level)?,
-            current_level_range: Range {
-                min: Percentage::from_raw(self.level_minimum)?,
-                max: Percentage::from_raw(self.level_maximum)?,
+        Ok((
+            self.cooler_id.try_into()?,
+            CoolerStatus {
+                active: self.level != 0,
+                current_level: Percentage::from_raw(self.level)?,
+                current_level_range: Range {
+                    min: Percentage::from_raw(self.level_minimum)?,
+                    max: Percentage::from_raw(self.level_maximum)?,
+                },
+                current_tach: Some(Rpm(self.tach_rpm)),
             },
-            current_tach: Some(Rpm(self.tach_rpm)),
-        }))
+        ))
     }
 }
 
@@ -548,7 +592,10 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLERS_STATUS_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.coolers().iter().map(RawConversion::convert_raw).collect()
+        self.coolers()
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }
 
@@ -558,16 +605,19 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        Ok((self.cooler_id.try_into()?, match self.manual() {
-            true => CoolerSettings {
-                policy: CoolerPolicy::Manual,
-                level: Some(Percentage::from_raw(self.level)?),
+        Ok((
+            self.cooler_id.try_into()?,
+            match self.manual() {
+                true => CoolerSettings {
+                    policy: CoolerPolicy::Manual,
+                    level: Some(Percentage::from_raw(self.level)?),
+                },
+                false => CoolerSettings {
+                    policy: CoolerPolicy::TemperatureContinuous,
+                    level: None,
+                },
             },
-            false => CoolerSettings {
-                policy: CoolerPolicy::TemperatureContinuous,
-                level: None,
-            },
-        }))
+        ))
     }
 }
 
@@ -577,7 +627,10 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLERS_CONTROL_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.coolers().iter().map(RawConversion::convert_raw).collect()
+        self.coolers()
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }
 
@@ -639,7 +692,11 @@ impl RawConversion for cooler::private::NV_GPU_COOLER_POLICY_TABLE {
         trace!("convert_raw({:#?})", self);
         Ok(CoolerPolicyTable {
             policy: CoolerPolicy::from_raw(self.policy)?,
-            levels: self.policyCoolerLevel.iter().map(RawConversion::convert_raw).collect::<Result<_, _>>()?,
+            levels: self
+                .policyCoolerLevel
+                .iter()
+                .map(RawConversion::convert_raw)
+                .collect::<Result<_, _>>()?,
         })
     }
 }
@@ -656,9 +713,12 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_INFO_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        Ok((self.arbiter_index, FanArbiterInfo {
-            flags: self.flags.try_into()?,
-        }))
+        Ok((
+            self.arbiter_index,
+            FanArbiterInfo {
+                flags: self.flags.try_into()?,
+            },
+        ))
     }
 }
 
@@ -668,7 +728,10 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_INFO_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.arbiters().iter().map(RawConversion::convert_raw).collect()
+        self.arbiters()
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }
 
@@ -684,9 +747,12 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_STATUS_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        Ok((self.unknown0, FanArbiterStatus {
-            fan_stopped: self.fan_stop_active()
-        }))
+        Ok((
+            self.unknown0,
+            FanArbiterStatus {
+                fan_stopped: self.fan_stop_active(),
+            },
+        ))
     }
 }
 
@@ -696,7 +762,10 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_STATUS_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.arbiters().iter().map(RawConversion::convert_raw).collect()
+        self.arbiters()
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }
 
@@ -712,9 +781,14 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        Ok((self.arbiter_index, FanArbiterControl {
-            stop_fan: self.flags().contains(cooler::private::FanArbiterControlFlags::FAN_STOP),
-        }))
+        Ok((
+            self.arbiter_index,
+            FanArbiterControl {
+                stop_fan: self
+                    .flags()
+                    .contains(cooler::private::FanArbiterControlFlags::FAN_STOP),
+            },
+        ))
     }
 }
 
@@ -724,6 +798,9 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1 {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.arbiters().iter().map(RawConversion::convert_raw).collect()
+        self.arbiters()
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect()
     }
 }

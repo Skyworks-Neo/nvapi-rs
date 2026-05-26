@@ -1,5 +1,5 @@
-use crate::prelude_::*;
 use crate::gpu::clock;
+use crate::prelude_::*;
 
 pub const NVAPI_MAX_GPU_PSTATE20_PSTATES: usize = 16;
 pub const NVAPI_MAX_GPU_PSTATE20_CLOCKS: usize = 8;
@@ -178,11 +178,11 @@ pub enum NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE {
 impl NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
     pub fn get(&self, kind: PstateClockType) -> NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE {
         match kind {
-            PstateClockType::Single => NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Single(
-                NV_GPU_PSTATE20_CLOCK_ENTRY_SINGLE {
+            PstateClockType::Single => {
+                NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Single(NV_GPU_PSTATE20_CLOCK_ENTRY_SINGLE {
                     freq_kHz: (self.0).minFreq_kHz,
-                }
-            ),
+                })
+            }
             PstateClockType::Range => NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Range(self.0),
         }
     }

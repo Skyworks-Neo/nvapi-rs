@@ -1,12 +1,11 @@
-use std::error::Error as StdError;
-use std::convert::Infallible;
-use std::fmt;
 use crate::{Status, sys};
+use std::convert::Infallible;
+use std::error::Error as StdError;
+use std::fmt;
 use sys::ArgumentRangeError;
 
 pub fn status_result(nvid: sys::Api, status: sys::NvAPI_Status) -> Result<(), NvapiError> {
-    sys::status_result(status)
-        .map_err(|status| NvapiError::new(nvid, status))
+    sys::status_result(status).map_err(|status| NvapiError::new(nvid, status))
 }
 
 #[derive(Debug)]
@@ -32,10 +31,7 @@ pub struct NvapiError {
 
 impl NvapiError {
     pub fn new(nvid: sys::Api, status: Status) -> Self {
-        Self {
-            nvid,
-            status,
-        }
+        Self { nvid, status }
     }
 }
 
@@ -53,13 +49,13 @@ impl fmt::Display for NvapiError {
 
 impl From<Infallible> for NvapiError {
     fn from(e: Infallible) -> Self {
-        match e { }
+        match e {}
     }
 }
 
 impl From<Infallible> for Error {
     fn from(e: Infallible) -> Self {
-        match e { }
+        match e {}
     }
 }
 

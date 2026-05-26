@@ -1,8 +1,8 @@
-use std::mem::{MaybeUninit, size_of};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::os::raw::c_void;
-use crate::status::{Status, NvAPI_Status};
+use crate::status::{NvAPI_Status, Status};
 use crate::types;
+use std::mem::{MaybeUninit, size_of};
+use std::os::raw::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub type QueryInterfaceFn = extern "C" fn(id: u32) -> *const c_void;
 
@@ -32,13 +32,16 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
 #[cfg(target_os = "linux")]
 pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
     use libc::{RTLD_LAZY, RTLD_LOCAL, dlopen, dlsym};
-    use std::os::raw::c_char;
     use std::mem;
+    use std::os::raw::c_char;
 
     unsafe {
         let ptr = match QUERY_INTERFACE_CACHE.load(Ordering::Relaxed) {
             0 => {
-                let lib = dlopen(LIBRARY_NAME.as_ptr() as *const c_char, RTLD_LAZY | RTLD_LOCAL);
+                let lib = dlopen(
+                    LIBRARY_NAME.as_ptr() as *const c_char,
+                    RTLD_LAZY | RTLD_LOCAL,
+                );
                 if lib.is_null() {
                     Err(Status::LibraryNotFound)
                 } else {
@@ -50,7 +53,7 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
                         Ok(ptr as usize)
                     }
                 }
-            },
+            }
             ptr => Ok(ptr),
         }?;
 
@@ -63,9 +66,9 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
 
 #[cfg(windows)]
 pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
-    use winapi::um::libloaderapi::{GetProcAddress, LoadLibraryA};
     use std::mem;
     use std::os::raw::c_char;
+    use winapi::um::libloaderapi::{GetProcAddress, LoadLibraryA};
 
     unsafe {
         let ptr = match QUERY_INTERFACE_CACHE.load(Ordering::Relaxed) {
@@ -82,7 +85,7 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
                         Ok(ptr as usize)
                     }
                 }
-            },
+            }
             ptr => Ok(ptr),
         }?;
 
@@ -99,7 +102,7 @@ pub(crate) fn query_interface(id: u32, cache: &AtomicUsize) -> crate::Result<usi
             let value = nvapi_QueryInterface(id)?;
             cache.store(value, Ordering::Relaxed);
             Ok(value)
-        },
+        }
         value => Ok(value),
     }
 }
@@ -160,9 +163,7 @@ pub struct NvVersion {
 
 impl NvVersion {
     pub const fn with_version(data: u32) -> Self {
-        Self {
-            data,
-        }
+        Self { data }
     }
 
     pub const fn new(size: usize, version: u16) -> Self {
@@ -209,9 +210,7 @@ pub trait StructVersion<const VER: u16 = 0>: VersionedStruct {
     const NVAPI_VERSION: NvVersion;
 
     fn versioned() -> Self {
-        let mut zero = unsafe {
-            MaybeUninit::<Self>::zeroed().assume_init()
-        };
+        let mut zero = unsafe { MaybeUninit::<Self>::zeroed().assume_init() };
         *zero.nvapi_version_mut() = Self::NVAPI_VERSION;
         zero
     }

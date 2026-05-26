@@ -672,7 +672,6 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_GetRamType;
     }
 
-
     nvenum! {
         /// Undocumented function NvAPI_GPU_GetRamMaker()
         pub enum NV_GPU_RAM_MAKER / RamMaker {

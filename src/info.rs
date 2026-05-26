@@ -1,9 +1,9 @@
-#[cfg(feature = "serde")]
-use serde::{Serialize, Deserialize};
-use std::convert::Infallible;
 use crate::sys;
 use crate::types::RawConversion;
 use log::trace;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 
 pub fn driver_version() -> crate::NvapiResult<(u32, String)> {
     trace!("driver_version()");
@@ -16,39 +16,29 @@ pub fn driver_version() -> crate::NvapiResult<(u32, String)> {
 
 pub fn interface_version() -> crate::NvapiResult<String> {
     trace!("interface_version()");
-    unsafe {
-        nvcall!(NvAPI_GetInterfaceVersionString@get())
-            .map(|str| str.into())
-    }
+    unsafe { nvcall!(NvAPI_GetInterfaceVersionString@get()).map(|str| str.into()) }
 }
 
 pub fn error_message(status: sys::Status) -> crate::NvapiResult<String> {
     trace!("error_message({:?})", status);
-    unsafe {
-        nvcall!(NvAPI_GetErrorMessage@get(status.raw()) => into)
-    }
+    unsafe { nvcall!(NvAPI_GetErrorMessage@get(status.raw()) => into) }
 }
 
 pub fn initialize() -> crate::NvapiResult<()> {
     trace!("initialize()");
-    unsafe {
-        nvcall!(NvAPI_Initialize())
-    }
+    unsafe { nvcall!(NvAPI_Initialize()) }
 }
 
 pub fn unload() -> crate::NvapiResult<()> {
     trace!("unload()");
-    unsafe {
-        nvcall!(NvAPI_Unload())
-    }
+    unsafe { nvcall!(NvAPI_Unload()) }
 }
 
-pub fn chipset_info() -> crate::Result<<sys::sysgeneral::NV_CHIPSET_INFO as RawConversion>::Target> {
+pub fn chipset_info() -> crate::Result<<sys::sysgeneral::NV_CHIPSET_INFO as RawConversion>::Target>
+{
     trace!("gpu.chipset_info()");
 
-    unsafe {
-        nvcall!(NvAPI_SYS_GetChipSetInfo@get() => raw)
-    }
+    unsafe { nvcall!(NvAPI_SYS_GetChipSetInfo@get() => raw) }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -108,7 +98,7 @@ impl RawConversion for sys::sysgeneral::NV_CHIPSET_INFO_v3 {
                 vendor: self.subSysVendorId,
                 vendor_name: self.szSubSysVendorName.into(),
                 device: self.subSysDeviceId,
-                .. Default::default()
+                ..Default::default()
             },
         })
     }
@@ -125,12 +115,12 @@ impl RawConversion for sys::sysgeneral::NV_CHIPSET_INFO_v4 {
                 system: ChipsetId {
                     vendor: self.HBvendorId,
                     device: self.HBdeviceId,
-                    .. Default::default()
+                    ..Default::default()
                 },
                 subsystem: ChipsetId {
                     vendor: self.HBsubSysVendorId,
                     device: self.HBsubSysDeviceId,
-                    .. Default::default()
+                    ..Default::default()
                 },
             },
         })

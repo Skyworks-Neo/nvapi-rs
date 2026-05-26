@@ -4,7 +4,7 @@
 // Not actually testing results. Just calling the api.
 #![allow(unused_must_use)]
 
-use nvapi::{PhysicalGpu, ConnectedIdsFlags};
+use nvapi::{ConnectedIdsFlags, PhysicalGpu};
 
 #[test]
 fn physicalgpu_display_ids_connected() {
@@ -17,7 +17,6 @@ fn physicalgpu_display_ids_connected() {
         }
     }
 }
-
 
 #[test]
 fn physicalgpu_display_ids_all() {

@@ -1,11 +1,11 @@
+use crate::nvapi::NvVersion;
 use std::borrow::Cow;
+use std::ffi::{CStr, CString};
+use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
-use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::fmt;
 use zerocopy::{AsBytes, FromBytes};
-use crate::nvapi::NvVersion;
 
 pub type NvBool = u8;
 
@@ -127,9 +127,7 @@ impl<const N: usize> NvString<N> {
     pub fn to_cstr(&self) -> Cow<CStr> {
         match self.as_cstr() {
             Ok(str) => Cow::Borrowed(str),
-            Err(..) => Cow::Owned(unsafe {
-                CString::from_vec_unchecked(self.str_bytes().into())
-            }),
+            Err(..) => Cow::Owned(unsafe { CString::from_vec_unchecked(self.str_bytes().into()) }),
         }
     }
 
@@ -165,11 +163,19 @@ impl<const N: usize> From<NvString<N>> for String {
 }
 
 unsafe impl<const N: usize> AsBytes for NvString<N> {
-    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
 }
 
 unsafe impl<const N: usize> FromBytes for NvString<N> {
-    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
 }
 
 /// NvAPI Version Definition
@@ -216,7 +222,10 @@ impl<T: IntoIterator> IntoIterator for Padding<T> {
     }
 }
 
-impl<'a, T> IntoIterator for &'a Padding<T> where &'a T: IntoIterator {
+impl<'a, T> IntoIterator for &'a Padding<T>
+where
+    &'a T: IntoIterator,
+{
     type Item = <&'a T as IntoIterator>::Item;
     type IntoIter = <&'a T as IntoIterator>::IntoIter;
 
@@ -225,7 +234,10 @@ impl<'a, T> IntoIterator for &'a Padding<T> where &'a T: IntoIterator {
     }
 }
 
-impl<'a, T> IntoIterator for &'a mut Padding<T> where &'a mut T: IntoIterator {
+impl<'a, T> IntoIterator for &'a mut Padding<T>
+where
+    &'a mut T: IntoIterator,
+{
     type Item = <&'a mut T as IntoIterator>::Item;
     type IntoIter = <&'a mut T as IntoIterator>::IntoIter;
 
@@ -235,18 +247,24 @@ impl<'a, T> IntoIterator for &'a mut Padding<T> where &'a mut T: IntoIterator {
 }
 
 unsafe impl<T: AsBytes> AsBytes for Padding<T> {
-    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
 }
 
 unsafe impl<T: FromBytes> FromBytes for Padding<T> {
-    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
 }
 
 impl<T: FromBytes, const N: usize> Default for Padding<[T; N]> {
     fn default() -> Self {
-        unsafe {
-            MaybeUninit::zeroed().assume_init()
-        }
+        unsafe { MaybeUninit::zeroed().assume_init() }
     }
 }
 
@@ -275,8 +293,7 @@ impl<T: AsBytes + fmt::Debug, const N: usize> fmt::Debug for Padding<[T; N]> {
         let mut repeat: usize = 0;
         while let Some(v) = it.next() {
             match prev {
-                Some(prev) if prev.as_bytes() == v.as_bytes() =>
-                    repeat = repeat.saturating_add(1),
+                Some(prev) if prev.as_bytes() == v.as_bytes() => repeat = repeat.saturating_add(1),
                 _ => {
                     if repeat > 1 {
                         write!(f, ";{}, ", repeat)?;
@@ -292,7 +309,7 @@ impl<T: AsBytes + fmt::Debug, const N: usize> fmt::Debug for Padding<[T; N]> {
 
                     prev = Some(v);
                     repeat = 1;
-                },
+                }
             }
         }
         if repeat > 1 {
@@ -332,17 +349,31 @@ impl<const N: usize> ClockMask<N> {
         self.into_iter()
     }
 
-    pub fn index<'s, 'a, T: 'static>(&'s self, entries: &'a [T]) -> impl Iterator<Item=(usize, &'a T)> + 's where 'a: 's {
+    pub fn index<'s, 'a, T: 'static>(
+        &'s self,
+        entries: &'a [T],
+    ) -> impl Iterator<Item = (usize, &'a T)> + 's
+    where
+        'a: 's,
+    {
         self.iter().map(move |i| (i, &entries[i]))
     }
 
-    pub fn index_mut<'s, 'a, T: 'static>(&'s self, entries: &'a mut [T]) -> impl Iterator<Item=(usize, &'a mut T)> + 's where 'a: 's {
+    pub fn index_mut<'s, 'a, T: 'static>(
+        &'s self,
+        entries: &'a mut [T],
+    ) -> impl Iterator<Item = (usize, &'a mut T)> + 's
+    where
+        'a: 's,
+    {
         let mut entries = entries.iter_mut().enumerate();
-        self.iter().map(move |i| loop {
-            match entries.next() {
-                None => panic!("entries out of range of {:?}", self),
-                Some((ei, _)) if ei < i => (),
-                Some(t) => break t,
+        self.iter().map(move |i| {
+            loop {
+                match entries.next() {
+                    None => panic!("entries out of range of {:?}", self),
+                    Some((ei, _)) if ei < i => (),
+                    Some(t) => break t,
+                }
             }
         })
     }
@@ -350,18 +381,24 @@ impl<const N: usize> ClockMask<N> {
 
 impl<const N: usize> Default for ClockMask<N> {
     fn default() -> Self {
-        Self {
-            mask: [0u32; N],
-        }
+        Self { mask: [0u32; N] }
     }
 }
 
 unsafe impl<const N: usize> AsBytes for ClockMask<N> {
-    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
 }
 
 unsafe impl<const N: usize> FromBytes for ClockMask<N> {
-    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
 }
 
 impl<'a, const N: usize> IntoIterator for &'a ClockMask<N> {
@@ -375,15 +412,15 @@ impl<'a, const N: usize> IntoIterator for &'a ClockMask<N> {
 
 #[cfg(feature = "serde")]
 mod serde_impl_clock_mask {
-    use serde::{Serialize, Serializer, Deserialize, Deserializer};
     use super::ClockMask;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    impl<'de, const N: usize> Deserialize<'de> for ClockMask<N> where [u32; N]: Deserialize<'de> {
+    impl<'de, const N: usize> Deserialize<'de> for ClockMask<N>
+    where
+        [u32; N]: Deserialize<'de>,
+    {
         fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-            Deserialize::deserialize(de)
-                .map(|mask| Self {
-                    mask,
-                })
+            Deserialize::deserialize(de).map(|mask| Self { mask })
         }
     }
 
@@ -402,10 +439,7 @@ pub struct ClockMaskIter<'a> {
 
 impl<'a> ClockMaskIter<'a> {
     pub fn new(mask: &'a [u32]) -> Self {
-        ClockMaskIter {
-            mask,
-            offset: 0,
-        }
+        ClockMaskIter { mask, offset: 0 }
     }
 }
 
@@ -424,7 +458,7 @@ impl<'a> Iterator for ClockMaskIter<'a> {
             }
 
             if set {
-                return Some(offset)
+                return Some(offset);
             }
         }
 
