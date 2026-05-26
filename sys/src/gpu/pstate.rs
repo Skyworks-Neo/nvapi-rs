@@ -180,7 +180,7 @@ impl NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
         match kind {
             PstateClockType::Single => {
                 NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Single(NV_GPU_PSTATE20_CLOCK_ENTRY_SINGLE {
-                    freq_kHz: (self.0).minFreq_kHz,
+                    freq_kHz: self.0.minFreq_kHz,
                 })
             }
             PstateClockType::Range => NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Range(self.0),
@@ -188,7 +188,7 @@ impl NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
     }
 
     pub fn set_single(&mut self, value: NV_GPU_PSTATE20_CLOCK_ENTRY_SINGLE) {
-        (self.0).minFreq_kHz = value.freq_kHz;
+        self.0.minFreq_kHz = value.freq_kHz;
     }
 
     pub fn set_range(&mut self, value: NV_GPU_PSTATE20_CLOCK_ENTRY_RANGE) {
@@ -305,7 +305,7 @@ pub mod private {
     use crate::prelude_::*;
 
     nvapi! {
-        pub type GPU_SetPstates20Fn = extern "C" fn(hPhysicalGPU: super::NvPhysicalGpuHandle, pPstatesInfo: *const super::NV_GPU_PERF_PSTATES20_INFO) -> NvAPI_Status;
+        pub type GPU_SetPstates20Fn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pPstatesInfo: *const super::NV_GPU_PERF_PSTATES20_INFO) -> NvAPI_Status;
 
         /// Undocumented private API
         pub unsafe fn NvAPI_GPU_SetPstates20;

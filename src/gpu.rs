@@ -618,7 +618,7 @@ impl PhysicalGpu {
         trace!("gpu.thermal_sensors({})", mask);
         let data = thermal::private::NV_GPU_THERMAL_SENSORS_V1 {
             version: NvVersion::new(
-                size_of::<thermal::private::NV_GPU_THERMAL_SENSORS_V1>(),
+                std::mem::size_of::<thermal::private::NV_GPU_THERMAL_SENSORS_V1>(),
                 2,
             ),
             mask,

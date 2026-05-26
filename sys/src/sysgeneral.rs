@@ -70,17 +70,17 @@ nvapi! {
 
 nvapi! {
     /// This API converts a Physical GPU handle and output ID to a display ID.
-    pub unsafe fn NvAPI_SYS_GetDisplayIdFromGpuAndOutputId(hPhysicalGpu: handles::NvPhysicalGpuHandle, outputId: u32, displayId: *mut u32) -> NvAPI_Status;
+    pub unsafe fn NvAPI_SYS_GetDisplayIdFromGpuAndOutputId(hPhysicalGpu: NvPhysicalGpuHandle, outputId: u32, displayId: *mut u32) -> NvAPI_Status;
 }
 
 nvapi! {
     /// This API converts a display ID to a Physical GPU handle and output ID.
-    pub unsafe fn NvAPI_SYS_GetGpuAndOutputIdFromDisplayId(displayId: u32, hPhysicalGpu: *mut handles::NvPhysicalGpuHandle, outputId: *mut u32) -> NvAPI_Status;
+    pub unsafe fn NvAPI_SYS_GetGpuAndOutputIdFromDisplayId(displayId: u32, hPhysicalGpu: *mut NvPhysicalGpuHandle, outputId: *mut u32) -> NvAPI_Status;
 }
 
 nvapi! {
     /// This API retrieves the Physical GPU handle of the connected display
-    pub unsafe fn NvAPI_SYS_GetPhysicalGpuFromDisplayId(displayId: u32, hPhysicalGpu: *mut handles::NvPhysicalGpuHandle) -> NvAPI_Status;
+    pub unsafe fn NvAPI_SYS_GetPhysicalGpuFromDisplayId(displayId: u32, hPhysicalGpu: *mut NvPhysicalGpuHandle) -> NvAPI_Status;
 }
 
 nvbits! {

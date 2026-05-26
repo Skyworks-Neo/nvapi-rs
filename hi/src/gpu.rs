@@ -4,6 +4,16 @@ use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+fn collect_domain<T: Copy, U: From<T>>(
+    points: &BTreeMap<ClockDomain, Vec<(usize, T)>>,
+    domain: ClockDomain,
+) -> BTreeMap<usize, U> {
+    points
+        .get(&domain)
+        .map(|d| d.iter().map(|&(i, e)| (i, e.into())).collect())
+        .unwrap_or_default()
+}
+
 use nvapi::{
     self, BaseVoltage, ClockEntry, ClockFrequencyType, ClockRange, ClockTable, PStates, PffStatus,
     PowerInfoEntry, Sensor, ThermalInfo, ThermalLimit, ThermalPolicyId,
@@ -705,16 +715,8 @@ pub struct VfpTable {
 impl From<VfpCurve> for VfpTable {
     fn from(v: VfpCurve) -> Self {
         VfpTable {
-            graphics: v
-                .points
-                .get(&ClockDomain::Graphics)
-                .map(|d| d.iter().map(|&(i, e)| (i, e.into())).collect())
-                .unwrap_or_default(),
-            memory: v
-                .points
-                .get(&ClockDomain::Memory)
-                .map(|d| d.iter().map(|&(i, e)| (i, e.into())).collect())
-                .unwrap_or_default(),
+            graphics: collect_domain(&v.points, ClockDomain::Graphics),
+            memory: collect_domain(&v.points, ClockDomain::Memory),
         }
     }
 }
@@ -729,16 +731,8 @@ pub struct VfpDeltas {
 impl From<ClockTable> for VfpDeltas {
     fn from(c: ClockTable) -> Self {
         VfpDeltas {
-            graphics: c
-                .delta_points
-                .get(&ClockDomain::Graphics)
-                .map(|d| d.iter().map(|&(i, d)| (i, d.into())).collect())
-                .unwrap_or_default(),
-            memory: c
-                .delta_points
-                .get(&ClockDomain::Memory)
-                .map(|d| d.iter().map(|&(i, d)| (i, d.into())).collect())
-                .unwrap_or_default(),
+            graphics: collect_domain(&c.delta_points, ClockDomain::Graphics),
+            memory: collect_domain(&c.delta_points, ClockDomain::Memory),
         }
     }
 }

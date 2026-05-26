@@ -51,7 +51,7 @@ nvversion! { NV_DISPLAY_DRIVER_MEMORY_INFO_V2(2) }
 nvversion! { @=NV_DISPLAY_DRIVER_MEMORY_INFO NV_DISPLAY_DRIVER_MEMORY_INFO_V3(3) }
 
 nvapi! {
-    pub type GPU_GetMemoryInfoFn = extern "C" fn(hPhysicalGpu: handles::NvPhysicalGpuHandle, pMemoryInfo: *mut NV_DISPLAY_DRIVER_MEMORY_INFO) -> NvAPI_Status;
+    pub type GPU_GetMemoryInfoFn = extern "C" fn(hPhysicalGpu: NvPhysicalGpuHandle, pMemoryInfo: *mut NV_DISPLAY_DRIVER_MEMORY_INFO) -> NvAPI_Status;
 
     /// This function retrieves the available driver memory footprint for the specified GPU.
     /// If the GPU is in TCC Mode, only dedicatedVideoMemory will be returned in pMemoryInfo (NV_DISPLAY_DRIVER_MEMORY_INFO).
@@ -89,7 +89,7 @@ nvstruct! {
 nvversion! { @=NV_GPU_MEMORY_INFO_EX NV_GPU_MEMORY_INFO_EX_V1(1) }
 
 nvapi! {
-    pub type GPU_GetMemoryInfoExFn = extern "C" fn(hPhysicalGpu: handles::NvPhysicalGpuHandle, pMemoryInfo: *mut NV_GPU_MEMORY_INFO_EX) -> NvAPI_Status;
+    pub type GPU_GetMemoryInfoExFn = extern "C" fn(hPhysicalGpu: NvPhysicalGpuHandle, pMemoryInfo: *mut NV_GPU_MEMORY_INFO_EX) -> NvAPI_Status;
 
     /// This function retrieves the available driver memory footprint for the specified GPU.
     ///
@@ -103,6 +103,6 @@ pub mod private {
 
     nvapi! {
         /// This has a different offset than the NvAPI_GPU_GetMemoryInfo function despite both returning the same struct
-        pub unsafe fn NvAPI_GetDisplayDriverMemoryInfo(hPhysicalGpu: handles::NvPhysicalGpuHandle, pMemoryInfo: *mut super::NV_DISPLAY_DRIVER_MEMORY_INFO) -> NvAPI_Status;
+        pub unsafe fn NvAPI_GetDisplayDriverMemoryInfo(hPhysicalGpu: NvPhysicalGpuHandle, pMemoryInfo: *mut super::NV_DISPLAY_DRIVER_MEMORY_INFO) -> NvAPI_Status;
     }
 }

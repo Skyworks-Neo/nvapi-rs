@@ -205,7 +205,7 @@ impl RawConversion for pstate::NV_GPU_PERF_PSTATES20_PARAM_DELTA {
 }
 
 impl RawConversion for pstate::NV_GPU_DYNAMIC_PSTATES_INFO_EX {
-    type Target = BTreeMap<pstate::UtilizationDomain, Percentage>;
+    type Target = BTreeMap<UtilizationDomain, Percentage>;
     type Error = sys::ArgumentRangeError;
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -213,7 +213,7 @@ impl RawConversion for pstate::NV_GPU_DYNAMIC_PSTATES_INFO_EX {
         if self.flag_enabled() {
             Ok(BTreeMap::new())
         } else {
-            pstate::UtilizationDomain::values()
+            UtilizationDomain::values()
                 .map(|domain| (domain, &self.utilization[domain.raw() as usize]))
                 .filter(|&(_, util)| util.bIsPresent.get())
                 .map(|(id, util)| Percentage::from_raw(util.percentage).map(|p| (id, p)))

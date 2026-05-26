@@ -3,3 +3,4 @@
 /.cargo/
 /.gitattributes
 *.swp
+/.idea/
