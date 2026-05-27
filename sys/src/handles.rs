@@ -98,6 +98,6 @@ nv_declare_handle! {
     NVDX_SwapChainHandle
 }
 
-pub const NVDX_SWAPCHAIN_NONE: NVDX_SwapChainHandle = NVDX_SwapChainHandle(0 as *const _);
+pub const NVDX_SWAPCHAIN_NONE: NVDX_SwapChainHandle = NVDX_SwapChainHandle(::std::ptr::null());
 
 pub const NVAPI_DEFAULT_HANDLE: usize = 0;

@@ -3,7 +3,7 @@
 use crate::prelude_::*;
 use std::os::raw::c_char;
 
-pub(crate) type LUID = (u32, i32);
+pub(crate) type Luid = (u32, i32);
 
 nvapi! {
     pub type EnumNvidiaDisplayHandleFn = extern "C" fn(thisEnum: u32, pNvDispHandle: *mut handles::NvDisplayHandle) -> NvAPI_Status;
@@ -124,7 +124,7 @@ nvstruct! {
         /// Structure version
         pub version: NvVersion,
         /// Locally unique ID (LUID) of the display adapter on which the given display is present.
-        pub adapterId: LUID,
+        pub adapterId: Luid,
         /// The target identifier of the given display. This is also called AdapterRelativeId.
         pub targetId: u32,
         /// Reserved for future use.
@@ -150,7 +150,7 @@ nvstruct! {
         /// Structure version
         pub version: NvVersion,
         /// Locally unique ID (LUID) of the display adapter on which the target is presnt.
-        pub adapterId: LUID,
+        pub adapterId: Luid,
         /// The target identifier. This is also called AdapterRelativeId.
         pub targetId: u32,
         /// An array of displayIds corresponding to the input adapterId and targetId.

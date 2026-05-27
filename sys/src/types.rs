@@ -287,11 +287,11 @@ impl<T: AsBytes, const N: usize> Padding<[T; N]> {
 
 impl<T: AsBytes + fmt::Debug, const N: usize> fmt::Debug for Padding<[T; N]> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut it = self.data.iter();
+        let it = self.data.iter();
         f.write_str("[")?;
         let mut prev: Option<&T> = None;
         let mut repeat: usize = 0;
-        while let Some(v) = it.next() {
+        for v in it {
             match prev {
                 Some(prev) if prev.as_bytes() == v.as_bytes() => repeat = repeat.saturating_add(1),
                 _ => {
@@ -447,7 +447,7 @@ impl<'a> Iterator for ClockMaskIter<'a> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.mask.len() > 0 {
+        while !self.mask.is_empty() {
             let offset = self.offset;
             let bit = offset % 32;
             let set = self.mask[0] & (1u32 << bit) != 0;

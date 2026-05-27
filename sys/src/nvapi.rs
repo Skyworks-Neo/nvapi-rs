@@ -7,16 +7,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub type QueryInterfaceFn = extern "C" fn(id: u32) -> *const c_void;
 
 #[cfg(all(windows, target_pointer_width = "32"))]
-pub const LIBRARY_NAME: &'static [u8; 10] = b"nvapi.dll\0";
+pub const LIBRARY_NAME: &[u8; 10] = b"nvapi.dll\0";
 #[cfg(all(windows, target_pointer_width = "64"))]
-pub const LIBRARY_NAME: &'static [u8; 12] = b"nvapi64.dll\0";
+pub const LIBRARY_NAME: &[u8; 12] = b"nvapi64.dll\0";
 #[cfg(target_os = "linux")]
-pub const LIBRARY_NAME: &'static [u8; 19] = b"libnvidia-api.so.1\0";
+pub const LIBRARY_NAME: &[u8; 19] = b"libnvidia-api.so.1\0";
 
-pub const FN_NAME: &'static [u8; 21] = b"nvapi_QueryInterface\0";
+pub const FN_NAME: &[u8; 21] = b"nvapi_QueryInterface\0";
 
 static QUERY_INTERFACE_CACHE: AtomicUsize = AtomicUsize::new(0);
 
+/// # Safety
+///
+/// `ptr` must point to a valid NVAPI `QueryInterface` implementation and remain callable for
+/// the lifetime of the process.
 pub unsafe fn set_query_interface(ptr: QueryInterfaceFn) {
     QUERY_INTERFACE_CACHE.store(ptr as usize, Ordering::Relaxed);
 }
@@ -57,7 +61,7 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
             ptr => Ok(ptr),
         }?;
 
-        match mem::transmute::<_, QueryInterfaceFn>(ptr)(id) as usize {
+        match mem::transmute::<usize, QueryInterfaceFn>(ptr)(id) as usize {
             0 => Err(Status::NoImplementation),
             ptr => Ok(ptr),
         }
@@ -89,7 +93,7 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
             ptr => Ok(ptr),
         }?;
 
-        match mem::transmute::<_, QueryInterfaceFn>(ptr)(id) as usize {
+        match mem::transmute::<usize, QueryInterfaceFn>(ptr)(id) as usize {
             0 => Err(Status::NoImplementation),
             ptr => Ok(ptr),
         }

@@ -113,12 +113,14 @@ macro_rules! nvenum {
         pub type $enum = ::std::os::raw::c_int;
         $(
             $(#[$metai])*
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             #[allow(overflowing_literals)]
             pub const $symbol: $enum = $value as _;
         )*
 
         $(#[$meta])*
         #[allow(overflowing_literals)]
+        #[allow(clippy::unsafe_derive_deserialize)]
         #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
         #[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
         #[non_exhaustive]
@@ -131,12 +133,17 @@ macro_rules! nvenum {
         }
 
         impl $enum_name {
+            /// Convert a raw NVAPI enum value into a typed variant.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`crate::ArgumentRangeError`] when `raw` does not match a known value.
             #[allow(overflowing_literals)]
             pub fn from_raw(raw: $enum) -> ::std::result::Result<Self, crate::ArgumentRangeError> {
                 match raw {
                     $(
                         $symbol
-                    )|* => Ok(unsafe { ::std::mem::transmute(raw) }),
+                    )|* => Ok(unsafe { ::std::mem::transmute::<$enum, $enum_name>(raw) }),
                     _ => Err(Default::default()),
                 }
             }
@@ -154,9 +161,9 @@ macro_rules! nvenum {
             }
         }
 
-        impl Into<$enum> for $enum_name {
-            fn into(self) -> $enum {
-                self as _
+        impl From<$enum_name> for $enum {
+            fn from(value: $enum_name) -> $enum {
+                value as _
             }
         }
 
@@ -190,6 +197,7 @@ macro_rules! nvbits {
         bitflags::bitflags! {
             $(#[$meta])*
             #[derive(Default)]
+            #[allow(clippy::unsafe_derive_deserialize)]
             #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
             pub struct $enum_name: $enum {
             $(
@@ -199,6 +207,7 @@ macro_rules! nvbits {
             }
         }
 
+        #[allow(clippy::copy_iterator)]
         impl Iterator for $enum_name {
             type Item = Self;
 
@@ -273,11 +282,12 @@ macro_rules! nvapi {
         pub unsafe fn $fn:ident($($arg:ident: $arg_ty:ty),*) -> $ret:ty;
     ) => {
         $(#[$meta])*
+        #[doc = "# Safety\n\nThis function forwards to NVAPI. Callers must ensure all pointers are valid, the target NVAPI entry point is available, and the NVAPI library is initialized as required by the driver."]
         pub unsafe fn $fn($($arg: $arg_ty),*) -> $ret {
             static CACHE: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
 
             match crate::nvapi::query_interface(crate::nvid::Api::$fn.id(), &CACHE) {
-                Ok(ptr) => ::std::mem::transmute::<_, extern "C" fn($($arg: $arg_ty),*) -> $ret>(ptr)($($arg),*),
+                Ok(ptr) => ::std::mem::transmute::<usize, extern "C" fn($($arg: $arg_ty),*) -> $ret>(ptr)($($arg),*),
                 Err(e) => e.raw(),
             }
         }

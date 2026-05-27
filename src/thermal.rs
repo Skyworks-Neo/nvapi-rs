@@ -141,10 +141,12 @@ pub struct ThermalLimit {
 
 impl ThermalLimit {
     pub fn to_raw(&self) -> thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 {
-        let mut entry = thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3::default();
-        entry.policy_id = self.policy.into();
-        entry.temp_limit_C = self.value.0 as _;
-        entry.remove_tdp_limit = self.remove_tdp_limit.into();
+        let mut entry = thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 {
+            policy_id: self.policy.into(),
+            temp_limit_C: self.value.0 as _,
+            remove_tdp_limit: self.remove_tdp_limit.into(),
+            ..Default::default()
+        };
         if let Some(pff) = &self.pff {
             entry.set_pff(true);
             let (curve, values) = pff.to_raw();

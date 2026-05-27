@@ -11,16 +11,17 @@ nvenum! {
     }
 }
 
+#[allow(clippy::derivable_impls)]
+impl Default for EccConfiguration {
+    fn default() -> Self {
+        EccConfiguration::NotSupported
+    }
+}
+
 nvenum_display! {
     EccConfiguration => {
         NotSupported = "Not Supported",
         _ = _,
-    }
-}
-
-impl Default for EccConfiguration {
-    fn default() -> Self {
-        EccConfiguration::NotSupported
     }
 }
 

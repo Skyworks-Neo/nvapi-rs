@@ -137,14 +137,15 @@ impl RawConversion for pstate::NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1 {
             voltage_domain: VoltageDomain::from_raw(self.domainId)?,
             editable: self.bIsEditable.get(),
             voltage: Microvolts(self.volt_uV),
-            voltage_delta: match self.voltDelta_uV.convert_raw()? {
-                Delta { value, range } => Delta {
+            voltage_delta: {
+                let Delta { value, range } = self.voltDelta_uV.convert_raw()?;
+                Delta {
                     value: MicrovoltsDelta(value.0),
                     range: Range {
                         min: MicrovoltsDelta(range.min.0),
                         max: MicrovoltsDelta(range.max.0),
                     },
-                },
+                }
             },
         })
     }

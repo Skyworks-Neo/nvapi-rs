@@ -156,6 +156,13 @@ nvenum! {
     }
 }
 
+#[allow(clippy::derivable_impls)]
+impl Default for BusType {
+    fn default() -> Self {
+        BusType::Unknown
+    }
+}
+
 nvenum_display! {
     BusType => {
         Unknown = "Unknown",
@@ -164,12 +171,6 @@ nvenum_display! {
         PciExpress = "PCIe",
         Fpci = "FPCI",
         Axi = "AXI",
-    }
-}
-
-impl Default for BusType {
-    fn default() -> Self {
-        BusType::Unknown
     }
 }
 
@@ -625,6 +626,7 @@ nvenum_display! {
     ChipRevision => _
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for ChipRevision {
     fn default() -> Self {
         ChipRevision::Unknown
@@ -778,6 +780,7 @@ pub mod private {
         }
     }
 
+    #[allow(clippy::derivable_impls)]
     impl Default for VendorId {
         fn default() -> Self {
             VendorId::Unknown

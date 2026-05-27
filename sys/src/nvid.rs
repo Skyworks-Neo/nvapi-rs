@@ -18,12 +18,12 @@ macro_rules! nvapis {
         }
 
         impl Api {
-            pub fn from_id(id: u32) -> Result<Self, ()> {
+            pub fn from_id(id: u32) -> Result<Self, crate::ArgumentRangeError> {
                 match id {
                 $(
                     $id
-                )|* => Ok(unsafe { mem::transmute(id) }),
-                    _ => Err(()),
+                )|* => Ok(unsafe { mem::transmute::<u32, Api>(id) }),
+                    _ => Err(Default::default()),
                 }
             }
 

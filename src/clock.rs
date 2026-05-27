@@ -26,7 +26,7 @@ impl RawConversion for clock::NV_GPU_CLOCK_FREQUENCIES {
         Ok(ClockDomain::values()
             .filter(|&c| c != ClockDomain::Undefined)
             .map(|id| (id, &self.domain[id.raw() as usize]))
-            .filter(|&(_, ref clock)| clock.bIsPresent.get())
+            .filter(|&(_, clock)| clock.bIsPresent.get())
             .map(|(id, clock)| (id, Kilohertz(clock.frequency)))
             .collect())
     }
@@ -41,7 +41,7 @@ impl RawConversion for clock::private::NV_USAGES_INFO {
         self.usages
             .iter()
             .enumerate()
-            .filter(|&(_, ref usage)| usage.bIsPresent.get())
+            .filter(|&(_, usage)| usage.bIsPresent.get())
             .map(|(i, usage)| {
                 crate::pstate::UtilizationDomain::from_raw(i as _)
                     .and_then(|i| Percentage::from_raw(usage.percentage).map(|p| (i, p)))
@@ -111,14 +111,13 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_V1 {
-                clock_type: _,
-                freqDeltaKHz,
-                rsvd: _,
-                padding: _,
-            } => Ok(freqDeltaKHz.into()),
-        }
+        let clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_V1 {
+            clock_type: _,
+            freqDeltaKHz,
+            rsvd: _,
+            padding: _,
+        } = *self;
+        Ok(freqDeltaKHz.into())
     }
 }
 
@@ -300,13 +299,12 @@ impl RawConversion for power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1 {
-                clock_type: _,
-                point,
-                unknown: _,
-            } => point.convert_raw().map_err(Into::into),
-        }
+        let power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1 {
+            clock_type: _,
+            point,
+            unknown: _,
+        } = *self;
+        point.convert_raw().map_err(Into::into)
     }
 }
 
@@ -317,20 +315,19 @@ impl RawConversion for power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V3 {
-                clock_type,
-                point,
-                point_default,
-                point_overclocked,
-                ..
-            } => Ok(VfpEntry {
-                point_type: VfPointType::from_raw(clock_type as i32)?,
-                current: point.convert_raw()?,
-                default: point_default.convert_raw()?,
-                overclocked: point_overclocked.convert_raw()?,
-            }),
-        }
+        let power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V3 {
+            clock_type,
+            point,
+            point_default,
+            point_overclocked,
+            ..
+        } = *self;
+        Ok(VfpEntry {
+            point_type: VfPointType::from_raw(clock_type as i32)?,
+            current: point.convert_raw()?,
+            default: point_default.convert_raw()?,
+            overclocked: point_overclocked.convert_raw()?,
+        })
     }
 }
 
@@ -447,22 +444,21 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V1 {
-                policy_id,
-                min_power,
-                def_power,
-                max_power,
-                ..
-            } => Ok(PowerInfoEntry {
-                policy_id: policy_id.try_into()?,
-                range: Range {
-                    min: Percentage1000(min_power),
-                    max: Percentage1000(max_power),
-                },
-                default_limit: Percentage1000(def_power),
-            }),
-        }
+        let power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V1 {
+            policy_id,
+            min_power,
+            def_power,
+            max_power,
+            ..
+        } = *self;
+        Ok(PowerInfoEntry {
+            policy_id,
+            range: Range {
+                min: Percentage1000(min_power),
+                max: Percentage1000(max_power),
+            },
+            default_limit: Percentage1000(def_power),
+        })
     }
 }
 
@@ -473,22 +469,21 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V2 {
-                policy_id,
-                min_power,
-                def_power,
-                max_power,
-                ..
-            } => Ok(PowerInfoEntry {
-                policy_id: policy_id.try_into()?,
-                range: Range {
-                    min: Percentage1000(min_power),
-                    max: Percentage1000(max_power),
-                },
-                default_limit: Percentage1000(def_power),
-            }),
-        }
+        let power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V2 {
+            policy_id,
+            min_power,
+            def_power,
+            max_power,
+            ..
+        } = *self;
+        Ok(PowerInfoEntry {
+            policy_id,
+            range: Range {
+                min: Percentage1000(min_power),
+                max: Percentage1000(max_power),
+            },
+            default_limit: Percentage1000(def_power),
+        })
     }
 }
 
@@ -517,14 +512,13 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_ENTRY
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_ENTRY {
-                channel,
-                power,
-                unknown0: _,
-                unknown1: _,
-            } => Ok((channel.try_into()?, Percentage1000(power))),
-        }
+        let power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_ENTRY {
+            channel,
+            power,
+            unknown0: _,
+            unknown1: _,
+        } = *self;
+        Ok((channel.try_into()?, Percentage1000(power)))
     }
 }
 
@@ -549,13 +543,12 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V1 {
-                policy_id: _,
-                power_target,
-                ..
-            } => Ok(Percentage1000(power_target)),
-        }
+        let power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V1 {
+            policy_id: _,
+            power_target,
+            ..
+        } = *self;
+        Ok(Percentage1000(power_target))
     }
 }
 
@@ -566,13 +559,12 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V2 {
-                policy_id: _,
-                power_target,
-                ..
-            } => Ok(Percentage1000(power_target)),
-        }
+        let power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V2 {
+            policy_id: _,
+            power_target,
+            ..
+        } = *self;
+        Ok(Percentage1000(power_target))
     }
 }
 
@@ -674,19 +666,18 @@ impl RawConversion for clock::private::NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        match *self {
-            clock::private::NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
-                id,
-                mode: _,
-                value: _,
-                clock_id,
-                ..
-            } => Ok(ClockLockEntry {
-                limit: id.try_into()?,
-                clock: clock_id.try_into()?,
-                lock_value: ClockLockValue::from_raw(self)?,
-            }),
-        }
+        let clock::private::NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
+            id,
+            mode: _,
+            value: _,
+            clock_id,
+            ..
+        } = *self;
+        Ok(ClockLockEntry {
+            limit: id.try_into()?,
+            clock: clock_id.try_into()?,
+            lock_value: ClockLockValue::from_raw(self)?,
+        })
     }
 }
 

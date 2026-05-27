@@ -333,7 +333,7 @@ impl PhysicalGpu {
             nvcall!(NvAPI_GPU_SetECCConfiguration(
                 self.0,
                 enable.into(),
-                immediately.into()
+                immediately
             ))
         }
     }
@@ -449,8 +449,10 @@ impl PhysicalGpu {
         info: &VfpInfo,
     ) -> crate::Result<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL> {
         trace!("gpu.vfp_table({:?})", info);
-        let mut data = clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-        data.mask = info.mask.mask;
+        let data = clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
+            mask: info.mask.mask,
+            ..Default::default()
+        };
 
         unsafe { nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetControl@get{data}(self.0) => err) }
     }
@@ -540,8 +542,10 @@ impl PhysicalGpu {
 
     pub fn vfp_curve(&self, info: &VfpInfo) -> crate::Result<crate::clock::VfpCurve> {
         trace!("gpu.vfp_curve({:?})", info);
-        let mut data = power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS::default();
-        data.mask = info.mask.mask;
+        let data = power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS {
+            mask: info.mask.mask,
+            ..Default::default()
+        };
 
         unsafe {
             let v3_result =
@@ -588,8 +592,10 @@ impl PhysicalGpu {
 
     pub fn set_core_voltage_boost(&self, value: Percentage) -> crate::NvapiResult<()> {
         trace!("gpu.set_core_voltage_boost({:?})", value);
-        let mut data = power::private::NV_GPU_CLIENT_VOLT_RAILS_CONTROL::default();
-        data.percent = value.0;
+        let data = power::private::NV_GPU_CLIENT_VOLT_RAILS_CONTROL {
+            percent: value.0,
+            ..Default::default()
+        };
 
         unsafe { nvcall!(NvAPI_GPU_ClientVoltRailsSetControl(self.0, &data)) }
     }
@@ -602,7 +608,6 @@ impl PhysicalGpu {
     {
         trace!("gpu.power_usage()");
         let mut status = power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS::default();
-        status.count = 0;
         for (channel, entry) in channels.into_iter().zip(&mut status.entries) {
             entry.channel = channel.into();
             status.count += 1;
@@ -812,8 +817,8 @@ impl PhysicalGpu {
 
         self.cooler_info()?
             .into_iter()
-            .zip(self.cooler_status()?.into_iter())
-            .zip(self.cooler_control()?.into_iter())
+            .zip(self.cooler_status()?)
+            .zip(self.cooler_control()?)
             .map(|(((id, info), (ids, status)), (idc, control))| match id {
                 id if id == ids && id == idc => Ok((
                     id,
@@ -914,8 +919,10 @@ impl PhysicalGpu {
         policy: crate::thermal::CoolerPolicy,
     ) -> crate::Result<<cooler::private::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target> {
         trace!("gpu.cooler_policy_table({:?})", index);
-        let mut data = cooler::private::NV_GPU_COOLER_POLICY_TABLE::default();
-        data.policy = policy.raw();
+        let mut data = cooler::private::NV_GPU_COOLER_POLICY_TABLE {
+            policy: policy.raw(),
+            ..Default::default()
+        };
 
         unsafe {
             nvcall!(NvAPI_GPU_GetCoolerPolicyTable@get(self.0, index, &mut data) => err).and_then(
@@ -936,8 +943,10 @@ impl PhysicalGpu {
         value: &<cooler::private::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target,
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_cooler_policy_table({:?}, {:?})", index, value);
-        let mut data = cooler::private::NV_GPU_COOLER_POLICY_TABLE::default();
-        data.policy = value.policy.raw();
+        let data = cooler::private::NV_GPU_COOLER_POLICY_TABLE {
+            policy: value.policy.raw(),
+            ..Default::default()
+        };
         // TODO: data.policyCoolerLevel
 
         unsafe {
@@ -1047,7 +1056,7 @@ impl PhysicalGpu {
 
         unsafe {
             nvcall!(NvAPI_GPU_GetPerfDecreaseInfo@get(self.0))
-                .map(|data| PerformanceDecreaseReason::from_bits_truncate(data))
+                .map(PerformanceDecreaseReason::from_bits_truncate)
         }
     }
 
@@ -1133,13 +1142,13 @@ impl PhysicalGpu {
     pub fn clear_edid(&self, display_id: u32) -> crate::NvapiResult<()> {
         trace!("gpu.clear_edid(0x{:08x})", display_id);
         let mut edid = display::NV_EDID::default();
-        edid.sizeofEDID = 0;
         unsafe {
             nvcall!(NvAPI_GPU_SetEDID(self.0, display_id, &mut edid))?;
         }
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn i2c_read(
         &self,
         display_mask: u32,
@@ -1154,34 +1163,39 @@ impl PhysicalGpu {
             "i2c_read({}, {:?}, {:?}, 0x{:02x}, {:?}, {:?})",
             display_mask, port, port_is_ddc, address, register, speed
         );
-        let mut data = i2c::NV_I2C_INFO::default();
-        data.displayMask = display_mask;
-        data.bIsDDCPort = if port_is_ddc {
-            sys::NV_TRUE
-        } else {
-            sys::NV_FALSE
-        } as _;
-        data.i2cDevAddress = address << 1;
-        data.pbI2cRegAddress = if register.is_empty() {
-            ptr::null_mut()
-        } else {
-            register.as_ptr() as *mut _
+        let mut data = i2c::NV_I2C_INFO {
+            displayMask: display_mask,
+            bIsDDCPort: if port_is_ddc {
+                sys::NV_TRUE
+            } else {
+                sys::NV_FALSE
+            } as _,
+            i2cDevAddress: address << 1,
+            pbI2cRegAddress: if register.is_empty() {
+                ptr::null_mut()
+            } else {
+                register.as_ptr() as *mut _
+            },
+            regAddrSize: register.len() as _,
+            pbData: bytes.as_mut_ptr(),
+            cbSize: bytes.len() as _,
+            i2cSpeed: i2c::NVAPI_I2C_SPEED_DEPRECATED,
+            i2cSpeedKhz: speed.raw(),
+            portId: port.unwrap_or_default(),
+            bIsPortIdSet: if port.is_some() {
+                sys::NV_TRUE as _
+            } else {
+                sys::NV_FALSE as _
+            },
+            ..Default::default()
         };
-        data.regAddrSize = register.len() as _;
-        data.pbData = bytes.as_mut_ptr();
-        data.cbSize = bytes.len() as _;
-        data.i2cSpeed = i2c::NVAPI_I2C_SPEED_DEPRECATED;
-        data.i2cSpeedKhz = speed.raw();
-        if let Some(port) = port {
-            data.portId = port;
-            data.bIsPortIdSet = sys::NV_TRUE as _;
-        }
 
         unsafe {
             nvcall!(NvAPI_I2CRead(self.0, &mut data)).map(|()| data.cbSize as usize) // TODO: not actually sure if this ever changes?
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn i2c_write(
         &self,
         display_mask: u32,
@@ -1196,28 +1210,32 @@ impl PhysicalGpu {
             "i2c_write({}, {:?}, {:?}, 0x{:02x}, {:?}, {:?})",
             display_mask, port, port_is_ddc, address, register, speed
         );
-        let mut data = i2c::NV_I2C_INFO::default();
-        data.displayMask = display_mask;
-        data.bIsDDCPort = if port_is_ddc {
-            sys::NV_TRUE
-        } else {
-            sys::NV_FALSE
-        } as _;
-        data.i2cDevAddress = address << 1;
-        data.pbI2cRegAddress = if register.is_empty() {
-            ptr::null_mut()
-        } else {
-            register.as_ptr() as *mut _
+        let mut data = i2c::NV_I2C_INFO {
+            displayMask: display_mask,
+            bIsDDCPort: if port_is_ddc {
+                sys::NV_TRUE
+            } else {
+                sys::NV_FALSE
+            } as _,
+            i2cDevAddress: address << 1,
+            pbI2cRegAddress: if register.is_empty() {
+                ptr::null_mut()
+            } else {
+                register.as_ptr() as *mut _
+            },
+            regAddrSize: register.len() as _,
+            pbData: bytes.as_ptr() as *mut _,
+            cbSize: bytes.len() as _,
+            i2cSpeed: i2c::NVAPI_I2C_SPEED_DEPRECATED,
+            i2cSpeedKhz: speed.raw(),
+            portId: port.unwrap_or_default(),
+            bIsPortIdSet: if port.is_some() {
+                sys::NV_TRUE as _
+            } else {
+                sys::NV_FALSE as _
+            },
+            ..Default::default()
         };
-        data.regAddrSize = register.len() as _;
-        data.pbData = bytes.as_ptr() as *mut _;
-        data.cbSize = bytes.len() as _;
-        data.i2cSpeed = i2c::NVAPI_I2C_SPEED_DEPRECATED;
-        data.i2cSpeedKhz = speed.raw();
-        if let Some(port) = port {
-            data.portId = port;
-            data.bIsPortIdSet = sys::NV_TRUE as _;
-        }
 
         unsafe { nvcall!(NvAPI_I2CWrite(self.0, &mut data)) }
     }
@@ -1492,8 +1510,7 @@ impl Architecture {
         id: sys::gpu::NV_GPU_ARCHITECTURE_ID,
         implementation: sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID,
     ) -> Self {
-        Self::from_raw_inner(id, implementation)
-            .unwrap_or_else(|_| Self::Unknown { id, implementation })
+        Self::from_raw_inner(id, implementation).unwrap_or(Self::Unknown { id, implementation })
     }
 
     fn from_raw_inner(

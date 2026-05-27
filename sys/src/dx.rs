@@ -2,7 +2,7 @@ use crate::prelude_::*;
 use winapi::um::unknwnbase::IUnknown;
 
 nv_declare_handle! { NVDX_ObjectHandle }
-pub const NVDX_OBJECT_NONE: NVDX_ObjectHandle = NVDX_ObjectHandle(0 as *const _);
+pub const NVDX_OBJECT_NONE: NVDX_ObjectHandle = NVDX_ObjectHandle(::std::ptr::null());
 
 nvapi! {
     pub type D3D_GetObjectHandleForResourceFn = extern "C" fn(pDevice: *const IUnknown, pResource: *const IUnknown, pHandle: *mut NVDX_ObjectHandle) -> NvAPI_Status;
