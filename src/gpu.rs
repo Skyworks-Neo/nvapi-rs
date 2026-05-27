@@ -1108,6 +1108,16 @@ impl PhysicalGpu {
         }
     }
 
+    pub fn get_edid(&self, display_id: u32) -> crate::NvapiResult<Vec<u8>> {
+        trace!("gpu.get_edid(0x{:08x})", display_id);
+        let mut edid = display::NV_EDID::default();
+        unsafe {
+            nvcall!(NvAPI_GPU_GetEDID(self.0, display_id, &mut edid))?;
+        }
+        let size = edid.sizeofEDID as usize;
+        Ok(edid.EDID_Data[..size.min(256)].to_vec())
+    }
+
     pub fn i2c_read(
         &self,
         display_mask: u32,

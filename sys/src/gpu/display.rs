@@ -117,3 +117,46 @@ nvapi! {
     /// - `NVAPI_INSUFFICIENT_BUFFER`: When the input buffer(pDisplayIds) is less than the actual number of display IDs
     pub unsafe fn NvAPI_GPU_GetAllDisplayIds;
 }
+
+nvstruct! {
+    pub struct NV_EDID_V1 {
+        pub version: NvVersion,
+        pub EDID_Data: Array<[u8; 256]>,
+    }
+}
+
+nvstruct! {
+    pub struct NV_EDID_V2 {
+        pub version: NvVersion,
+        pub EDID_Data: Array<[u8; 256]>,
+        pub sizeofEDID: u32,
+    }
+}
+
+nvstruct! {
+    pub struct NV_EDID_V3 {
+        pub version: NvVersion,
+        pub EDID_Data: Array<[u8; 256]>,
+        pub sizeofEDID: u32,
+        pub edidId: u32,
+        pub offset: u32,
+    }
+}
+
+nvversion! { NV_EDID_V1(1) }
+nvversion! { NV_EDID_V2(2) }
+nvversion! { @=NV_EDID NV_EDID_V3(3) }
+
+nvapi! {
+    pub type GPU_GetEDID = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, displayOutputId: u32, pEDID: *mut NV_EDID) -> NvAPI_Status;
+
+    /// Returns the EDID data for the specified GPU handle and display output ID.
+    pub unsafe fn NvAPI_GPU_GetEDID;
+}
+
+nvapi! {
+    pub type GPU_SetEDID = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, displayOutputId: u32, pEDID: *mut NV_EDID) -> NvAPI_Status;
+
+    /// Sets the EDID data for the specified GPU handle and display output ID.
+    pub unsafe fn NvAPI_GPU_SetEDID;
+}

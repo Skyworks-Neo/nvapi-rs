@@ -21,13 +21,13 @@ use nvapi::{
 };
 pub use nvapi::{
     ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies, ClockLockEntry,
-    ClockLockValue, CoolerControl, CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings,
-    CoolerStatus, CoolerTarget, CoolerType, DriverModel, EccErrors, FanCoolerId, Foundry, GpuType,
-    Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
-    PciIdentifiers, Percentage, PerfInfo, PerfLimitId, PerfStatus, PffCurve, PffPoint, PhysicalGpu,
-    PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType, ThermalController,
-    ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType,
-    VoltageDomain, VoltageStatus, VoltageTable,
+    ClockLockValue, ConnectedIdsFlags, CoolerControl, CoolerController, CoolerInfo, CoolerPolicy,
+    CoolerSettings, CoolerStatus, CoolerTarget, CoolerType, DisplayId, DriverModel, EccErrors,
+    FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts,
+    MicrovoltsDelta, PState, PciIdentifiers, Percentage, PerfInfo, PerfLimitId, PerfStatus,
+    PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm,
+    SystemType, ThermalController, ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations,
+    Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
 };
 
 pub struct Gpu {
@@ -71,6 +71,7 @@ pub struct GpuInfo {
     // TODO: pstate base_voltages
     pub overvolt_limits: Vec<OvervoltLimit>,
     pub vfp_limits: BTreeMap<ClockDomain, VfpRange>,
+    pub connected_displays: Vec<DisplayId>,
 }
 
 impl GpuInfo {
@@ -254,6 +255,10 @@ impl Gpu {
                     .collect(),
                 Err(..) => Default::default(),
             },
+            connected_displays: allowable_result(
+                self.gpu.display_ids_connected(ConnectedIdsFlags::empty()),
+            )?
+            .unwrap_or_else(|_| Default::default()),
         })
     }
 
