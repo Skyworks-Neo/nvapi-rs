@@ -51,6 +51,8 @@ pub struct GpuInfo {
     pub ram_type: RamType,
     pub ram_maker: RamMaker,
     pub ram_bus_width: u32,
+    pub physical_frame_buffer: Kibibytes,
+    pub virtual_frame_buffer: Kibibytes,
     pub ram_bank_count: u32,
     pub ram_partition_count: u32,
     pub foundry: Foundry,
@@ -200,6 +202,14 @@ impl Gpu {
             ram_type: allowable_result_fallback(self.gpu.ram_type(), RamType::Unknown)?,
             ram_maker: allowable_result_fallback(self.gpu.ram_maker(), RamMaker::Unknown)?,
             ram_bus_width: allowable_result_fallback(self.gpu.ram_bus_width(), 0)?,
+            physical_frame_buffer: allowable_result_fallback(
+                self.gpu.physical_frame_buffer_size(),
+                Kibibytes(0),
+            )?,
+            virtual_frame_buffer: allowable_result_fallback(
+                self.gpu.virtual_frame_buffer_size(),
+                Kibibytes(0),
+            )?,
             ram_bank_count: allowable_result_fallback(self.gpu.ram_bank_count(), 0)?,
             ram_partition_count: allowable_result_fallback(self.gpu.ram_partition_count(), 0)?,
             foundry: allowable_result_fallback(self.gpu.foundry(), Foundry::Unknown)?,

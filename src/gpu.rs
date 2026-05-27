@@ -256,6 +256,16 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetMemoryInfo@get(self.0) => raw) }
     }
 
+    pub fn physical_frame_buffer_size(&self) -> crate::NvapiResult<Kibibytes> {
+        trace!("gpu.physical_frame_buffer_size()");
+        unsafe { nvcall!(NvAPI_GPU_GetPhysicalFrameBufferSize@get(self.0)).map(Kibibytes) }
+    }
+
+    pub fn virtual_frame_buffer_size(&self) -> crate::NvapiResult<Kibibytes> {
+        trace!("gpu.virtual_frame_buffer_size()");
+        unsafe { nvcall!(NvAPI_GPU_GetVirtualFrameBufferSize@get(self.0)).map(Kibibytes) }
+    }
+
     pub fn architecture(&self) -> crate::NvapiResult<ArchInfo> {
         trace!("gpu.architecture()");
 
