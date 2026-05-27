@@ -510,8 +510,30 @@ impl PhysicalGpu {
         data.mask = info.mask.mask;
 
         unsafe {
-            nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetStatus@get{data}(self.0) => err)
-                .and_then(|raw| crate::clock::VfpCurve::from_raw(&raw, info))
+            let v3_result = nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetStatus@get{data}(self.0) => err)
+                .and_then(|raw| crate::clock::VfpCurve::from_raw(&raw, info));
+            if v3_result.is_ok() {
+                return v3_result;
+            }
+
+            use crate::sys::nvapi::VersionedStruct;
+            let mut data_v1 = std::mem::zeroed::<
+                power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1,
+            >();
+            *data_v1.nvapi_version_mut() = NvVersion::with_struct::<
+                power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1,
+            >(2);
+            data_v1.mask = info.mask.mask;
+            let status = sys::api::NvAPI_GPU_ClockClientClkVfPointsGetStatus(
+                self.0,
+                ptr::from_mut(&mut data_v1).cast(),
+            );
+            crate::status_result(
+                sys::Api::NvAPI_GPU_ClockClientClkVfPointsGetStatus,
+                status,
+            )
+            .map_err(Into::into)
+            .and_then(|_| crate::clock::VfpCurve::from_raw_v1(&data_v1, info))
         }
     }
 
@@ -618,7 +640,7 @@ impl PhysicalGpu {
         trace!("gpu.thermal_sensors({})", mask);
         let data = thermal::private::NV_GPU_THERMAL_SENSORS_V1 {
             version: NvVersion::new(
-                std::mem::size_of::<thermal::private::NV_GPU_THERMAL_SENSORS_V1>(),
+                size_of::<thermal::private::NV_GPU_THERMAL_SENSORS_V1>(),
                 2,
             ),
             mask,
