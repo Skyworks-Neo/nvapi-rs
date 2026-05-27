@@ -104,6 +104,20 @@ nvapi! {
     pub unsafe fn NvAPI_GPU_GetThermalSettings;
 }
 
+nvapi! {
+    pub type GPU_GetCurrentThermalLevelFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pThermalLevel: *mut u32) -> NvAPI_Status;
+
+    /// Returns current thermal level (0=cool, 3=hot). Kepler-era API.
+    pub unsafe fn NvAPI_GPU_GetCurrentThermalLevel;
+}
+
+nvapi! {
+    pub type GPU_GetCurrentFanSpeedLevelFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pFanSpeedLevel: *mut u32) -> NvAPI_Status;
+
+    /// Returns current fan speed level (0=slow, 7=fast). Kepler-era API.
+    pub unsafe fn NvAPI_GPU_GetCurrentFanSpeedLevel;
+}
+
 /// Undocumented API
 pub mod private {
     use crate::prelude_::*;
@@ -317,7 +331,8 @@ pub mod private {
 
     impl NV_GPU_THERMAL_SENSORS_V1 {
         pub fn get_temp(&self, index: usize) -> Option<i32> {
-            self.values.get(index)
+            self.values
+                .get(index)
                 .map(|&v| v / 256)
                 .filter(|&v| v > 0 && v < 255)
         }
@@ -335,5 +350,48 @@ pub mod private {
 
     nvapi! {
         pub unsafe fn NvAPI_GPU_GetThermalSensors(hPhysicalGPU: NvPhysicalGpuHandle, pSensors: *mut NV_GPU_THERMAL_SENSORS) -> NvAPI_Status;
+    }
+
+    // GPS (GPU Power Steering) thermal limit (Kepler-era, undocumented)
+
+    nvstruct! {
+        pub struct NV_GPU_GPS_THERMAL_LIMIT_V1 {
+            pub version: NvVersion,
+            pub flags: u32,
+            pub thermal_limit: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_GPS_THERMAL_LIMIT NV_GPU_GPS_THERMAL_LIMIT_V1(1) }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPS_GetThermalLimit(hPhysicalGPU: NvPhysicalGpuHandle, pThermalLimit: *mut NV_GPU_GPS_THERMAL_LIMIT) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPS_SetThermalLimit(hPhysicalGPU: NvPhysicalGpuHandle, pThermalLimit: *const NV_GPU_GPS_THERMAL_LIMIT) -> NvAPI_Status;
+    }
+
+    // Thermal table (Kepler-era, undocumented)
+
+    nvstruct! {
+        pub struct NV_GPU_THERMAL_TABLE_ENTRY_V1 {
+            pub temperature: i32,
+            pub fan_speed: u32,
+        }
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_THERMAL_TABLE_V1 {
+            pub version: NvVersion,
+            pub count: u32,
+            pub entries: Array<[NV_GPU_THERMAL_TABLE_ENTRY_V1; 20]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_THERMAL_TABLE NV_GPU_THERMAL_TABLE_V1(1) }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_GetThermalTable(hPhysicalGPU: NvPhysicalGpuHandle, pThermalTable: *mut NV_GPU_THERMAL_TABLE) -> NvAPI_Status;
     }
 }

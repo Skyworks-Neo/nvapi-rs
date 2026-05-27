@@ -1,8 +1,9 @@
+use crate::Status;
 use crate::clock::{ClockDomain, ClockDomainInfo, VfpMask};
-use crate::pstate::PState;
+use crate::pstate::{PState, PStates};
+use crate::sys::api::NvVersion;
 use crate::sys::gpu::{clock, cooler, display, ecc, power, pstate, thermal};
 use crate::sys::{self, driverapi, i2c};
-use crate::sys::api::NvVersion;
 use crate::types::{
     Kibibytes, Kilohertz2Delta, KilohertzDelta, Percentage, Percentage1000, RawConversion,
 };
@@ -38,7 +39,7 @@ impl PhysicalGpu {
         let mut handles = [Default::default(); sys::types::NVAPI_MAX_PHYSICAL_GPUS];
         let mut gpus = match unsafe { nvcall!(NvAPI_EnumPhysicalGPUs@get(&mut handles)) } {
             Err(crate::NvapiError {
-                status: crate::Status::NvidiaDeviceNotFound,
+                status: Status::NvidiaDeviceNotFound,
                 ..
             }) => Vec::new(),
             Ok(len) => handles[..len as usize]
@@ -68,15 +69,15 @@ impl PhysicalGpu {
         let mut handles = [Default::default(); sys::types::NVAPI_MAX_PHYSICAL_GPUS];
         match unsafe { nvcall!(NvAPI_EnumTCCPhysicalGPUs@get(&mut handles)) } {
             Err(crate::NvapiError {
-                status: crate::Status::NvidiaDeviceNotFound,
+                status: Status::NvidiaDeviceNotFound,
                 ..
             }) => Ok(Vec::new()),
             Err(crate::NvapiError {
-                status: crate::Status::NoImplementation,
+                status: Status::NoImplementation,
                 ..
             }) => Ok(Vec::new()),
             Err(crate::NvapiError {
-                status: crate::Status::NotSupported,
+                status: Status::NotSupported,
                 ..
             }) => Ok(Vec::new()),
             Ok(len) => Ok(handles[..len as usize]
@@ -344,12 +345,25 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetCurrentPstate@get(self.0) => try) }
     }
 
-    pub fn pstates(
-        &self,
-    ) -> crate::Result<<pstate::NV_GPU_PERF_PSTATES20_INFO as RawConversion>::Target> {
+    pub fn pstates(&self) -> crate::Result<PStates> {
         trace!("gpu.pstates()");
+        match unsafe { nvcall!(NvAPI_GPU_GetPstates20@get(self.0) => raw) } {
+            Ok(p) => Ok(p),
+            Err(crate::Error::Nvapi(ref e))
+                if e.status == Status::NotSupported || e.status == Status::NoImplementation =>
+            {
+                trace!(
+                    "gpu.pstates(): Pstates20 not available, falling back to legacy PstatesInfo"
+                );
+                self.legacy_pstates()
+            }
+            Err(e) => Err(e),
+        }
+    }
 
-        unsafe { nvcall!(NvAPI_GPU_GetPstates20@get(self.0) => raw) }
+    pub fn legacy_pstates(&self) -> crate::Result<PStates> {
+        trace!("gpu.legacy_pstates()");
+        unsafe { nvcall!(NvAPI_GPU_GetPstatesInfoEx@get(self.0, 0u32) => raw) }
     }
 
     pub fn set_pstates<I: IntoIterator<Item = (PState, ClockDomain, KilohertzDelta)>>(
@@ -376,6 +390,16 @@ impl PhysicalGpu {
         info.numClocks = map.iter().map(|v| v.1.1).max().unwrap_or(0) as _;
 
         unsafe { nvcall!(NvAPI_GPU_SetPstates20(self.0, &info)) }
+    }
+
+    pub fn enable_overclocked_pstates(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.enable_overclocked_pstates()");
+        unsafe { nvcall!(NvAPI_GPU_EnableOverclockedPstates(self.0)) }
+    }
+
+    pub fn enable_dynamic_pstates(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.enable_dynamic_pstates()");
+        unsafe { nvcall!(NvAPI_GPU_EnableDynamicPstates(self.0)) }
     }
 
     pub fn dynamic_pstates_info(&self) -> crate::Result<Utilizations> {
@@ -510,16 +534,16 @@ impl PhysicalGpu {
         data.mask = info.mask.mask;
 
         unsafe {
-            let v3_result = nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetStatus@get{data}(self.0) => err)
-                .and_then(|raw| crate::clock::VfpCurve::from_raw(&raw, info));
+            let v3_result =
+                nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetStatus@get{data}(self.0) => err)
+                    .and_then(|raw| crate::clock::VfpCurve::from_raw(&raw, info));
             if v3_result.is_ok() {
                 return v3_result;
             }
 
             use crate::sys::nvapi::VersionedStruct;
-            let mut data_v1 = std::mem::zeroed::<
-                power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1,
-            >();
+            let mut data_v1 =
+                std::mem::zeroed::<power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>();
             *data_v1.nvapi_version_mut() = NvVersion::with_struct::<
                 power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1,
             >(2);
@@ -528,12 +552,9 @@ impl PhysicalGpu {
                 self.0,
                 ptr::from_mut(&mut data_v1).cast(),
             );
-            crate::status_result(
-                sys::Api::NvAPI_GPU_ClockClientClkVfPointsGetStatus,
-                status,
-            )
-            .map_err(Into::into)
-            .and_then(|_| crate::clock::VfpCurve::from_raw_v1(&data_v1, info))
+            crate::status_result(sys::Api::NvAPI_GPU_ClockClientClkVfPointsGetStatus, status)
+                .map_err(Into::into)
+                .and_then(|_| crate::clock::VfpCurve::from_raw_v1(&data_v1, info))
         }
     }
 
@@ -634,22 +655,15 @@ impl PhysicalGpu {
     pub fn thermal_sensors(
         &self,
         mask: i32,
-    ) -> crate::Result<
-        <thermal::private::NV_GPU_THERMAL_SENSORS as RawConversion>::Target,
-    > {
+    ) -> crate::Result<<thermal::private::NV_GPU_THERMAL_SENSORS as RawConversion>::Target> {
         trace!("gpu.thermal_sensors({})", mask);
         let data = thermal::private::NV_GPU_THERMAL_SENSORS_V1 {
-            version: NvVersion::new(
-                size_of::<thermal::private::NV_GPU_THERMAL_SENSORS_V1>(),
-                2,
-            ),
+            version: NvVersion::new(size_of::<thermal::private::NV_GPU_THERMAL_SENSORS_V1>(), 2),
             mask,
             values: [0; 40],
         };
 
-        unsafe {
-            nvcall!(NvAPI_GPU_GetThermalSensors@get{data}(self.0) => raw)
-        }
+        unsafe { nvcall!(NvAPI_GPU_GetThermalSensors@get{data}(self.0) => raw) }
     }
 
     pub fn thermal_limit_info(
@@ -696,7 +710,7 @@ impl PhysicalGpu {
 
         match res {
             Err(crate::Error::Nvapi(crate::NvapiError {
-                status: crate::Status::NotSupported,
+                status: Status::NotSupported,
                 ..
             })) => (),
             res => return res,
@@ -715,7 +729,7 @@ impl PhysicalGpu {
 
         match res {
             Err(crate::Error::Nvapi(crate::NvapiError {
-                status: crate::Status::NotSupported,
+                status: Status::NotSupported,
                 ..
             })) => (),
             res => return res,
@@ -734,7 +748,7 @@ impl PhysicalGpu {
 
         match res {
             Err(crate::Error::Nvapi(crate::NvapiError {
-                status: crate::Status::NotSupported,
+                status: Status::NotSupported,
                 ..
             })) => (),
             res => return res,
@@ -780,7 +794,7 @@ impl PhysicalGpu {
     ) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::Cooler>> {
         match self.cooler_settings_() {
             Err(crate::Error::Nvapi(crate::NvapiError {
-                status: crate::Status::NotSupported,
+                status: Status::NotSupported,
                 ..
             })) => (),
             res => return res,
@@ -855,7 +869,7 @@ impl PhysicalGpu {
 
         match res {
             Err(crate::NvapiError {
-                status: crate::Status::NotSupported,
+                status: Status::NotSupported,
                 ..
             }) => unsafe {
                 nvcall!(NvAPI_GPU_SetCoolerLevels(
@@ -1025,6 +1039,16 @@ impl PhysicalGpu {
             nvcall!(NvAPI_GPU_GetPerfDecreaseInfo@get(self.0))
                 .map(|data| PerformanceDecreaseReason::from_bits_truncate(data))
         }
+    }
+
+    pub fn current_thermal_level(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.current_thermal_level()");
+        unsafe { nvcall!(NvAPI_GPU_GetCurrentThermalLevel@get(self.0)) }
+    }
+
+    pub fn current_fan_speed_level(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.current_fan_speed_level()");
+        unsafe { nvcall!(NvAPI_GPU_GetCurrentFanSpeedLevel@get(self.0)) }
     }
 
     pub fn display_ids_all(

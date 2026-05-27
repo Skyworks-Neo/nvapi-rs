@@ -221,3 +221,65 @@ impl RawConversion for pstate::NV_GPU_DYNAMIC_PSTATES_INFO_EX {
         }
     }
 }
+
+// Legacy PstatesInfo mapping (for Maxwell V1 / Kepler and earlier GPUs)
+
+impl RawConversion for pstate::NV_GPU_PERF_PSTATES_INFO_V1_CLOCK {
+    type Target = ClockEntry;
+    type Error = sys::ArgumentRangeError;
+
+    fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
+        Ok(ClockEntry::Single {
+            domain: ClockDomain::from_raw(self.domainId)?,
+            editable: (self.flags & 1) != 0,
+            frequency_delta: Delta::default(),
+            frequency: Kilohertz(self.freq),
+        })
+    }
+}
+
+impl PStateSettings {
+    pub fn from_legacy_raw(
+        settings: &pstate::NV_GPU_PERF_PSTATES_INFO_V2_PSTATE,
+        num_clocks: usize,
+        num_voltages: usize,
+    ) -> Result<Self, sys::ArgumentRangeError> {
+        Ok(PStateSettings {
+            id: PState::from_raw(settings.pstateId)?,
+            editable: (settings.flags & 4) != 0,
+            clocks: settings.clocks[..num_clocks]
+                .iter()
+                .map(RawConversion::convert_raw)
+                .collect::<Result<_, _>>()?,
+            base_voltages: settings.voltages[..num_voltages]
+                .iter()
+                .map(|v| -> Result<BaseVoltage, sys::ArgumentRangeError> {
+                    Ok(BaseVoltage {
+                        voltage_domain: VoltageDomain::from_raw(v.domainId)?,
+                        editable: false,
+                        voltage: Microvolts(v.mvolt * 1000),
+                        voltage_delta: Delta::default(),
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl RawConversion for pstate::NV_GPU_PERF_PSTATES_INFO_V2 {
+    type Target = PStates;
+    type Error = sys::ArgumentRangeError;
+
+    fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
+        Ok(PStates {
+            editable: (self.flags & 4) != 0,
+            pstates: self.pstates[..self.numPstates as usize]
+                .iter()
+                .map(|ps| {
+                    PStateSettings::from_legacy_raw(ps, self.numClocks as _, self.numVoltages as _)
+                })
+                .collect::<Result<_, _>>()?,
+            overvolt: vec![],
+        })
+    }
+}

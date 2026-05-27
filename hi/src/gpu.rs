@@ -16,8 +16,8 @@ fn collect_domain<T: Copy, U: From<T>>(
 
 use nvapi::{
     self, BaseVoltage, ClockEntry, ClockFrequencyType, ClockRange, ClockTable, PStates, PffStatus,
-    PowerInfoEntry, Sensor, ThermalInfo, ThermalLimit, ThermalPolicyId,
-    VfpCurve, VfpEntry, VfpInfo,
+    PowerInfoEntry, Sensor, ThermalInfo, ThermalLimit, ThermalPolicyId, VfpCurve, VfpEntry,
+    VfpInfo,
 };
 pub use nvapi::{
     ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies, ClockLockEntry,
@@ -26,8 +26,8 @@ pub use nvapi::{
     Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
     PciIdentifiers, Percentage, PerfInfo, PerfLimitId, PerfStatus, PffCurve, PffPoint, PhysicalGpu,
     PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType, ThermalController,
-    ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain,
-    VoltageStatus, VoltageTable,
+    ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType,
+    VoltageDomain, VoltageStatus, VoltageTable,
 };
 
 pub struct Gpu {

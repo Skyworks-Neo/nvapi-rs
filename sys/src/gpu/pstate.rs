@@ -300,6 +300,96 @@ nvapi! {
     pub unsafe fn NvAPI_GPU_GetPstates20;
 }
 
+// Legacy PstatesInfo API (deprecated since R304, for Maxwell V1 / Kepler and earlier GPUs)
+// Structs per NVIDIA nvapi.h docs
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V1_CLOCK {
+        pub domainId: clock::NV_GPU_PUBLIC_CLOCK_ID,
+        pub flags: u32,
+        pub freq: u32,
+    }
+}
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V1_PSTATE {
+        pub pstateId: NV_GPU_PERF_PSTATE_ID,
+        pub flags: u32,
+        pub clocks: Array<[NV_GPU_PERF_PSTATES_INFO_V1_CLOCK; clock::NVAPI_MAX_GPU_PERF_CLOCKS]>,
+    }
+}
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V1 {
+        pub version: NvVersion,
+        pub flags: u32,
+        pub numPstates: u32,
+        pub numClocks: u32,
+        pub pstates: Array<[NV_GPU_PERF_PSTATES_INFO_V1_PSTATE; clock::NVAPI_MAX_GPU_PERF_PSTATES]>,
+    }
+}
+
+nvversion! { NV_GPU_PERF_PSTATES_INFO_V1(1) }
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V2_VOLTAGE {
+        pub domainId: NV_GPU_PERF_VOLTAGE_INFO_DOMAIN_ID,
+        pub flags: u32,
+        pub mvolt: u32,
+    }
+}
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V2_PSTATE {
+        pub pstateId: NV_GPU_PERF_PSTATE_ID,
+        pub flags: u32,
+        pub clocks: Array<[NV_GPU_PERF_PSTATES_INFO_V1_CLOCK; clock::NVAPI_MAX_GPU_PERF_CLOCKS]>,
+        pub voltages: Array<[NV_GPU_PERF_PSTATES_INFO_V2_VOLTAGE; clock::NVAPI_MAX_GPU_PERF_VOLTAGES]>,
+    }
+}
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V2 {
+        pub version: NvVersion,
+        pub flags: u32,
+        pub numPstates: u32,
+        pub numClocks: u32,
+        pub numVoltages: u32,
+        pub pstates: Array<[NV_GPU_PERF_PSTATES_INFO_V2_PSTATE; clock::NVAPI_MAX_GPU_PERF_PSTATES]>,
+    }
+}
+
+nvversion! { NV_GPU_PERF_PSTATES_INFO_V2(2) }
+nvversion! { @=NV_GPU_PERF_PSTATES_INFO NV_GPU_PERF_PSTATES_INFO_V2(3) }
+
+nvapi! {
+    pub type GPU_GetPstatesInfoExFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, inputFlags: u32, pPerfPstatesInfo: *mut NV_GPU_PERF_PSTATES_INFO) -> NvAPI_Status;
+
+    pub unsafe fn NvAPI_GPU_GetPstatesInfoEx;
+}
+
+nvapi! {
+    pub type GPU_SetPstatesInfoFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, inputFlags: u32, pPerfPstatesInfo: *const NV_GPU_PERF_PSTATES_INFO) -> NvAPI_Status;
+
+    pub unsafe fn NvAPI_GPU_SetPstatesInfo;
+}
+
+nvapi! {
+    pub type GPU_EnableOverclockedPstatesFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle) -> NvAPI_Status;
+
+    /// Enable overclocked pstates (allow P0 to exceed factory clocks).
+    /// Kepler-era API; modern GPUs use VFP lock instead.
+    pub unsafe fn NvAPI_GPU_EnableOverclockedPstates;
+}
+
+nvapi! {
+    pub type GPU_EnableDynamicPstatesFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle) -> NvAPI_Status;
+
+    /// Enable dynamic pstate switching.
+    /// Kepler-era API; may return NotSupported on Pascal+.
+    pub unsafe fn NvAPI_GPU_EnableDynamicPstates;
+}
+
 /// Undocumented API
 pub mod private {
     use crate::prelude_::*;
@@ -309,5 +399,38 @@ pub mod private {
 
         /// Undocumented private API
         pub unsafe fn NvAPI_GPU_SetPstates20;
+    }
+
+    // Pstate client limits (Kepler-era, undocumented)
+    // Struct layout is reverse-engineered and may vary by driver version
+
+    nvstruct! {
+        pub struct NV_GPU_PSTATE_CLIENT_LIMIT {
+            pub pstateId: super::NV_GPU_PERF_PSTATE_ID,
+            pub minLevel: u32,
+            pub maxLevel: u32,
+        }
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_PSTATE_CLIENT_LIMITS_V1 {
+            pub version: NvVersion,
+            pub numLimits: u32,
+            pub limits: Array<[NV_GPU_PSTATE_CLIENT_LIMIT; super::NVAPI_MAX_GPU_PSTATE20_PSTATES]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_PSTATE_CLIENT_LIMITS NV_GPU_PSTATE_CLIENT_LIMITS_V1(1) }
+
+    nvapi! {
+        pub type GPU_GetPstateClientLimitsFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pLimits: *mut NV_GPU_PSTATE_CLIENT_LIMITS) -> NvAPI_Status;
+
+        pub unsafe fn NvAPI_GPU_GetPstateClientLimits;
+    }
+
+    nvapi! {
+        pub type GPU_SetPstateClientLimitsFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pLimits: *const NV_GPU_PSTATE_CLIENT_LIMITS) -> NvAPI_Status;
+
+        pub unsafe fn NvAPI_GPU_SetPstateClientLimits;
     }
 }
