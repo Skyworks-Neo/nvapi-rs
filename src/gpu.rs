@@ -1118,6 +1118,28 @@ impl PhysicalGpu {
         Ok(edid.EDID_Data[..size.min(256)].to_vec())
     }
 
+    pub fn set_edid(&self, display_id: u32, data: &[u8]) -> crate::NvapiResult<()> {
+        trace!("gpu.set_edid(0x{:08x}, {} bytes)", display_id, data.len());
+        let mut edid = display::NV_EDID::default();
+        let len = data.len().min(256);
+        edid.EDID_Data[..len].copy_from_slice(&data[..len]);
+        edid.sizeofEDID = len as u32;
+        unsafe {
+            nvcall!(NvAPI_GPU_SetEDID(self.0, display_id, &mut edid))?;
+        }
+        Ok(())
+    }
+
+    pub fn clear_edid(&self, display_id: u32) -> crate::NvapiResult<()> {
+        trace!("gpu.clear_edid(0x{:08x})", display_id);
+        let mut edid = display::NV_EDID::default();
+        edid.sizeofEDID = 0;
+        unsafe {
+            nvcall!(NvAPI_GPU_SetEDID(self.0, display_id, &mut edid))?;
+        }
+        Ok(())
+    }
+
     pub fn i2c_read(
         &self,
         display_mask: u32,
