@@ -709,8 +709,8 @@ where
         debug_assert!(v.configured().voltage == v.current.voltage);
         if !v.overclocked.is_empty() {
             debug_assert!(v.overclocked.voltage == v.current.voltage);
+            debug_assert!(v.current.frequency == v.overclocked.frequency);
         }
-        debug_assert!(v.current.frequency == v.overclocked.frequency);
         VfpPoint {
             point_type: v.point_type,
             default_frequency: v.default.frequency.into(),
