@@ -104,6 +104,11 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetFullName@get(self.0) => into) }
     }
 
+    pub fn uuid(&self) -> crate::NvapiResult<String> {
+        trace!("gpu.uuid()");
+        unsafe { nvcall!(NvAPI_GPU_GetUUID@get(self.0) => into) }
+    }
+
     pub fn vbios_version(&self) -> crate::NvapiResult<(u32, u32)> {
         trace!("gpu.vbios_revision()");
         Ok(unsafe {

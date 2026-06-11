@@ -802,4 +802,8 @@ pub mod private {
     nvapi! {
         pub unsafe fn NvAPI_GetDriverModel(hPhysicalGpu: NvPhysicalGpuHandle, pDriverModel: *mut u32) -> NvAPI_Status;
     }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_GetUUID(hPhysicalGpu: NvPhysicalGpuHandle, pUuid: *mut NvAPI_ShortString) -> NvAPI_Status;
+    }
 }

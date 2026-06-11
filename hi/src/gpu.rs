@@ -39,6 +39,8 @@ pub struct Gpu {
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct GpuInfo {
     pub id: usize,
+    #[cfg_attr(feature = "serde", serde(skip_serializing))]
+    pub uuid: Option<String>,
     pub name: String,
     pub codename: String,
     pub bios_version: String,
@@ -182,6 +184,7 @@ impl Gpu {
 
         Ok(GpuInfo {
             id: self.id(),
+            uuid: allowable_result(self.gpu.uuid())?.ok(),
             name: self.gpu.full_name()?,
             codename: self.gpu.short_name()?,
             bios_version: self.gpu.vbios_version_string()?,
