@@ -51,6 +51,7 @@ nvstruct! {
 pub const NVAPI_GENERIC_STRING_MAX: usize = 4096;
 pub const NVAPI_LONG_STRING_MAX: usize = 256;
 pub const NVAPI_SHORT_STRING_MAX: usize = 64;
+pub const NVAPI_UUID_LEN: usize = 16;
 
 nvstruct! {
     pub struct NvSBox {

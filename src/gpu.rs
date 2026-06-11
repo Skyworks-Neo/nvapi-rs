@@ -106,7 +106,65 @@ impl PhysicalGpu {
 
     pub fn uuid(&self) -> crate::NvapiResult<String> {
         trace!("gpu.uuid()");
-        unsafe { nvcall!(NvAPI_GPU_GetUUID@get(self.0) => into) }
+
+        // First try the string-based overload (works on most drivers).
+        let string_result: crate::NvapiResult<String> =
+            unsafe { nvcall!(NvAPI_GPU_GetUUID@get(self.0) => into) };
+
+        match string_result {
+            Ok(uuid) => return Ok(uuid),
+            Err(crate::NvapiError {
+                status: Status::IncompatibleStructVersion,
+                ..
+            }) => {
+                trace!(
+                    "gpu.uuid(): string overload returned INCOMPATIBLE_STRUCT_VERSION, falling back to V1 struct"
+                );
+            }
+            Err(e) => return Err(e),
+        }
+
+        // Fallback: use the versioned NV_GPU_UUID_V1 struct (R595+ driver path).
+        // Some older GPUs (10/20-series) on newer drivers only support this path.
+        self.uuid_v1()
+    }
+
+    fn uuid_v1(&self) -> crate::NvapiResult<String> {
+        use crate::sys::gpu::NV_GPU_UUID_V1;
+
+        let mut data = NV_GPU_UUID_V1::default();
+
+        // The nvapi! macro types NvAPI_GPU_GetUUID to take *mut NvAPI_ShortString,
+        // but NVAPI dispatches by function ID (0xdc95673d) and the driver actually
+        // accepts a versioned NV_GPU_UUID_V1* when the struct-version path is used.
+        // Cast the pointer to match the declared FFI signature — same as the
+        // vfp_curve V1 fallback pattern.
+        let status =
+            unsafe { sys::api::NvAPI_GPU_GetUUID(self.0, ptr::from_mut(&mut data).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_GetUUID, status)?;
+
+        // Format the 16-byte GUID as a standard UUID string:
+        // xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        let u = data.uuid;
+        Ok(format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            u[0],
+            u[1],
+            u[2],
+            u[3],
+            u[4],
+            u[5],
+            u[6],
+            u[7],
+            u[8],
+            u[9],
+            u[10],
+            u[11],
+            u[12],
+            u[13],
+            u[14],
+            u[15],
+        ))
     }
 
     pub fn vbios_version(&self) -> crate::NvapiResult<(u32, u32)> {

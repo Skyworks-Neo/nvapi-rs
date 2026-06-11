@@ -807,3 +807,56 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_GetUUID(hPhysicalGpu: NvPhysicalGpuHandle, pUuid: *mut NvAPI_ShortString) -> NvAPI_Status;
     }
 }
+
+/// GPU UUID structure (V1) for `NvAPI_GPU_GetUUID`.
+///
+/// Introduced in R595. On older drivers the string-based `NvAPI_ShortString` overload
+/// is used instead; on newer drivers (especially with 10/20-series GPUs) the driver
+/// may return `NVAPI_INCOMPATIBLE_STRUCT_VERSION` for the string overload and expect
+/// this versioned struct instead.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct NV_GPU_UUID_V1 {
+    pub version: NvVersion,
+    pub uuid: [u8; NVAPI_UUID_LEN],
+}
+
+unsafe impl zerocopy::AsBytes for NV_GPU_UUID_V1 {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
+unsafe impl zerocopy::FromBytes for NV_GPU_UUID_V1 {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
+impl crate::nvapi::VersionedStruct for NV_GPU_UUID_V1 {
+    fn nvapi_version_mut(&mut self) -> &mut NvVersion {
+        &mut self.version
+    }
+
+    fn nvapi_version(&self) -> NvVersion {
+        self.version
+    }
+}
+
+impl crate::nvapi::StructVersion<1> for NV_GPU_UUID_V1 {
+    const NVAPI_VERSION: NvVersion = NvVersion::with_struct::<Self>(1);
+}
+
+impl Default for NV_GPU_UUID_V1 {
+    fn default() -> Self {
+        use crate::nvapi::StructVersion;
+        Self {
+            version: <Self as StructVersion<1>>::NVAPI_VERSION,
+            uuid: [0u8; NVAPI_UUID_LEN],
+        }
+    }
+}
