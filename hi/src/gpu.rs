@@ -307,8 +307,6 @@ impl Gpu {
         let core_temp_precise: Option<f32> =
             positional.iter().find(|(i, _)| *i == 8).map(|(_, t)| *t);
         let mut extra_sensors: Vec<(SensorDesc, f32)> = Vec::new();
-        let mut hotspot: Option<f32> = None;
-        let mut vram: Option<f32> = None;
         for &(index, temp) in &positional {
             let is_last = Some(index) == last_index;
             let name = match index {
@@ -317,20 +315,17 @@ impl Gpu {
                 // here; the high-precision reading is captured from `positional`
                 // after the loop to enrich that entry with sub-degree precision.
                 8 => continue,
-                9 => {
-                    hotspot = Some(temp);
-                    "Hot Spot".to_string()
-                }
+                9 => "Hot Spot".to_string(),
                 10 => "Memory Controller".to_string(),
-                _ if is_last => {
-                    // The highest index is the aggregate VRAM temperature; this
-                    // is the traditional "VRAM temp" reported by tools like GPU-Z.
-                    vram = Some(temp);
-                    "Memory Average".to_string()
-                }
+                // The highest index is the aggregate VRAM temperature; this is
+                // the traditional "VRAM temp" reported by tools like GPU-Z.
+                _ if is_last => "Memory Average".to_string(),
                 module_index @ 11.. => {
                     // Modules occupy indices 11..last; channel letter advances
                     // every two modules (A, B, C, ...), side toggles 0/1.
+                    // NOTE: the letter is a best-effort human label and may not
+                    // match the physical channel on all GPUs (some skip letters);
+                    // `sensor_mask_number` below carries the authoritative index.
                     let n = module_index - 11;
                     let letter = (b'A' + (n / 2) as u8) as char;
                     let side = n % 2;
@@ -344,6 +339,9 @@ impl Gpu {
                     target: ThermalTarget::Gpu,
                     range: Range::default(),
                     name: Some(name),
+                    // Authoritative positional index in the undocumented sensors
+                    // array; the user-facing "Sensor Mask Number".
+                    sensor_mask_number: Some(index as u32),
                 },
                 temp,
             ));
@@ -390,12 +388,16 @@ impl Gpu {
                                 let mut temp = s.current_temperature.0 as f32;
                                 // The documented core (target == Gpu) is the
                                 // same physical sensor as undocumented index 8;
-                                // name it and, when available, replace its
-                                // integer reading with the sub-degree one.
+                                // name it, give it the same sensor mask number
+                                // as the other (undocumented) sensors, and when
+                                // available replace its integer reading with the
+                                // sub-degree one — so the core goes through the
+                                // same output shape as hot spot / memory / etc.
                                 if desc.target == ThermalTarget::Gpu {
                                     desc.name = Some("Core".to_string());
                                     if let Some(precise) = core_temp_precise {
                                         temp = precise;
+                                        desc.sensor_mask_number = Some(8);
                                     }
                                 }
                                 (desc, temp)
@@ -770,6 +772,12 @@ impl From<Celsius> for SensorThrottle {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SensorDesc {
+    /// Thermal controller. Always `GpuInternal` for every sensor NVAPI
+    /// exposes here, so it is omitted from serialization as redundant.
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip, default = "SensorDesc::default_controller")
+    )]
     pub controller: ThermalController,
     pub target: ThermalTarget,
     pub range: Range<Celsius>,
@@ -779,12 +787,21 @@ pub struct SensorDesc {
     /// `NvAPI_GPU_GetThermalSettings` (where `target` already identifies
     /// them). Set for sensors decoded from the undocumented
     /// `NvAPI_GPU_GetThermalSensors` positional array, e.g. "Hot Spot",
-    /// "Memory", or "Memory Module A0".
+    /// "Memory Controller", or "Memory Module A0 Hotspot".
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub name: Option<String>,
+    /// The `values[]` index (a.k.a. sensor mask `1 << (index-8)`) the
+    /// undocumented `NvAPI_GPU_GetThermalSensors` reports this reading at —
+    /// the user-facing "Sensor Mask Number". `None` for documented sensors
+    /// that don't come from that API.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub sensor_mask_number: Option<u32>,
 }
 
 impl From<Sensor> for SensorDesc {
@@ -794,7 +811,16 @@ impl From<Sensor> for SensorDesc {
             target: sensor.target,
             range: sensor.default_temperature_range,
             name: None,
+            sensor_mask_number: None,
         }
+    }
+}
+
+impl SensorDesc {
+    /// Controller value used when deserializing a `SensorDesc` whose
+    /// `controller` field was skipped during serialization.
+    fn default_controller() -> ThermalController {
+        ThermalController::GpuInternal
     }
 }
 
