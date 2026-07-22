@@ -23,11 +23,12 @@ pub use nvapi::{
     ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies, ClockLockEntry,
     ClockLockValue, ConnectedIdsFlags, CoolerControl, CoolerController, CoolerInfo, CoolerPolicy,
     CoolerSettings, CoolerStatus, CoolerTarget, CoolerType, DisplayId, DriverModel, EccErrors,
-    FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts,
-    MicrovoltsDelta, PState, PciIdentifiers, Percentage, PerfInfo, PerfLimitId, PerfStatus,
-    PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm,
-    SystemType, ThermalController, ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations,
-    Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
+    FanArbiterControl, FanArbiterStatus, FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz,
+    KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState, PciIdentifiers, Percentage,
+    PerformanceDecreaseReason, PerfInfo, PerfLimitId, PerfStatus, PffCurve, PffPoint, PhysicalGpu,
+    PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType, ThermalController,
+    ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType,
+    VoltageDomain, VoltageStatus, VoltageTable,
 };
 
 pub struct Gpu {
@@ -129,6 +130,20 @@ pub struct GpuStatus {
     pub sensors: Vec<(SensorDesc, f32)>,
     pub coolers: BTreeMap<FanCoolerId, CoolerStatus>,
     pub perf: PerfStatus,
+    /// Reason(s) the GPU is currently below peak performance
+    /// (`NvAPI_GPU_GetPerfDecreaseInfo`): a bitset of thermal/power/battery/
+    /// API/insufficient-power flags. Empty (`NONE`) when running at full speed.
+    pub performance_decrease: PerformanceDecreaseReason,
+    /// Fan arbiter status/control from `NvAPI_GPU_ClientFanArbiters*`. The
+    /// status reports whether each fan is currently stopped (zero-RPM); the
+    /// control reports whether the driver is permitted to stop it.
+    pub fan_arbiter_status: BTreeMap<u32, FanArbiterStatus>,
+    pub fan_arbiter_control: BTreeMap<u32, FanArbiterControl>,
+    /// Legacy single-value levels from `NvAPI_GPU_GetCurrent*Level`. These are
+    /// older aggregate indices (0-based) superseded by the per-cooler
+    /// `coolers` map above, but some tools still read them.
+    pub current_thermal_level: Option<u32>,
+    pub current_fan_speed_level: Option<u32>,
     pub vfp: Option<VfpTable>,
     pub vfp_locks: BTreeMap<PerfLimitId, ClockLockValue>,
 }
@@ -407,6 +422,23 @@ impl Gpu {
             coolers: allowable_result(self.gpu.cooler_status())?
                 .unwrap_or_else(|_e| Default::default()),
             perf: self.gpu.perf_status()?,
+            // Best-effort: these undocumented/legacy calls fail on many drivers
+            // or on Optimus/secondary GPUs; degrade to empty/default rather
+            // than aborting the whole status read.
+            performance_decrease: allowable_result_fallback(
+                self.gpu.performance_decrease(),
+                PerformanceDecreaseReason::NONE,
+            )?,
+            fan_arbiter_status: allowable_result_fallback(
+                self.gpu.fan_arbiter_status(),
+                Default::default(),
+            )?,
+            fan_arbiter_control: allowable_result_fallback(
+                self.gpu.fan_arbiter_control(),
+                Default::default(),
+            )?,
+            current_thermal_level: allowable_result(self.gpu.current_thermal_level())?.ok(),
+            current_fan_speed_level: allowable_result(self.gpu.current_fan_speed_level())?.ok(),
             vfp: match &vfp_info {
                 Ok(info) => allowable_result(self.gpu.vfp_curve(info))?
                     .map(From::from)
