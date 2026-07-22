@@ -749,10 +749,18 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Default, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ThermalSensors {
-    pub hotspot: Option<Celsius>,
-    pub vram: Option<Celsius>,
+    pub hotspot: Option<f32>,
+    pub vram: Option<f32>,
+    /// All valid positional sensor readings as `(index, celsius)`.
+    ///
+    /// The undocumented `NvAPI_GPU_GetThermalSensors` returns up to 8 physical
+    /// sensors; which index maps to core/hotspot/memory is GPU-dependent.
+    /// `hotspot`/`vram` above are historical best-effort guesses and may be
+    /// wrong — match against this list using known readings instead.
+    /// Temperatures carry sub-degree precision (celsius * 256 decoded).
+    pub sensors: Vec<(usize, f32)>,
     #[cfg_attr(feature = "serde", serde(skip))]
     pub values: Vec<i32>,
 }
@@ -764,8 +772,9 @@ impl RawConversion for thermal::private::NV_GPU_THERMAL_SENSORS {
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
         Ok(ThermalSensors {
-            hotspot: self.hotspot().map(Celsius),
-            vram: self.vram().map(Celsius),
+            hotspot: self.hotspot(),
+            vram: self.vram(),
+            sensors: self.sensors(),
             values: self.values.to_vec(),
         })
     }

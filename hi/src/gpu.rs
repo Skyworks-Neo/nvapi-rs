@@ -111,7 +111,7 @@ impl From<ClockRange> for VfpRange {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GpuStatus {
     pub pstate: PState,
     pub clocks: ClockFrequencies,
@@ -125,7 +125,8 @@ pub struct GpuStatus {
     pub tachometer: Option<u32>,
     pub utilization: Utilizations,
     pub power: BTreeMap<PowerTopologyChannelId, Percentage>,
-    pub sensors: Vec<(SensorDesc, Celsius)>,
+    /// `(descriptor, celsius)` thermal readings with sub-degree precision.
+    pub sensors: Vec<(SensorDesc, f32)>,
     pub coolers: BTreeMap<FanCoolerId, CoolerStatus>,
     pub perf: PerfStatus,
     pub vfp: Option<VfpTable>,
@@ -272,6 +273,82 @@ impl Gpu {
     pub fn status(&self) -> nvapi::Result<GpuStatus> {
         let vfp_info = self.vfp_info()?;
 
+        // Positional thermal sensors from the undocumented
+        // NvAPI_GPU_GetThermalSensors. The ALL mask (-1) errors out on many
+        // drivers, so scan bit masks 1<<i instead; each bit selects one of
+        // the physical sensors. This is best-effort: swallow *any* error and
+        // fall back to an empty list rather than aborting status().
+        //
+        // Collect every valid reading as `(values_index, celsius)` (with
+        // sub-degree precision), sort by index, then map indices to physical
+        // sensors. The layout is fixed at the low end but the tail length
+        // depends on the VRAM chip count:
+        //   8         -> GPU core
+        //   9         -> Hot Spot
+        //   10        -> Memory Controller
+        //   11..last  -> per-module VRAM sensors (one per chip)
+        //   last      -> Memory Average (traditional VRAM temp)
+        // Modules are labeled by channel: two chips per channel, channels
+        // lettered A, B, C, ... so module n is "<letter><n%2>" (A0, A1, ...).
+        let mut positional: Vec<(usize, f32)> = Vec::new();
+        for i in 0..32u32 {
+            let mask: i32 = 1 << i;
+            let Ok(s) = self.thermal_sensors(mask) else {
+                continue;
+            };
+            positional.extend(s.sensors);
+        }
+        positional.sort_by_key(|(i, _)| *i);
+        positional.dedup_by_key(|(i, _)| *i);
+
+        let last_index = positional.last().map(|(i, _)| *i);
+        // High-precision core reading (undocumented index 8) to enrich the
+        // documented core entry with sub-degree precision.
+        let core_temp_precise: Option<f32> =
+            positional.iter().find(|(i, _)| *i == 8).map(|(_, t)| *t);
+        let mut extra_sensors: Vec<(SensorDesc, f32)> = Vec::new();
+        let mut hotspot: Option<f32> = None;
+        let mut vram: Option<f32> = None;
+        for &(index, temp) in &positional {
+            let is_last = Some(index) == last_index;
+            let name = match index {
+                // Core: the documented thermal_settings entry is authoritative
+                // (it carries controller/range), so we don't add a duplicate
+                // here; the high-precision reading is captured from `positional`
+                // after the loop to enrich that entry with sub-degree precision.
+                8 => continue,
+                9 => {
+                    hotspot = Some(temp);
+                    "Hot Spot".to_string()
+                }
+                10 => "Memory Controller".to_string(),
+                _ if is_last => {
+                    // The highest index is the aggregate VRAM temperature; this
+                    // is the traditional "VRAM temp" reported by tools like GPU-Z.
+                    vram = Some(temp);
+                    "Memory Average".to_string()
+                }
+                module_index @ 11.. => {
+                    // Modules occupy indices 11..last; channel letter advances
+                    // every two modules (A, B, C, ...), side toggles 0/1.
+                    let n = module_index - 11;
+                    let letter = (b'A' + (n / 2) as u8) as char;
+                    let side = n % 2;
+                    format!("Memory Module {letter}{side} Hotspot")
+                }
+                _ => continue,
+            };
+            extra_sensors.push((
+                SensorDesc {
+                    controller: ThermalController::GpuInternal,
+                    target: ThermalTarget::Gpu,
+                    range: Range::default(),
+                    name: Some(name),
+                },
+                temp,
+            ));
+        }
+
         Ok(GpuStatus {
             pstate: self.gpu.current_pstate()?,
             clocks: self.gpu.clock_frequencies(ClockFrequencyType::Current)?,
@@ -303,12 +380,31 @@ impl Gpu {
                 .into_iter()
                 .map(|(ch, power)| (ch, power.into()))
                 .collect(),
-            sensors: match allowable_result(self.gpu.thermal_settings(None))? {
-                Ok(s) => s
-                    .into_iter()
-                    .map(|s| (From::from(s), s.current_temperature))
-                    .collect(),
-                Err(..) => Default::default(),
+            sensors: {
+                let mut sensors: Vec<(SensorDesc, f32)> =
+                    match allowable_result(self.gpu.thermal_settings(None))? {
+                        Ok(s) => s
+                            .into_iter()
+                            .map(|s| {
+                                let mut desc: SensorDesc = From::from(s);
+                                let mut temp = s.current_temperature.0 as f32;
+                                // The documented core (target == Gpu) is the
+                                // same physical sensor as undocumented index 8;
+                                // name it and, when available, replace its
+                                // integer reading with the sub-degree one.
+                                if desc.target == ThermalTarget::Gpu {
+                                    desc.name = Some("Core".to_string());
+                                    if let Some(precise) = core_temp_precise {
+                                        temp = precise;
+                                    }
+                                }
+                                (desc, temp)
+                            })
+                            .collect(),
+                        Err(..) => Default::default(),
+                    };
+                sensors.extend(extra_sensors);
+                sensors
             },
             coolers: allowable_result(self.gpu.cooler_status())?
                 .unwrap_or_else(|_e| Default::default()),
@@ -677,6 +773,18 @@ pub struct SensorDesc {
     pub controller: ThermalController,
     pub target: ThermalTarget,
     pub range: Range<Celsius>,
+    /// Human-readable semantic name for this sensor.
+    ///
+    /// `None` for sensors reported by the documented
+    /// `NvAPI_GPU_GetThermalSettings` (where `target` already identifies
+    /// them). Set for sensors decoded from the undocumented
+    /// `NvAPI_GPU_GetThermalSensors` positional array, e.g. "Hot Spot",
+    /// "Memory", or "Memory Module A0".
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub name: Option<String>,
 }
 
 impl From<Sensor> for SensorDesc {
@@ -685,6 +793,7 @@ impl From<Sensor> for SensorDesc {
             controller: sensor.controller,
             target: sensor.target,
             range: sensor.default_temperature_range,
+            name: None,
         }
     }
 }

@@ -330,18 +330,44 @@ pub mod private {
     }
 
     impl NV_GPU_THERMAL_SENSORS_V1 {
-        pub fn get_temp(&self, index: usize) -> Option<i32> {
-            self.values
-                .get(index)
-                .map(|&v| v / 256)
-                .filter(|&v| v > 0 && v < 255)
+        /// Decode a raw sensor slot value into degrees Celsius.
+        ///
+        /// The driver encodes temperatures as `celsius * 256`; we preserve the
+        /// sub-degree precision (two decimals) rather than truncating to an
+        /// integer, so per-module readings that differ by a fraction of a
+        /// degree are still distinguishable.
+        pub fn decode(value: i32) -> Option<f32> {
+            let v = value as f32 / 256.0;
+            (v > 0.0 && v < 255.0).then_some(v)
         }
 
-        pub fn hotspot(&self) -> Option<i32> {
+        /// Temperature at a fixed `values` index, if present and valid.
+        pub fn get_temp(&self, index: usize) -> Option<f32> {
+            self.values.get(index).copied().and_then(Self::decode)
+        }
+
+        /// All valid thermal readings in this result, as `(index, celsius)`.
+        pub fn sensors(&self) -> Vec<(usize, f32)> {
+            self.values
+                .iter()
+                .copied()
+                .enumerate()
+                .filter_map(|(i, v)| Self::decode(v).map(|t| (i, t)))
+                .collect()
+        }
+
+        /// Historical best-effort hotspot reading (index 9).
+        ///
+        /// NOTE: the actual mapping of `values` indices to physical sensors
+        /// (core / hotspot / memory / ...) is GPU- and driver-dependent and
+        /// is NOT fixed at 9. Prefer iterating via `sensors()` and matching
+        /// against known readings.
+        pub fn hotspot(&self) -> Option<f32> {
             self.get_temp(9)
         }
 
-        pub fn vram(&self) -> Option<i32> {
+        /// Historical best-effort VRAM reading (index 15). See `hotspot()`.
+        pub fn vram(&self) -> Option<f32> {
             self.get_temp(15)
         }
     }
