@@ -942,6 +942,18 @@ Unknown_8EFC0978 = 0x8efc0978,
 Unknown_B7BCF50D = 0xb7bcf50d,
 /// `Unknown(*mut { version = 0x0002000c, count, ... })` might be handles?
 Unknown_36E39E6B = 0x36e39e6b,
+/// `Unknown(hGpu, *mut { version = 0x00010048 (v1, 72 bytes), flags@4, count@5, data[count]@6 })`.
+/// Reversed from nvapi64_impl.dll handler @0x180238CC0 (0x60B30 RM family). Calls the
+/// GPU-control RM dispatcher with subcommand 0x20882CF9 (100ms x2 retry when struct
+/// offset 70 is non-zero). MEASURED NOT a live power/voltage read: the 32-byte `data`
+/// payload is identical across repeated reads AND does not change under GPU load, even
+/// with admin privileges. The call also returns NVAPI_INVALID_USER_PRIVILEGE without
+/// elevation — it routes through the privileged `\\.\NvAdminDevice` RM path, unlike the
+/// plaintext public reads (power topology 0x20880B33, volt rails). Concluded: this is a
+/// deterministic, privileged, non-realtime blob (capability/key/descriptor) — NOT the
+/// GPU-Z per-rail Board/Chip/MVDDC/PWR_SRC/16-pin live readings. Do not wrap as a
+/// status field. See docs/gpuz-nvapi-runtime-windbg.md for the dynamic-confirmation path.
+Unknown_7457CAB5 = 0x7457cab5,
 /// `GPU_GetRasterOperators(hGpu, *mut u32)`
 Unknown_GetROPCount = 0xfdc129fa,
 
