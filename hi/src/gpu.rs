@@ -281,15 +281,18 @@ impl Gpu {
         //
         // Collect every valid reading as `(values_index, celsius)` (with
         // sub-degree precision), sort by index, then map indices to physical
-        // sensors. The layout is fixed at the low end but the tail length
-        // depends on the VRAM chip count:
+        // sensors. The layout is:
         //   8         -> GPU core
         //   9         -> Hot Spot
         //   10        -> Memory Controller
-        //   11..last  -> per-module VRAM sensors (one per chip)
-        //   last      -> Memory Average (traditional VRAM temp)
-        // Modules are labeled by channel: two chips per channel, channels
-        // lettered A, B, C, ... so module n is "<letter><n%2>" (A0, A1, ...).
+        //   11..last-1 -> per-VRAM-module hotspot (one per chip)
+        //   last      -> Memory Junction (the VRAM junction temperature; on
+        //                RTX 40xx this coincides with the per-module region's
+        //                last index, on 20xx/30xx it's a separate cooler reading
+        //                since the LHM-documented junction index is unpopulated)
+        // The physical channel each module index maps to is GPU- and
+        // driver-dependent and not reliably derivable, so we do NOT guess a
+        // channel letter — `sensor_mask_number` is the stable identifier.
         let mut positional: Vec<(usize, f32)> = Vec::new();
         for i in 0..32u32 {
             let mask: i32 = 1 << i;
@@ -317,20 +320,13 @@ impl Gpu {
                 8 => continue,
                 9 => "Hot Spot".to_string(),
                 10 => "Memory Controller".to_string(),
-                // The highest index is the aggregate VRAM temperature; this is
-                // the traditional "VRAM temp" reported by tools like GPU-Z.
-                _ if is_last => "Memory Average".to_string(),
-                module_index @ 11.. => {
-                    // Modules occupy indices 11..last; channel letter advances
-                    // every two modules (A, B, C, ...), side toggles 0/1.
-                    // NOTE: the letter is a best-effort human label and may not
-                    // match the physical channel on all GPUs (some skip letters);
-                    // `sensor_mask_number` below carries the authoritative index.
-                    let n = module_index - 11;
-                    let letter = (b'A' + (n / 2) as u8) as char;
-                    let side = n % 2;
-                    format!("Memory Module {letter}{side} Hotspot")
-                }
+                // The highest populated index is the memory junction
+                // temperature (the VRAM junction temp shown by GPU-Z / LHM).
+                _ if is_last => "Memory Junction".to_string(),
+                // Per-VRAM-module hotspot temperature. `sensor_mask_number` is
+                // the only stable identifier (indices are non-contiguous and
+                // channel mapping is GPU-dependent).
+                11.. => "Memory Module Hotspot".to_string(),
                 _ => continue,
             };
             extra_sensors.push((
@@ -787,7 +783,7 @@ pub struct SensorDesc {
     /// `NvAPI_GPU_GetThermalSettings` (where `target` already identifies
     /// them). Set for sensors decoded from the undocumented
     /// `NvAPI_GPU_GetThermalSensors` positional array, e.g. "Hot Spot",
-    /// "Memory Controller", or "Memory Module A0 Hotspot".
+    /// "Memory Controller", "Memory Junction", or "Memory Module Hotspot".
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
