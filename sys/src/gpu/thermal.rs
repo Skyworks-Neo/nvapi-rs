@@ -481,9 +481,58 @@ pub mod private {
 
     nvapi! {
         /// Undocumented (NDA-private, ID 0x0bc8163d). Thermal-channel capability
-        /// descriptor. Pair with `NvAPI_GPU_GetThermalSensors` for live temps.
+        /// descriptor. Pair with `NvAPI_GPU_ThermChannelGetStatus` for live temps.
         pub unsafe fn NvAPI_GPU_ThermChannelGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_THERMAL_THERM_CHANNEL_INFO) -> NvAPI_Status;
     }
+
+    // ------------------------------------------------------------------
+    // Thermal Channel STATUS (the live-reading half of the ThermChannel
+    // pair). Same QueryInterface ID 0x65fe3aad as `NvAPI_GPU_GetThermalSensors`
+    // above, but a DIFFERENT struct layout: RTSS (RivaTuner) source calls this
+    // ID `NvAPI_GPU_ThermChannelGetStatus` and passes
+    // `NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2` (168 bytes, version magic
+    // (2<<16)|168 = 131240 — identical magic to the values[40] sensors struct,
+    // since both are 168 bytes; the driver distinguishes them by nothing other
+    // than the caller writing `channelMask` and reading `channel[]`).
+    //
+    // The key difference vs the values[40] read: this struct's `channel[32]`
+    // array is indexed DIRECTLY by the channel index from GetInfo's priChIdx,
+    // so `channel[priChIdx[GPU_MAX]]` is the authoritative hot-spot temp and
+    // `channel[priChIdx[MEMORY]]` is the authoritative VRAM temp. The values[40]
+    // array does NOT share that index space (verified empirically: with
+    // channelMask=0xff it populates values[8..16], not values[0..8]).
+    // ------------------------------------------------------------------
+
+    nvstruct! {
+        /// Thermal-channel live readings (RTSS
+        /// `NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2`). 168 bytes. The
+        /// caller sets `channel_mask` (from GetInfo); on success `channel[i]`
+        /// holds the temperature for channel `i`, encoded celsius*256, for each
+        /// bit set in `channel_mask`. Index `i` with GetInfo's `priChIdx[type]`.
+        pub struct NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2 {
+            pub version: NvVersion,
+            pub channel_mask: u32,
+            pub rsvd: Padding<[u8; 32]>,
+            /// Temperature per channel (celsius*256), indexed by channel number.
+            /// Read `channel[priChIdx[type]]` for the authoritative reading.
+            pub channel: [i32; NV_GPU_THERMAL_THERM_CHANNEL_MAX],
+        }
+    }
+
+    impl NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2 {
+        /// Decode a channel slot into degrees Celsius, if valid (>0, <255C).
+        pub fn decode(value: i32) -> Option<f32> {
+            let v = value as f32 / 256.0;
+            (v > 0.0 && v < 255.0).then_some(v)
+        }
+
+        /// Temperature at a channel index (e.g. `priChIdx[GPU_MAX]`).
+        pub fn get_temp(&self, channel: usize) -> Option<f32> {
+            self.channel.get(channel).copied().and_then(Self::decode)
+        }
+    }
+
+    nvversion! { @=NV_GPU_THERMAL_THERM_CHANNEL_STATUS NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2(2) = 168 }
 
     // GPS (GPU Power Steering) thermal limit (Kepler-era, undocumented)
 
