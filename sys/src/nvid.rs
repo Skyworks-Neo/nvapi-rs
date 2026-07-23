@@ -675,7 +675,7 @@ NvAPI_GPU_SetDeepIdleState = 0x568a2292,
 
 NvAPI_GetScalingCaps = 0x8e875cf9,
 NvAPI_GPU_GetThermalTable = 0xc729203c,
-NvAPI_GPU_GetThermalSensors = 0x65fe3aad, // undocumented: hotspot, VRAM, etc.
+NvAPI_GPU_ThermChannelGetStatus = 0x65fe3aad, // undocumented: RTSS ThermChannel STATUS read (168B channel[32] layout). Pair with 0x0BC8163D GetInfo; pass GetInfo's channel_mask, read channel[priChIdx[type]]. Was previously wrapped as the values[40] "GetThermalSensors" layout — unified to the RTSS channel[32] layout (channel[k]==old values[k+8]).
 NvAPI_SYS_SetPostOutput = 0xd3a092b1,
 
 // source: PX18 ManagedNvApi.dll (see also: ccminer/nvapi.cpp)

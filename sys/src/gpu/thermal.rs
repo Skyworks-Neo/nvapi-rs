@@ -321,63 +321,6 @@ pub mod private {
         }
     }
 
-    nvstruct! {
-        pub struct NV_GPU_THERMAL_SENSORS_V1 {
-            pub version: NvVersion,
-            pub mask: i32,
-            pub values: [i32; 40],
-        }
-    }
-
-    impl NV_GPU_THERMAL_SENSORS_V1 {
-        /// Decode a raw sensor slot value into degrees Celsius.
-        ///
-        /// The driver encodes temperatures as `celsius * 256`; we preserve the
-        /// sub-degree precision (two decimals) rather than truncating to an
-        /// integer, so per-module readings that differ by a fraction of a
-        /// degree are still distinguishable.
-        pub fn decode(value: i32) -> Option<f32> {
-            let v = value as f32 / 256.0;
-            (v > 0.0 && v < 255.0).then_some(v)
-        }
-
-        /// Temperature at a fixed `values` index, if present and valid.
-        pub fn get_temp(&self, index: usize) -> Option<f32> {
-            self.values.get(index).copied().and_then(Self::decode)
-        }
-
-        /// All valid thermal readings in this result, as `(index, celsius)`.
-        pub fn sensors(&self) -> Vec<(usize, f32)> {
-            self.values
-                .iter()
-                .copied()
-                .enumerate()
-                .filter_map(|(i, v)| Self::decode(v).map(|t| (i, t)))
-                .collect()
-        }
-
-        /// Historical best-effort hotspot reading (index 9).
-        ///
-        /// NOTE: the actual mapping of `values` indices to physical sensors
-        /// (core / hotspot / memory / ...) is GPU- and driver-dependent and
-        /// is NOT fixed at 9. Prefer iterating via `sensors()` and matching
-        /// against known readings.
-        pub fn hotspot(&self) -> Option<f32> {
-            self.get_temp(9)
-        }
-
-        /// Historical best-effort VRAM reading (index 15). See `hotspot()`.
-        pub fn vram(&self) -> Option<f32> {
-            self.get_temp(15)
-        }
-    }
-
-    nvversion! { @=NV_GPU_THERMAL_SENSORS NV_GPU_THERMAL_SENSORS_V1(2) }
-
-    nvapi! {
-        pub unsafe fn NvAPI_GPU_GetThermalSensors(hPhysicalGPU: NvPhysicalGpuHandle, pSensors: *mut NV_GPU_THERMAL_SENSORS) -> NvAPI_Status;
-    }
-
     // ------------------------------------------------------------------
     // Thermal Channel capability descriptor (the INFO half of the
     // ThermChannel pair). NDA-developer-SDK private API; identity +
@@ -475,6 +418,14 @@ pub mod private {
         pub fn memory_index(&self) -> Option<usize> {
             self.primary_index(NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY as usize)
         }
+
+        /// The per-channel info record for a thermal type's primary channel,
+        /// if present. Use to read `ch_type`/`offset_sw`/`offset_hw`/`scaling`/
+        /// `min_temp`/`max_temp` for that type's sensor.
+        pub fn primary_info(&self, ty: usize) -> Option<&NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1> {
+            self.primary_index(ty)
+                .and_then(|i| self.channel.get(i))
+        }
     }
 
     nvversion! { @=NV_GPU_THERMAL_THERM_CHANNEL_INFO NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2(2) = 2736 }
@@ -486,21 +437,22 @@ pub mod private {
     }
 
     // ------------------------------------------------------------------
-    // Thermal Channel STATUS (the live-reading half of the ThermChannel
-    // pair). Same QueryInterface ID 0x65fe3aad as `NvAPI_GPU_GetThermalSensors`
-    // above, but a DIFFERENT struct layout: RTSS (RivaTuner) source calls this
-    // ID `NvAPI_GPU_ThermChannelGetStatus` and passes
+    // Thermal Channel STATUS (the live-reading half of the ThermChannel pair;
+    // same QueryInterface ID 0x65fe3aad). RTSS (RivaTuner) source names this
+    // `NvAPI_GPU_ThermChannelGetStatus` and passes
     // `NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2` (168 bytes, version magic
-    // (2<<16)|168 = 131240 — identical magic to the values[40] sensors struct,
-    // since both are 168 bytes; the driver distinguishes them by nothing other
-    // than the caller writing `channelMask` and reading `channel[]`).
+    // (2<<16)|168 = 131240). The caller sets `channel_mask` (copied from
+    // GetInfo); on success `channel[i]` is the temperature for channel `i`
+    // (celsius*256), for each bit set in `channel_mask`. Index `i` with
+    // GetInfo's `priChIdx[type]`: `channel[priChIdx[GPU_MAX]]` = hot-spot temp,
+    // `channel[priChIdx[MEMORY]]` = VRAM temp.
     //
-    // The key difference vs the values[40] read: this struct's `channel[32]`
-    // array is indexed DIRECTLY by the channel index from GetInfo's priChIdx,
-    // so `channel[priChIdx[GPU_MAX]]` is the authoritative hot-spot temp and
-    // `channel[priChIdx[MEMORY]]` is the authoritative VRAM temp. The values[40]
-    // array does NOT share that index space (verified empirically: with
-    // channelMask=0xff it populates values[8..16], not values[0..8]).
+    // History: this ID was previously wrapped with a `values[40]` positional
+    // layout (`NV_GPU_THERMAL_SENSORS_V1`, same 168 bytes / magic). That layout
+    // is now removed — the two are the same 168-byte payload, and
+    // `channel[k] == values[k+8]` (the values[] array has an 8-element header
+    // region). The channel[32] layout is kept because it is indexed directly by
+    // GetInfo's priChIdx and carries clear INVALID(255) semantics.
     // ------------------------------------------------------------------
 
     nvstruct! {
@@ -533,6 +485,13 @@ pub mod private {
     }
 
     nvversion! { @=NV_GPU_THERMAL_THERM_CHANNEL_STATUS NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2(2) = 168 }
+
+    nvapi! {
+        /// Undocumented (NDA-private, ID 0x65fe3aad). Thermal-channel live
+        /// readings (the STATUS half of the ThermChannel pair). Pass GetInfo's
+        /// `channel_mask`; read `channel[priChIdx[type]]` for each type's temp.
+        pub unsafe fn NvAPI_GPU_ThermChannelGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_THERMAL_THERM_CHANNEL_STATUS) -> NvAPI_Status;
+    }
 
     // GPS (GPU Power Steering) thermal limit (Kepler-era, undocumented)
 

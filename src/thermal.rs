@@ -748,47 +748,61 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
     }
 }
 
+/// Per-channel thermal metadata for ONE channel, decoded from the GetInfo
+/// capability descriptor. The numeric fields (`scaling` / `offset_sw` /
+/// `offset_hw` / `min_temp` / `max_temp`) are surfaced as opaque `i32`
+/// pass-through — their exact fixed-point semantics are not documented and
+/// are exposed for research. `ch_type` 255 means the channel exists but is
+/// not one of the 5 standard thermal types.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct ThermalSensors {
-    pub hotspot: Option<f32>,
-    pub vram: Option<f32>,
-    /// All valid positional sensor readings as `(index, celsius)`.
-    ///
-    /// The undocumented `NvAPI_GPU_GetThermalSensors` returns up to 8 physical
-    /// sensors; which index maps to core/hotspot/memory is GPU-dependent.
-    /// `hotspot`/`vram` above are historical best-effort guesses and may be
-    /// wrong — match against this list using known readings instead.
-    /// Temperatures carry sub-degree precision (celsius * 256 decoded).
-    pub sensors: Vec<(usize, f32)>,
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub values: Vec<i32>,
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ChannelInfo {
+    /// `NV_GPU_THERMAL_THERM_CHANNEL_TYPE` (0=GPU_AVG, 1=GPU_MAX, 2=BOARD,
+    /// 3=MEMORY, 4=PWR_SUPPLY, 255=unclassified).
+    pub ch_type: u32,
+    pub ch_class: u32,
+    pub rel_loc: u32,
+    pub tgt_gpu: u32,
+    /// Fixed-point scaling factor (semantics undocumented; research use).
+    pub scaling: i32,
+    /// Software offset (semantics undocumented; research use).
+    pub offset_sw: i32,
+    /// Hardware offset (semantics undocumented; research use).
+    pub offset_hw: i32,
+    /// Sensor reporting range lower bound (fixed-point; research use).
+    pub min_temp: i32,
+    /// Sensor reporting range upper bound (fixed-point; research use).
+    pub max_temp: i32,
+    pub is_temp_sim_supported: u8,
+    pub flags: u8,
 }
 
-impl RawConversion for thermal::private::NV_GPU_THERMAL_SENSORS {
-    type Target = ThermalSensors;
-    type Error = sys::ArgumentRangeError;
-
-    fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
-        trace!("convert_raw({:#?})", self);
-        Ok(ThermalSensors {
-            hotspot: self.hotspot(),
-            vram: self.vram(),
-            sensors: self.sensors(),
-            values: self.values.to_vec(),
-        })
+impl From<&thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1> for ChannelInfo {
+    fn from(c: &thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1) -> Self {
+        ChannelInfo {
+            ch_type: c.ch_type,
+            ch_class: c.ch_class,
+            rel_loc: c.rel_loc,
+            tgt_gpu: c.tgt_gpu,
+            scaling: c.scaling,
+            offset_sw: c.offset_sw,
+            offset_hw: c.offset_hw,
+            min_temp: c.min_temp,
+            max_temp: c.max_temp,
+            is_temp_sim_supported: c.is_temp_sim_supported,
+            flags: c.flags,
+        }
     }
 }
 
 /// Thermal-channel capability descriptor from the undocumented
 /// `NvAPI_GPU_ThermChannelGetInfo` (0x0bc8163d).
 ///
-/// The key payload is `primary`: for each of the 5 thermal types
-/// (GPU_AVG, GPU_MAX=hotspot, BOARD, MEMORY=vram, PWR_SUPPLY) it holds the
-/// authoritative channel index to feed to the STATUS read
-/// (`NvAPI_GPU_GetThermalSensors`). `None` means that type is not exposed on
-/// this GPU. On laptop GPUs the call may be stubbed (see plan) — callers must
-/// treat the whole result as best-effort / optional.
+/// `primary` gives the authoritative channel index for each of the 5 thermal
+/// types (GPU_AVG, GPU_MAX=hotspot, BOARD, MEMORY=vram, PWR_SUPPLY); `None`
+/// where that type is not exposed (e.g. desktop consumer cards typically have
+/// BOARD/MEMORY/PWR_SUPPLY absent). `primary_info` additionally exposes that
+/// channel's metadata (ch_type / offsets / range).
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ThermalChannelInfo {
@@ -799,6 +813,9 @@ pub struct ThermalChannelInfo {
     /// `[GPU_AVG, GPU_MAX(hotspot), BOARD, MEMORY(vram), PWR_SUPPLY]`.
     /// `None` where the type is unavailable or the channel bit is not set.
     pub primary: [Option<u8>; thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX],
+    /// Per-channel metadata, indexed by channel number (0..32); `None` where
+    /// the channel bit is not set in `channel_mask`.
+    pub channels: Vec<Option<ChannelInfo>>,
 }
 
 impl ThermalChannelInfo {
@@ -810,6 +827,21 @@ impl ThermalChannelInfo {
     /// VRAM (MEMORY) primary channel index, if available.
     pub fn memory_index(&self) -> Option<u8> {
         self.primary[thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY as usize]
+    }
+
+    /// Metadata for a given channel index, if that channel is populated.
+    pub fn channel_info(&self, channel: usize) -> Option<&ChannelInfo> {
+        self.channels.get(channel).and_then(|c| c.as_ref())
+    }
+
+    /// Metadata for a thermal type's primary channel, if present.
+    pub fn primary_info(&self, ty: usize) -> Option<&ChannelInfo> {
+        self.primary
+            .get(ty)
+            .copied()
+            .flatten()
+            .map(|i| i as usize)
+            .and_then(|i| self.channel_info(i))
     }
 }
 
@@ -826,18 +858,32 @@ impl RawConversion for thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO {
                 primary[ty] = Some(idx as u8);
             }
         }
+        // Decode per-channel metadata for every populated channel.
+        let channels = self
+            .channel
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                if self.channel_mask & (1u32 << i) != 0 {
+                    Some(ChannelInfo::from(c))
+                } else {
+                    None
+                }
+            })
+            .collect();
         Ok(ThermalChannelInfo {
             channel_mask: self.channel_mask,
             primary,
+            channels,
         })
     }
 }
 
 /// Live thermal-channel readings from the STATUS half of the ThermChannel
-/// pair (ID 0x65fe3aad, same as `GetThermalSensors` but the `channel[32]`
-/// layout). Indexed DIRECTLY by channel number (matching GetInfo's priChIdx),
-/// so `temps` holds one Celsius reading per channel whose bit is set in the
-/// `channel_mask` passed in. Decode matches `ThermalSensors` (celsius*256).
+/// pair (ID 0x65fe3aad, `channel[32]` layout). Indexed DIRECTLY by channel
+/// number (matching GetInfo's priChIdx), so `temps` holds one Celsius reading
+/// per channel whose bit is set in the `channel_mask` passed in. Decode is
+/// celsius*256 (sub-degree precision preserved).
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ThermalChannelStatus {

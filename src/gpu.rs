@@ -730,28 +730,15 @@ impl PhysicalGpu {
         }
     }
 
-    pub fn thermal_sensors(
-        &self,
-        mask: i32,
-    ) -> crate::Result<<thermal::private::NV_GPU_THERMAL_SENSORS as RawConversion>::Target> {
-        trace!("gpu.thermal_sensors({})", mask);
-        let data = thermal::private::NV_GPU_THERMAL_SENSORS_V1 {
-            version: NvVersion::new(size_of::<thermal::private::NV_GPU_THERMAL_SENSORS_V1>(), 2),
-            mask,
-            values: [0; 40],
-        };
-
-        unsafe { nvcall!(NvAPI_GPU_GetThermalSensors@get{data}(self.0) => raw) }
-    }
-
     /// Thermal-channel capability descriptor (undocumented
     /// `NvAPI_GPU_ThermChannelGetInfo`, 0x0bc8163d). Best-effort: callers
-    /// must tolerate failure (some driver/GPU combos may not expose it). On
-    /// success it provides the authoritative `priChIdx` LUT (which channel
-    /// index is the hot spot / VRAM reading) — feed its `channel_mask` to
+    /// must tolerate failure (pre-Pascal GPUs may not expose it). On success
+    /// it provides the authoritative `priChIdx` LUT (which channel index is
+    /// the hot spot / VRAM reading) plus per-channel metadata (ch_type /
+    /// offset_sw / offset_hw / scaling / range) — feed its `channel_mask` to
     /// [`Self::thermal_channel_status`] and index the result by priChIdx.
-    /// (Verified working on a laptop dGPU: channel_mask=0xff, priChIdx
-    /// GPU_MAX=1, MEMORY=7.)
+    /// (Verified on Pascal/Turing/Ampere laptop + desktop GPUs: returns OK,
+    /// e.g. 1080Ti channel_mask=0x03, priChIdx GPU_AVG=0/GPU_MAX=1.)
     pub fn thermal_channel_info(
         &self,
     ) -> crate::Result<
@@ -770,11 +757,10 @@ impl PhysicalGpu {
     }
 
     /// Live thermal-channel readings (the STATUS half of the ThermChannel
-    /// pair; ID 0x65fe3aad, same QueryInterface entry as `GetThermalSensors`
-    /// but the `channel[32]` layout). `channel_mask` should come from
-    /// [`Self::thermal_channel_info`]'s `channel_mask`; the returned temps are
-    /// indexed directly by channel number, so `get(priChIdx[GPU_MAX])` is the
-    /// authoritative hot-spot temperature.
+    /// pair; ID 0x65fe3aad, `channel[32]` layout). `channel_mask` should come
+    /// from [`Self::thermal_channel_info`]'s `channel_mask`; the returned
+    /// temps are indexed directly by channel number, so `get(priChIdx[GPU_MAX])`
+    /// is the authoritative hot-spot temperature.
     pub fn thermal_channel_status(
         &self,
         channel_mask: u32,
@@ -791,19 +777,7 @@ impl PhysicalGpu {
         };
         data.channel_mask = channel_mask;
 
-        // Same FFI symbol as GetThermalSensors (identical QueryInterface ID
-        // 0x65fe3aad); cast the STATUS struct pointer to the sensors type the
-        // FFI signature expects — the driver only cares about the 168-byte size
-        // and the version/channel_mask fields, which match.
-        let status = unsafe {
-            sys::api::NvAPI_GPU_GetThermalSensors(
-                self.0,
-                ptr::from_mut(&mut data).cast(),
-            )
-        };
-        crate::status_result(sys::Api::NvAPI_GPU_GetThermalSensors, status)
-            .map_err(Into::into)
-            .and_then(|_| data.convert_raw().map_err(Into::into))
+        unsafe { nvcall!(NvAPI_GPU_ThermChannelGetStatus@get{data}(self.0) => raw) }
     }
 
     pub fn thermal_limit_info(
