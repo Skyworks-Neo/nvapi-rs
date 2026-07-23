@@ -932,11 +932,57 @@ NvAPI_D3D12_UnregisterRaytracingValidationMessageCallback = 0x26975da6,
 
 // source: gpu-z
 
-/// `Unknown(*mut { version = 0x00030038, count, .. })`
+/// `NvAPI_GPU_GetCOPROCInfo(NV_COPROC_INFO *p)` — hybrid-graphics dGPU co-processor
+/// power-management state query. "COPROC" = the discrete GPU acting as a CO-PROCESSOR
+/// to the integrated GPU on NVIDIA Optimus / MS-Hybrid laptop platforms — NOT NVLink
+/// topology, NOT GB202-style companion chiplets, NOT MIG/vGPU partitioning (the "NVL_"
+/// escape prefix is just the RM control-class namespace). Proven by the NV_COPROC_*
+/// status strings (MGPU_NOT_SUPPORTED, DGPU_NOT_SUPPORTED, DISABLED_BY_HYBRID,
+/// DGPU_POSTING_DEVICE) and NV_COPROC_FLAGS_* (OPTIMUS_STYLE_POWER_MANAGEMENT,
+/// GCOFF_ENABLED [=GPU Choreography OFF / dGPU power-gating], D3HOT_SUPPORTED,
+/// LONG_IDLE_D3_SUPPORTED, MS_HYBRID_NV_APPROVED, FORCE_GPU_SWITCH_AVAILABLE).
+/// Reversed from nvapi64_impl.dll handler @0x1803DA280 (core impl sub_1803D8AE0,
+/// trampoline sub_1800FC880, 1 arg). RTTI public struct `.?AUNV_COPROC_INFO_V7@@`
+/// (qword_180505950) and RM escape `.?AU_NVL_ESC_COMMON_COPROC_QUERY_INFO@@`
+/// (qword_180505978). Prototype: `__int64 f(NV_COPROC_INFO *p)` (1 arg).
+/// Input: p->version (offset 0, u32); accepts a v1..v7 family: 0x00010008 (v1,sz8),
+/// 0x0002000C (v2,sz12), 0x00030018 (v3,sz24), 0x00040020 (v4,sz32), 0x00050024
+/// (v5,sz36), 0x00060058 (v6,sz88), 0x00070060 (v7,sz96); mismatch => -9.
+/// RM escape 0x0100009F via sub_180389320, 158-byte buffer, hPhysicalGPU @buf+0x30.
+/// Output (NV_COPROC_INFO_V7, 96 bytes): caps1@4 (14 bit-remapped flags from esc+0x34),
+/// caps2@8 (~30 remapped bits from esc+0x38; virt remaps src 0x1000000->out 0x20000000,
+/// src 0x2000000->out 0x1000000), state dwords@12..32, co-proc mode enum@36/37,
+/// more enum/state fields out to @92 (V7+). SR-IOV anomaly @0x1803D92B6: if
+/// (caps2 & 0x420)==0x420 returns -1 (two mutually-exclusive hybrid/virt caps asserted).
+/// LOW WRAP VALUE for nvoc: reports platform hybrid-power policy (dGPU posting, GCOFF
+/// power-gating, D3hot, iGPU/dGPU switchability, MS-Hybrid approval) — no clocks/power/
+/// thermals/fans and no tuning surface. On a desktop single-GPU box every cap is clear
+/// and the query is a no-op. Read-only descriptor, not a sensor or OC lever — skip.
 Unknown_1629A173 = 0x1629a173,
-/// `Unknown(hDisplayHandle, *mut hGpu)` maybe?
+/// `NvAPI_DISP_GetAssociatedNvidiaGpuHandle(hDisplay, *phGpu)` — display→GPU handle
+/// resolver. Reversed from nvapi64_impl.dll handler @0x180181F10 (trampoline
+/// sub_1801013F0, 2 args). Prototype: `__int64 f(NvDisplayHandle, NvPhysicalGpuHandle*)`.
+/// Validates (hDisplay & 0xFF000000)==0xDE000000 (display-handle magic); non-matching
+/// non-zero => -310 EXPECTED_DISPLAY_HANDLE; hDisplay==0 allowed.
+/// RM: sub_180389320(ioctl=0x07000061, &esc52, sz=0x34(52), hDisplay, ...); GPU handle
+/// read from HIDWORD(esc[3]) (escape offset 0x1C). One-shot handle lookup.
+/// Output: *phGpu = GPU handle. Display/handle plumbing — no sensor data. Wrap only if
+/// nvoc builds display-side topology; otherwise skip.
 Unknown_F1D2777B = 0xf1d2777b,
-/// `Unknown(hGpu, *mut u32, *mut u32)`
+/// `NvAPI_GPU_GetPhysicalGpuHandlesFromLogical(hLogicalGpu, *outHandles, *pCount)` —
+/// LOGICAL→PHYSICAL GPU handle fan-out (NOT display topology). Reversed from
+/// nvapi64_impl.dll handler @0x1801BBF60 (trampoline sub_1801019D0, 3 args). Prototype:
+/// `__int64 f(NvLogicalGpuHandle, NvPhysicalGpuHandle*, uint32_t*)`.
+/// Validates (hLogicalGpu & 0xFF000000)==0xAA000000 (logical-GPU handle magic) @0x1801bbc82.
+/// Helper sub_1801BBB30 issues RM escape 0x07000006 (sub_180389320, 0x138(312)-byte buf);
+/// RTTI `.?AU_NV_ESC_NVAPI_GET_PHYSICAL_FROM_LOGICAL_GPU@@` (qword_180503A20) — dispositive.
+/// Output: copies buf[13]→*pCount and buf[14+i]→outHandles[i] as 8-byte (QWORD) PHYSICAL
+/// GPU handles (loop @0x1801becb). Outer wrapper then calls sub_180370990 (escape 0x0700010C,
+/// RTTI _NV_ESC_NVAPI_GET_DETAILS_FROM_DISPLAYID) per display to pick the "primary" physical
+/// GPU and reorders outHandles to put it first. Pure GPU-handle plumbing — no display IDs,
+/// no sensor data. CORRECTION: previous RE wrongly called this "GetConnectedDisplayIds";
+/// that is a DIFFERENT id (0x0078dba2, escape 0x07000112, enumerates NV_GPU_DISPLAYIds).
+/// Skip for monitoring; wrap only if nvoc builds logical/physical GPU topology.
 Unknown_8EFC0978 = 0x8efc0978,
 /// `NvAPI_GPU_GetComputeCapabilities(hGpu, *pCaps)` — PhysX/compute/framebuffer
 /// capability word (NOT virtualization, despite the name). Authoritatively reversed
@@ -957,7 +1003,19 @@ Unknown_8EFC0978 = 0x8efc0978,
 /// WRAPPED as `NvAPI_GPU_GetComputeCapabilities` (variant name must match the `nvapi!`-
 /// declared FFI function so the macro resolves the ID via `Api::NvAPI_GPU_GetComputeCapabilities.id()`).
 NvAPI_GPU_GetComputeCapabilities = 0xb7bcf50d,
-/// `Unknown(*mut { version = 0x0002000c, count, ... })` might be handles?
+/// `NvAPI_GPU_GetAllComputeCapabilities(*pInfo, hGpu, flags, hDisplay)` — bulk per-output
+/// capability enumerator (wraps 0xB7BCF50D once per connected output). Reversed from
+/// nvapi64_impl.dll handler @0x180180D50 (trampoline sub_1800BE7C0, 4 args). Prototype:
+/// `__int64 f(NV_GPU_ALL_OUTPUTS_INFO*, NvPhysicalGpuHandle, uint32_t, NvDisplayHandle)`.
+/// Input: pInfo->version accepts 0x00020010 (v2,sz16, carries entry-array ptr) or
+/// 0x00010008 (v1,sz8, count-only). (Old guess "0x0002000c" size was 12; real size is
+/// 16 = 0x10.) The "handles?" intuition was right — it is a per-display-handle array.
+/// RM: sub_180389E30(ioctl=0x070000A9, esc60, sz=0x3C(60), &out, ...); allocates a
+/// 0x7810 (30736)B buffer = 256 entries. Calls sub_1801ABAD0 (the 0xB7BCF50D handler)
+/// once per connected output. One-shot enumeration.
+/// Output: {u64 displayId; u32 capsFlags}[] per output + count; active entry marked 0x8.
+/// Only useful for per-display capability breakdown; for a single-GPU daemon,
+/// 0xB7BCF50D alone suffices. Not a live sensor.
 Unknown_36E39E6B = 0x36e39e6b,
 /// `Unknown(hGpu, *mut { version = 0x00010048 (v1, 72 bytes), flags@4, count@5, data[count]@6 })`.
 /// Reversed from nvapi64_impl.dll handler @0x180238CC0 (0x60B30 RM family). Calls the
@@ -973,5 +1031,58 @@ Unknown_36E39E6B = 0x36e39e6b,
 Unknown_7457CAB5 = 0x7457cab5,
 /// `GPU_GetRasterOperators(hGpu, *mut u32)`
 Unknown_GetROPCount = 0xfdc129fa,
+
+// --- RE-record entries: 3 unknown QueryInterface IDs resolved via static RE of
+// nvapi64_impl.dll (IDA). Dispatch table `off_1804DE000` is 12-byte entries
+// [4B id][4B pad][4B handler ptr]. These three are NOT live per-rail watts
+// sources (those come from GPU-Z's WinRing0 PCI/MMIO driver, not NVAPI — see
+// docs/gpuz-per-rail-investigation.md). Kept here as documentation-only records;
+// all three are table/descriptor/stub queries, not status reads — do not wrap.
+
+/// `ThermChannelGetStatus(hGpu, *mut { version, .. })`.
+/// Reversed from nvapi64_impl.dll handler @0x1801E0BC0. Identity proven by embedded
+/// error string "NvAPI_GPU_ThermChannelGetStatus received version..." @0x180485cf0
+/// and RTTI `_NV_ESC_NVAPI_GPU_THERMAL_RMCTRLS`. Prototype:
+/// `__int64 __fastcall(int hGpu, __int64 structPtr)`.
+/// Input struct first DWORD = version magic; accepted: 65596 (v1, sz60),
+/// 131240 (v2, sz168), 210120 (v3, sz13512); mismatch => -9 INCOMPATIBLE_STRUCT.
+/// Allocates a 0xC9E0 (51680)B RM buffer, dispatches via sub_180389320(117440911, ...)
+/// => RM ioctl 0x0700018F (thermal control, NOT the 0x07000046 power ioctl);
+/// escape subcommand written to buf[13] = 0x2080853B.
+/// Output: iterates i=0..0xFE (up to 255 thermal channels), and for each set bit in
+/// the channel bitmask writes a per-channel record at v22 = &buf[35*i]:
+///   v22[18]  (+72)  = controller type via sub_1801DA7E0 (maps 1..5 => 1..5);
+///   type==3 also writes v22[28] (+112), a byte at +180, and 10 dwords at +116..+151.
+/// One-shot topology/status snapshot (no Sleep/retry). Redundant with the already-
+/// wrapped NvAPI_GPU_GetThermalSettings; not worth wrapping. Do not wrap as a status.
+Unknown_0BC8163D = 0x0bc8163d,
+/// Per-rail POWER descriptor table (power RMCTRLS family, same family as
+/// NvAPI_GPU_GetPowerTopology @0x180232C80). Reversed from nvapi64_impl.dll handler
+/// @0x180258170. RTTI `_NV_ESC_NVAPI_GPU_POWER_RMCTRLS`. Prototype:
+/// `__int64 __fastcall(uint hGpu, _DWORD *structPtr)`.
+/// Input struct first DWORD = version magic; accepted: 65928, 66972, 69408, 74968
+/// (large multi-rail power struct, sizes ~392B up to ~9432B; plus internal 336752);
+/// mismatch => -9. Returns a DESCRIPTOR/CAPABILITY table (which rails exist, their
+/// types/capabilities), NOT live wattage.
+/// Allocates TWO 0x60B30 (396080)B RM buffers (dual-buffer pattern) + a 0x12370
+/// (74608)B caller-facing buffer.
+///   Stage 1 (probe/GetInfo): sub_1803894A0(117440582, v3, 396080, hGpu, 0, 0)
+///     => RM ioctl 0x07000046, escape v3[13] = 0x2080A612.
+///   Stage 2 (bulk read): sub_180389320(117440582, v10, 396080, 0,0,0,0)
+///     => RM ioctl 0x07000046, escape v10[13] = 0x2080A613 (SAME escape as
+///     GetPowerTopology). Iterates j=0..0xFE (255 rails): for each set bit copies a
+///     150-dword (600B) per-rail record from v10[54...] into the caller's per-rail
+///     slot (QWORD copies at +88/+96/+104/+120; rail types 4/5/7 dispatched via
+///     sub_18022DC20 / sub_18022DB50 writing 19-byte sub-records); finally v6[2]=v10[23].
+/// Table/descriptor query (no Sleep/retry). Only useful as a companion to enumerate
+/// rail topology before driving a live read — but no live per-rail read exists in
+/// NVAPI (see docs/gpuz-per-rail-investigation.md). Not worth wrapping alone.
+Unknown_C12EB19E = 0xc12eb19e,
+/// Unsupported stub. Reversed from nvapi64_impl.dll handler @0x18024D4E0.
+/// Prototype: `__int64 (void)` (takes NO arguments). Entire body:
+///   if (loglevel >= 4) { log(608); log(609); }
+///   return 4294967192;  // = -104 NVAPI_NVIDIA_DEVICE_NOT_FOUND
+/// No RM allocation, no escape, no version check, no output. Dead end. Do not wrap.
+Unknown_F40238EF = 0xf40238ef,
 
 }
