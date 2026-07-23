@@ -744,6 +744,29 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetThermalSensors@get{data}(self.0) => raw) }
     }
 
+    /// Thermal-channel capability descriptor (undocumented
+    /// `NvAPI_GPU_ThermChannelGetInfo`, 0x0bc8163d). Best-effort: on some
+    /// GPUs (notably laptop builds) this is stubbed and returns an error —
+    /// callers must tolerate failure. On success it provides the authoritative
+    /// `priChIdx` LUT (which channel index is the hot spot / VRAM reading) for
+    /// [`Self::thermal_sensors`] to consume.
+    pub fn thermal_channel_info(
+        &self,
+    ) -> crate::Result<
+        <thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO as RawConversion>::Target,
+    > {
+        trace!("gpu.thermal_channel_info()");
+        let data = thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2 {
+            version: NvVersion::new(
+                size_of::<thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2>(),
+                2,
+            ),
+            ..Default::default()
+        };
+
+        unsafe { nvcall!(NvAPI_GPU_ThermChannelGetInfo@get{data}(self.0) => raw) }
+    }
+
     pub fn thermal_limit_info(
         &self,
     ) -> crate::Result<

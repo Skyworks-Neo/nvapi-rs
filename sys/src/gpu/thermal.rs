@@ -378,6 +378,113 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_GetThermalSensors(hPhysicalGPU: NvPhysicalGpuHandle, pSensors: *mut NV_GPU_THERMAL_SENSORS) -> NvAPI_Status;
     }
 
+    // ------------------------------------------------------------------
+    // Thermal Channel capability descriptor (the INFO half of the
+    // ThermChannel pair). NDA-developer-SDK private API; identity +
+    // struct layout confirmed by RTSS (RivaTuner) source
+    // (temp/NVAPIInterface.h) and nvapi64_impl.dll RE (nvid.rs comment).
+    // The STATUS half is `NvAPI_GPU_GetThermalSensors` (0x65fe3aad) above.
+    //
+    // The point of this call: it returns a `priChIdx[5]` LUT giving the
+    // authoritative primary channel index per thermal type
+    // (GPU_AVG=0, GPU_MAX=1 hotspot, BOARD=2, MEMORY=3, PWR_SUPPLY=4).
+    // Feeding that index to the STATUS read yields the true hotspot /
+    // memory temperature — replacing the hi-layer positional heuristic.
+    // ------------------------------------------------------------------
+
+    nvenum! {
+        /// Thermal channel type (RTSS `NV_GPU_THERMAL_THERM_CHANNEL_TYPE`).
+        /// Indexes the `priChIdx[5]` LUT returned by GetInfo.
+        pub enum NV_GPU_THERMAL_THERM_CHANNEL_TYPE / ThermChannelType {
+            NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_AVG / GpuAvg = 0,
+            /// Hot spot (max) temperature.
+            NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_MAX / GpuMax = 1,
+            NV_GPU_THERMAL_THERM_CHANNEL_TYPE_BOARD / Board = 2,
+            /// VRAM / memory temperature.
+            NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY / Memory = 3,
+            NV_GPU_THERMAL_THERM_CHANNEL_TYPE_PWR_SUPPLY / PwrSupply = 4,
+            NV_GPU_THERMAL_THERM_CHANNEL_TYPE_INVALID / Invalid = 255,
+        }
+    }
+
+    nvstruct! {
+        /// One thermal-channel info record (RTSS `NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1`).
+        /// 84 bytes; the `is_temp_sim_supported`+`flags` pair is followed by a
+        /// 2-byte align pad before the 4-byte `offset_hw` (same layout idiom as
+        /// `NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V2`).
+        pub struct NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1 {
+            pub ch_class: u32,
+            pub ch_type: u32,
+            pub rel_loc: u32,
+            pub tgt_gpu: u32,
+            pub scaling: i32,
+            pub offset_sw: i32,
+            pub min_temp: i32,
+            pub max_temp: i32,
+            pub is_temp_sim_supported: u8,
+            pub flags: u8,
+            pub padding0: Padding<[u8; 2]>,
+            pub offset_hw: i32,
+            pub rsvd0: Padding<[u8; 28]>,
+            /// RTSS union { device[2] | rsvd[16] } — raw 16 bytes.
+            pub data: Padding<[u8; 16]>,
+        }
+    }
+
+    /// Number of thermal channels the params struct reserves room for.
+    pub const NV_GPU_THERMAL_THERM_CHANNEL_MAX: usize = 32;
+    /// Number of primary-channel LUT entries (`priChIdx`).
+    pub const NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX: usize = 5;
+
+    nvstruct! {
+        /// Thermal-channel capability params (RTSS
+        /// `NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2`). 2736 bytes.
+        /// On success the driver fills `channel_mask` (which of 32 channel
+        /// slots are populated), per-channel records, and `pri_ch_idx`
+        /// (the primary channel index for each of the 5 thermal types).
+        pub struct NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2 {
+            pub version: NvVersion,
+            pub channel_mask: u32,
+            pub rsvd: Padding<[u8; 32]>,
+            pub channel: Array<[NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1; NV_GPU_THERMAL_THERM_CHANNEL_MAX]>,
+            /// Primary channel index per type, indexed by
+            /// `NV_GPU_THERMAL_THERM_CHANNEL_TYPE`
+            /// (0=GPU_AVG, 1=GPU_MAX/hotspot, 2=BOARD, 3=MEMORY, 4=PWR_SUPPLY).
+            pub pri_ch_idx: [u8; NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX],
+            pub padding1: Padding<[u8; 3]>,
+        }
+    }
+
+    impl NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2 {
+        /// Primary channel index for a thermal type, if that channel is
+        /// actually populated (index in range AND its bit set in `channel_mask`).
+        pub fn primary_index(&self, ty: usize) -> Option<usize> {
+            self.pri_ch_idx
+                .get(ty)
+                .copied()
+                .map(|i| i as usize)
+                .filter(|&i| i < NV_GPU_THERMAL_THERM_CHANNEL_MAX && self.channel_mask & (1u32 << i) != 0)
+        }
+
+        /// Hot spot (GPU_MAX) primary channel index.
+        pub fn hotspot_index(&self) -> Option<usize> {
+            self.primary_index(NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_MAX as usize)
+        }
+
+        /// VRAM (MEMORY) primary channel index.
+        pub fn memory_index(&self) -> Option<usize> {
+            self.primary_index(NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY as usize)
+        }
+    }
+
+    nvversion! { @=NV_GPU_THERMAL_THERM_CHANNEL_INFO NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2(2) = 2736 }
+
+    nvapi! {
+        /// Undocumented (NDA-private, ID 0x0bc8163d). Thermal-channel capability
+        /// descriptor. Pair with `NvAPI_GPU_GetThermalSensors` for live temps.
+        pub unsafe fn NvAPI_GPU_ThermChannelGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_THERMAL_THERM_CHANNEL_INFO) -> NvAPI_Status;
+    }
+
     // GPS (GPU Power Steering) thermal limit (Kepler-era, undocumented)
 
     nvstruct! {

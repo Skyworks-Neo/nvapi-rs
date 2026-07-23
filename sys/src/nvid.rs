@@ -945,4 +945,11 @@ Unknown_36E39E6B = 0x36e39e6b,
 /// `GPU_GetRasterOperators(hGpu, *mut u32)`
 Unknown_GetROPCount = 0xfdc129fa,
 
+/// `NvAPI_GPU_ThermChannelGetInfo(hGpu, *NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS)`.
+/// Private thermal-channel topology descriptor paired with
+/// `NvAPI_GPU_ThermChannelGetStatus`; exposes the primary channel index for
+/// GPU average, GPU maximum/hotspot, board, memory, and power-supply sensors.
+/// Identity confirmed by RTSS as `NVAPIIID_GPU_ThermChannelGetInfo`.
+NvAPI_GPU_ThermChannelGetInfo = 0x0bc8163d,
+
 }
