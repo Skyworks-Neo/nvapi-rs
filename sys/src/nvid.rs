@@ -938,8 +938,25 @@ Unknown_1629A173 = 0x1629a173,
 Unknown_F1D2777B = 0xf1d2777b,
 /// `Unknown(hGpu, *mut u32, *mut u32)`
 Unknown_8EFC0978 = 0x8efc0978,
-/// `Unknown(hGpu, *mut { version = 0x00010008, value })` seen `value = 0x703`
-Unknown_B7BCF50D = 0xb7bcf50d,
+/// `NvAPI_GPU_GetComputeCapabilities(hGpu, *pCaps)` — PhysX/compute/framebuffer
+/// capability word (NOT virtualization, despite the name). Authoritatively reversed
+/// from nvapi64_impl.dll handler @0x1801ABAD0 (trampoline sub_1800C2530, 2 args).
+/// RTTI `.?AU_NV_ESC_NVAPI_GET_COMPUTE_CAPS@@` (qword_1805043A0).
+/// Prototype: `__int64 f(NvPhysicalGpuHandle, NV_GPU_COMPUTE_CAPS_INFO*)`.
+/// Input: pCaps->version MUST be 0x00010008 (v1,sz8). RM escape 0x7000029 via
+/// sub_18038A360 (status dword @buf+0x38 bit0 = compute-capable -> 0x2); supporting
+/// escapes 0x700023D/0x7000025 (physical VRAM KB -> 0x200, sub_18019EC20),
+/// 0x7000024 (PCI id quadruple), sub_18017BE10 (Physx.cpl >=8.9.4.0 -> 0x100),
+/// sub_18039B9C0 (registry PhysxGpuId match -> 0x400), sub_1803B94B0 (board-DB match -> 0x4).
+/// Output capability word (see NV_GPU_COMPUTE_CAPS bitflags for per-bit semantics):
+/// 0x1 BASE_COMPUTE, 0x2 COMPUTE_CAPABLE, 0x4 BOARD_DB_MATCH, 0x100 PHYSX_INSTALLED,
+/// 0x200 VRAM_GE_256MB, 0x400 PHYSX_GPU_SELECTED. Measured on dev laptop: 0x703 =
+/// 0x1|0x2|0x100|0x200|0x400 (0x4 absent = no board-DB row matched this SKU).
+/// -104 (DATA_NOT_FOUND) is mapped to 0 (success-but-empty). One-shot capability
+/// assembly — not a live sensor. Good for a one-shot GpuCapabilities struct at startup.
+/// WRAPPED as `NvAPI_GPU_GetComputeCapabilities` (variant name must match the `nvapi!`-
+/// declared FFI function so the macro resolves the ID via `Api::NvAPI_GPU_GetComputeCapabilities.id()`).
+NvAPI_GPU_GetComputeCapabilities = 0xb7bcf50d,
 /// `Unknown(*mut { version = 0x0002000c, count, ... })` might be handles?
 Unknown_36E39E6B = 0x36e39e6b,
 /// `Unknown(hGpu, *mut { version = 0x00010048 (v1, 72 bytes), flags@4, count@5, data[count]@6 })`.

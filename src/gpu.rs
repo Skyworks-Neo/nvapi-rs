@@ -335,6 +335,17 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetArchInfo@get(self.0) => raw) }
     }
 
+    /// Static compute/PhysX/framebuffer capability word
+    /// (`NvAPI_GPU_GetComputeCapabilities`, ID `0xb7bcf50d`). Despite the name the bits are
+    /// PhysX/compute-software/framebuffer oriented, NOT virtualization/large-BAR (see
+    /// [sys::gpu::NV_GPU_COMPUTE_CAPS]). One-shot descriptor — the driver maps
+    /// `DATA_NOT_FOUND` to a zero word, so an all-clear result is meaningful.
+    pub fn compute_capabilities(&self) -> crate::NvapiResult<ComputeCapabilities> {
+        trace!("gpu.compute_capabilities()");
+
+        unsafe { nvcall!(NvAPI_GPU_GetComputeCapabilities@get(self.0) => raw) }
+    }
+
     pub fn workstation_features(
         &self,
     ) -> crate::NvapiResult<(WorkstationFeatureMask, WorkstationFeatureMask)> {
@@ -1723,6 +1734,26 @@ impl RawConversion for sys::gpu::NV_GPU_ARCH_INFO_V1 {
             arch: Architecture::from_raw(self.architecture, self.implementation),
             revision: self.revision,
         })
+    }
+}
+
+/// Static compute/PhysX/framebuffer capability flags for a GPU, from
+/// `NvAPI_GPU_GetComputeCapabilities`. See [sys::gpu::NV_GPU_COMPUTE_CAPS] for the
+/// individual flag bits (base-compute, compute-capable, board-DB match, PhysX installed,
+/// VRAM >= 256 MiB, PhysX GPU selected).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct ComputeCapabilities {
+    pub flags: sys::gpu::NV_GPU_COMPUTE_CAPS,
+}
+
+impl RawConversion for sys::gpu::NV_GPU_COMPUTE_CAPS_INFO_V1 {
+    type Target = ComputeCapabilities;
+    type Error = Infallible;
+
+    fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
+        trace!("convert_raw({:?})", self);
+        Ok(ComputeCapabilities { flags: self.flags })
     }
 }
 

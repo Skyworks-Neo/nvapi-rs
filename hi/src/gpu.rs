@@ -21,14 +21,14 @@ use nvapi::{
 };
 pub use nvapi::{
     ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies, ClockLockEntry,
-    ClockLockValue, ConnectedIdsFlags, CoolerControl, CoolerController, CoolerInfo, CoolerPolicy,
-    CoolerSettings, CoolerStatus, CoolerTarget, CoolerType, DisplayId, DriverModel, EccErrors,
-    FanArbiterControl, FanArbiterStatus, FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz,
-    KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState, PciIdentifiers, Percentage,
-    PerformanceDecreaseReason, PerfInfo, PerfLimitId, PerfStatus, PffCurve, PffPoint, PhysicalGpu,
-    PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType, ThermalController,
-    ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType,
-    VoltageDomain, VoltageStatus, VoltageTable,
+    ClockLockValue, ComputeCapabilities, ConnectedIdsFlags, CoolerControl, CoolerController,
+    CoolerInfo, CoolerPolicy, CoolerSettings, CoolerStatus, CoolerTarget, CoolerType, DisplayId,
+    DriverModel, EccErrors, FanArbiterControl, FanArbiterStatus, FanCoolerId, Foundry, GpuType,
+    Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
+    PciIdentifiers, Percentage, PerformanceDecreaseReason, PerfInfo, PerfLimitId, PerfStatus,
+    PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm,
+    SystemType, ThermalController, ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations,
+    Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
 };
 
 pub struct Gpu {
@@ -63,6 +63,11 @@ pub struct GpuInfo {
     pub shader_pipe_count: u32,
     pub shader_sub_pipe_count: u32,
     pub ecc: EccInfo,
+    /// Static compute/PhysX/framebuffer capability flags
+    /// (`NvAPI_GPU_GetComputeCapabilities`). Despite the name the bits are PhysX/compute/
+    /// framebuffer oriented, not virtualization. One-shot descriptor (zero = no caps / not
+    /// reported), appropriate for `get-info`. See [ComputeCapabilities].
+    pub compute_capabilities: ComputeCapabilities,
     pub base_clocks: ClockFrequencies,
     pub boost_clocks: ClockFrequencies,
     pub sensors: Vec<SensorDesc>,
@@ -216,6 +221,10 @@ impl Gpu {
                 )?,
                 info: allowable_result_fallback(self.gpu.ecc_status(), Default::default())?,
             },
+            compute_capabilities: allowable_result_fallback(
+                self.gpu.compute_capabilities(),
+                Default::default(),
+            )?,
             system_type: allowable_result_fallback(self.gpu.system_type(), SystemType::Unknown)?,
             gpu_type: allowable_result_fallback(self.gpu.gpu_type(), GpuType::Unknown)?,
             arch: allowable_result_fallback(self.gpu.architecture(), Default::default())?,

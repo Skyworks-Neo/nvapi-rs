@@ -311,6 +311,63 @@ nvapi! {
     pub unsafe fn NvAPI_GPU_WorkstationFeatureQuery(hPhysicalGpu: NvPhysicalGpuHandle, pConfiguredFeatureMask: *mut NVAPI_GPU_WORKSTATION_FEATURE_MASK, pConsistentFeatureMask: *mut NVAPI_GPU_WORKSTATION_FEATURE_MASK) -> NvAPI_Status;
 }
 
+// NV_GPU_COMPUTE_CAPS — capability word returned by NvAPI_GPU_GetComputeCapabilities
+// (QueryInterface ID 0xb7bcf50d). Authoritative bit semantics reversed from
+// nvapi64_impl.dll handler @0x1801ABAD0 (RTTI _NV_ESC_NVAPI_GET_COMPUTE_CAPS, RM escape
+// 0x7000029). IMPORTANT: despite the "compute caps" name, the bits are NOT SR-IOV /
+// virtualization / large-BAR — they are PhysX / compute-software / framebuffer oriented.
+// The driver maps -104 (DATA_NOT_FOUND) to a zero word, so an all-clear default is
+// meaningful. A typical discrete desktop GPU reports 0x703 = BASE_COMPUTE |
+// COMPUTE_CAPABLE | PHYSX_INSTALLED | VRAM_GE_256MB | PHYSX_GPU_SELECTED (note 0x4
+// BOARD_DB_MATCH is absent because the GPU matched no board-DB row).
+nvbits! {
+    pub enum NV_GPU_COMPUTE_CAPS / ComputeCaps {
+        /// Base compute-supported fallback. Forced ON (`or eax,1` @0x1801ACF1A) when
+        /// neither bit 0x4 (board-DB match) nor 0x8 is set — generic compute with no
+        /// board-DB qualification. NOT SR-IOV.
+        NV_GPU_COMPUTE_CAPS_BASE_COMPUTE / BASE_COMPUTE = 0x1,
+        /// Kernel RM escape 0x7000029 (status dword bit0) confirms the GPU is
+        /// compute-capable (CUDA). The real "compute capable" bit.
+        NV_GPU_COMPUTE_CAPS_COMPUTE_CAPABLE / COMPUTE_CAPABLE = 0x2,
+        /// GPU's (PCI deviceId, subVendor, subDevice, revision, FB-size-MB) tuple
+        /// exactly matched a row in the driver's board database (sub_1803B94B0 reads
+        /// the registry/inifile board list into a 0x3020-byte buffer, ';' delimited).
+        /// Absent simply means no board-DB entry matched this SKU.
+        NV_GPU_COMPUTE_CAPS_BOARD_DB_MATCH / BOARD_DB_MATCH = 0x4,
+        /// PhysX runtime software is installed: Physx.cpl found in the system/WoW64 dir
+        /// with file version >= 8.9.4.0 (sub_18017BE10). NOT virtualization.
+        NV_GPU_COMPUTE_CAPS_PHYSX_INSTALLED / PHYSX_INSTALLED = 0x100,
+        /// Physical VRAM >= 256 MiB. Read via RM escape 0x700023D (or 0x7000025 if
+        /// NV_USE_CARVEOUT_MEM set), KB rounded to MB, compared >= 0x40000 KB
+        /// (sub_18019EC20). NOT large-BAR.
+        NV_GPU_COMPUTE_CAPS_VRAM_GE_256MB / VRAM_GE_256MB = 0x200,
+        /// This GPU is the registry-selected PhysX GPU
+        /// (\Parameters\NVAPI\PhysxGpuId == this GPU's id, sub_18039B9C0) AND bit 0x100
+        /// is set. NOT virtualization host.
+        NV_GPU_COMPUTE_CAPS_PHYSX_GPU_SELECTED / PHYSX_GPU_SELECTED = 0x400,
+    }
+}
+
+nvstruct! {
+    /// Used in NvAPI_GPU_GetComputeCapabilities(). Versioned 8-byte struct:
+    /// `[version: NvVersion][flags: NV_GPU_COMPUTE_CAPS]`. The handler requires
+    /// `version == 0x00010008` (v1, sz8). Named `..._INFO` to avoid clashing with
+    /// the `NV_GPU_COMPUTE_CAPS` bitmask type alias.
+    pub struct NV_GPU_COMPUTE_CAPS_INFO_V1 {
+        pub version: NvVersion,
+        pub flags: NV_GPU_COMPUTE_CAPS,
+    }
+}
+nvversion! { @=NV_GPU_COMPUTE_CAPS_INFO NV_GPU_COMPUTE_CAPS_INFO_V1(1) }
+
+nvapi! {
+    pub type GPU_GetComputeCapabilitiesFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pCaps: *mut NV_GPU_COMPUTE_CAPS_INFO) -> NvAPI_Status;
+
+    /// Retrieves the GPU's static compute/PhysX/framebuffer capability word.
+    /// One-shot capability descriptor (not a live sensor) — appropriate for `get-info`.
+    pub unsafe fn NvAPI_GPU_GetComputeCapabilities;
+}
+
 nvstruct! {
     /// Used in NvAPI_GPU_GetArchInfo()
     pub struct NV_GPU_ARCH_INFO_V1 {
