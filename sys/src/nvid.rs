@@ -675,7 +675,7 @@ NvAPI_GPU_SetDeepIdleState = 0x568a2292,
 
 NvAPI_GetScalingCaps = 0x8e875cf9,
 NvAPI_GPU_GetThermalTable = 0xc729203c,
-NvAPI_GPU_GetThermalSensors = 0x65fe3aad, // undocumented: hotspot, VRAM, etc.
+NvAPI_GPU_GetThermalSensors = 0x65fe3aad, // undocumented: hotspot, VRAM, etc. NDA-private; RTSS names it the ThermChannel STATUS read (pair with 0x0BC8163D GetInfo)
 NvAPI_SYS_SetPostOutput = 0xd3a092b1,
 
 // source: PX18 ManagedNvApi.dll (see also: ccminer/nvapi.cpp)
@@ -1049,40 +1049,59 @@ Unknown_GetROPCount = 0xfdc129fa,
 /// Allocates a 0xC9E0 (51680)B RM buffer, dispatches via sub_180389320(117440911, ...)
 /// => RM ioctl 0x0700018F (thermal control, NOT the 0x07000046 power ioctl);
 /// escape subcommand written to buf[13] = 0x2080853B.
-/// Output: iterates i=0..0xFE (up to 255 thermal channels), and for each set bit in
-/// the channel bitmask writes a per-channel record at v22 = &buf[35*i]:
-///   v22[18]  (+72)  = controller type via sub_1801DA7E0 (maps 1..5 => 1..5);
-///   type==3 also writes v22[28] (+112), a byte at +180, and 10 dwords at +116..+151.
-/// One-shot topology/status snapshot (no Sleep/retry). Redundant with the already-
-/// wrapped NvAPI_GPU_GetThermalSettings; not worth wrapping. Do not wrap as a status.
-Unknown_0BC8163D = 0x0bc8163d,
-/// Per-rail POWER descriptor table (power RMCTRLS family, same family as
-/// NvAPI_GPU_GetPowerTopology @0x180232C80). Reversed from nvapi64_impl.dll handler
-/// @0x180258170. RTTI `_NV_ESC_NVAPI_GPU_POWER_RMCTRLS`. Prototype:
+/// `NvAPI_GPU_ThermChannelGetInfo(hGpu, *NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS)`
+/// — thermal-channel capability/topology descriptor (the INFO half of the
+/// ThermChannel pair; the live-reading STATUS half is `0x65FE3AAD`
+/// `NvAPI_GPU_GetThermalSensors`). NDA-developer-SDK private API. Identity confirmed
+/// by RTSS (RivaTuner) source: `NVAPIIID_GPU_ThermChannelGetInfo = 0x0BC8163D`.
+/// Reversed from nvapi64_impl.dll handler @0x1801E0BC0 (RTTI
+/// `_NV_ESC_NVAPI_GPU_THERMAL_RMCTRLS`). Prototype:
+/// `__int64 __fastcall(int hGpu, __int64 structPtr)`.
+/// Input struct first DWORD = version magic `(v<<16)|sizeof`; RTSS uses
+/// `NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2` with version 2. On success fills
+/// `channelMask` (which of 32 channels exist) + per-channel info records + a
+/// `priChIdx[5]` LUT indexing the primary channel per type
+/// (GPU_AVG=0, GPU_MAX=1, BOARD=2, MEMORY=3, PWR_SUPPLY=4). The caller passes
+/// `priChIdx[type]` to the STATUS read to get that type's temperature.
+/// Iterates i=0..0xFE; per set channel writes a record at &buf[35*i]
+/// (controller type via sub_1801DA7E0, etc.).
+/// HIGH WRAP VALUE: this is the NVAPI-native path to HOTSPOT (GPU_MAX) and MEMORY
+/// temperatures — exactly what the `hotspot-temp-sensor` branch needs, with no
+/// MMIO/kernel-driver requirement. Pair with 0x65FE3AAD (GetThermalSensors/STATUS).
+NvAPI_GPU_ThermChannelGetInfo = 0x0bc8163d,
+/// `NvAPI_GPU_PowerMonitorGetInfo(hGpu, *NV_GPU_POWER_MONITOR_GET_INFO)` — power-
+/// monitor capability/topology descriptor (the INFO half; live wattage is the STATUS
+/// half `0xF40238EF`). NDA-developer-SDK private API. Identity confirmed by RTSS
+/// source: `NVAPIIID_GPU_PowerMonitorGetInfo = 0xC12EB19E`. Reversed from
+/// nvapi64_impl.dll handler @0x180258170 (RTTI `_NV_ESC_NVAPI_GPU_POWER_RMCTRLS`,
+/// same family as NvAPI_GPU_GetPowerTopology @0x180232C80). Prototype:
 /// `__int64 __fastcall(uint hGpu, _DWORD *structPtr)`.
-/// Input struct first DWORD = version magic; accepted: 65928, 66972, 69408, 74968
-/// (large multi-rail power struct, sizes ~392B up to ~9432B; plus internal 336752);
-/// mismatch => -9. Returns a DESCRIPTOR/CAPABILITY table (which rails exist, their
-/// types/capabilities), NOT live wattage.
-/// Allocates TWO 0x60B30 (396080)B RM buffers (dual-buffer pattern) + a 0x12370
-/// (74608)B caller-facing buffer.
-///   Stage 1 (probe/GetInfo): sub_1803894A0(117440582, v3, 396080, hGpu, 0, 0)
-///     => RM ioctl 0x07000046, escape v3[13] = 0x2080A612.
-///   Stage 2 (bulk read): sub_180389320(117440582, v10, 396080, 0,0,0,0)
-///     => RM ioctl 0x07000046, escape v10[13] = 0x2080A613 (SAME escape as
-///     GetPowerTopology). Iterates j=0..0xFE (255 rails): for each set bit copies a
-///     150-dword (600B) per-rail record from v10[54...] into the caller's per-rail
-///     slot (QWORD copies at +88/+96/+104/+120; rail types 4/5/7 dispatched via
-///     sub_18022DC20 / sub_18022DB50 writing 19-byte sub-records); finally v6[2]=v10[23].
-/// Table/descriptor query (no Sleep/retry). Only useful as a companion to enumerate
-/// rail topology before driving a live read — but no live per-rail read exists in
-/// NVAPI (see docs/gpuz-per-rail-investigation.md). Not worth wrapping alone.
+/// Input struct first DWORD = version magic `(v<<16)|sizeof`; RTSS uses
+/// `NV_GPU_POWER_MONITOR_GET_INFO_V2` with version 1. Returns a DESCRIPTOR table:
+/// `bSupported`, `channelMask`, `totalGpuPowerChannelMask`, `totalGpuChannelIdx`, and
+/// per-channel info (type, pwrRail, pwrLimitmW, …). NOT live wattage by itself.
+/// RE detail: allocates two 0x60B30 RM buffers + a 0x12370 caller buffer; stage 1
+/// escape 0x2080A612, stage 2 escape 0x2080A613 (same as GetPowerTopology); iterates
+/// 255 rails copying 600B records. Use to probe caps (`if info.bSupported`) before
+/// calling 0xF40238EF. The per-rail INPUT rails (PEX12V/8PIN/3V3/…) map to the
+/// GPU-Z WinRing0 readings — but live per-rail read needs the STATUS half + a
+/// supporting GPU; see docs/gpuz-per-rail-investigation.md.
 Unknown_C12EB19E = 0xc12eb19e,
-/// Unsupported stub. Reversed from nvapi64_impl.dll handler @0x18024D4E0.
-/// Prototype: `__int64 (void)` (takes NO arguments). Entire body:
-///   if (loglevel >= 4) { log(608); log(609); }
-///   return 4294967192;  // = -104 NVAPI_NVIDIA_DEVICE_NOT_FOUND
-/// No RM allocation, no escape, no version check, no output. Dead end. Do not wrap.
+/// `NvAPI_GPU_PowerMonitorGetStatus(hGpu, *NV_GPU_POWER_MONITOR_GET_STATUS)` — live
+/// absolute GPU power in mW (the STATUS half of the PowerMonitor pair). NDA-
+/// developer-SDK private API. Identity confirmed by RTSS source:
+/// `NVAPIIID_GPU_PowerMonitorGetStatus = 0xF40238EF`. RTSS reads
+/// `status.totalGpuPowermW` and per-channel `channels[i].{pwrAvgmW,pwrMinmW,pwrMaxmW,
+/// currmA,voltuV,energymJ}`.
+///
+/// NOTE — conflict with local RE: on the dev laptop's nvapi64_impl.dll build, the
+/// handler dispatched for this id (@0x18024D4E0) is a STUB that returns -104
+/// NVAPI_NVIDIA_DEVICE_NOT_FOUND with no RM call. Yet RTSS ships and calls it as a
+/// real absolute-power read. Reconciliation: this id IS PowerMonitorGetStatus, but
+/// its implementation is GPU/driver-version gated — present+functional on hardware
+/// where the driver wired the handler, stubbed on others. Probe with 0xC12EB19E
+/// (`bSupported`) before calling. Wrap best-effort (allowable_result → None on
+/// NotSupported), mirroring the NVML power_usage fallback already in nvoc.
 Unknown_F40238EF = 0xf40238ef,
 
 }

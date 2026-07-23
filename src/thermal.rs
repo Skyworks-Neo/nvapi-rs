@@ -779,3 +779,56 @@ impl RawConversion for thermal::private::NV_GPU_THERMAL_SENSORS {
         })
     }
 }
+
+/// Thermal-channel capability descriptor from the undocumented
+/// `NvAPI_GPU_ThermChannelGetInfo` (0x0bc8163d).
+///
+/// The key payload is `primary`: for each of the 5 thermal types
+/// (GPU_AVG, GPU_MAX=hotspot, BOARD, MEMORY=vram, PWR_SUPPLY) it holds the
+/// authoritative channel index to feed to the STATUS read
+/// (`NvAPI_GPU_GetThermalSensors`). `None` means that type is not exposed on
+/// this GPU. On laptop GPUs the call may be stubbed (see plan) — callers must
+/// treat the whole result as best-effort / optional.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ThermalChannelInfo {
+    /// Bitmask of populated channel slots (which of the 32 channel records are valid).
+    pub channel_mask: u32,
+    /// Primary channel index per thermal type, indexed by
+    /// `NV_GPU_THERMAL_THERM_CHANNEL_TYPE`:
+    /// `[GPU_AVG, GPU_MAX(hotspot), BOARD, MEMORY(vram), PWR_SUPPLY]`.
+    /// `None` where the type is unavailable or the channel bit is not set.
+    pub primary: [Option<u8>; thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX],
+}
+
+impl ThermalChannelInfo {
+    /// Hot spot (GPU_MAX) primary channel index, if available.
+    pub fn hotspot_index(&self) -> Option<u8> {
+        self.primary[thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_MAX as usize]
+    }
+
+    /// VRAM (MEMORY) primary channel index, if available.
+    pub fn memory_index(&self) -> Option<u8> {
+        self.primary[thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY as usize]
+    }
+}
+
+impl RawConversion for thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO {
+    type Target = ThermalChannelInfo;
+    type Error = sys::ArgumentRangeError;
+
+    fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
+        trace!("convert_raw({:#?})", self);
+        // Mirror the raw struct's mask-aware primary_index() into the typed array.
+        let mut primary = [None; thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX];
+        for ty in 0..primary.len() {
+            if let Some(idx) = self.primary_index(ty) {
+                primary[ty] = Some(idx as u8);
+            }
+        }
+        Ok(ThermalChannelInfo {
+            channel_mask: self.channel_mask,
+            primary,
+        })
+    }
+}

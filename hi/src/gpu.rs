@@ -27,7 +27,8 @@ pub use nvapi::{
     Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
     PciIdentifiers, Percentage, PerformanceDecreaseReason, PerfInfo, PerfLimitId, PerfStatus,
     PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm,
-    SystemType, ThermalController, ThermalSensors, ThermalTarget, UtilizationDomain, Utilizations,
+    SystemType, ThermalChannelInfo, ThermalController, ThermalSensors, ThermalTarget,
+    UtilizationDomain, Utilizations,
     Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
 };
 
@@ -328,6 +329,23 @@ impl Gpu {
         positional.sort_by_key(|(i, _)| *i);
         positional.dedup_by_key(|(i, _)| *i);
 
+        // Authoritative thermal-channel map from the undocumented
+        // NvAPI_GPU_ThermChannelGetInfo (0x0bc8163d). When the driver supports
+        // it, `priChIdx` tells us the *true* channel index for the hot spot
+        // (GPU_MAX) and VRAM (MEMORY) readings — superseding the positional
+        // heuristic below. Best-effort: this call is stubbed on some GPUs
+        // (notably laptop builds); on failure we simply fall back to the
+        // heuristic and lose nothing.
+        let therm_channels = allowable_result(self.thermal_channel_info())?.ok();
+        let auth_hotspot = therm_channels
+            .as_ref()
+            .and_then(|c| c.hotspot_index())
+            .and_then(|idx| positional.iter().find(|(i, _)| *i == idx as usize).map(|(_, t)| *t));
+        let auth_memory = therm_channels
+            .as_ref()
+            .and_then(|c| c.memory_index())
+            .and_then(|idx| positional.iter().find(|(i, _)| *i == idx as usize).map(|(_, t)| *t));
+
         let last_index = positional.last().map(|(i, _)| *i);
         // High-precision core reading (undocumented index 8) to enrich the
         // documented core entry with sub-degree precision.
@@ -362,6 +380,44 @@ impl Gpu {
                     // Authoritative positional index in the undocumented sensors
                     // array; the user-facing "Sensor Mask Number".
                     sensor_mask_number: Some(index as u32),
+                },
+                temp,
+            ));
+        }
+
+        // Authoritative hot spot / VRAM readings from ThermChannelGetInfo, when
+        // the driver exposes them. These are the *confirmed* GPU_MAX (hot spot)
+        // and MEMORY (VRAM) channels — stronger evidence than the positional
+        // heuristic's hardcoded index 9 / "last index" guesses. We add them as
+        // distinct, clearly-named sensors so a consumer can prefer the
+        // authoritative reading when present; the heuristic entries remain
+        // available as fallback.
+        if let Some(temp) = auth_hotspot {
+            extra_sensors.push((
+                SensorDesc {
+                    controller: ThermalController::GpuInternal,
+                    target: ThermalTarget::Gpu,
+                    range: Range::default(),
+                    name: Some("Hot Spot (authoritative)".to_string()),
+                    sensor_mask_number: therm_channels
+                        .as_ref()
+                        .and_then(|c| c.hotspot_index())
+                        .map(|i| i as u32),
+                },
+                temp,
+            ));
+        }
+        if let Some(temp) = auth_memory {
+            extra_sensors.push((
+                SensorDesc {
+                    controller: ThermalController::GpuInternal,
+                    target: ThermalTarget::Memory,
+                    range: Range::default(),
+                    name: Some("Memory (authoritative)".to_string()),
+                    sensor_mask_number: therm_channels
+                        .as_ref()
+                        .and_then(|c| c.memory_index())
+                        .map(|i| i as u32),
                 },
                 temp,
             ));
@@ -558,6 +614,14 @@ impl Gpu {
 
     pub fn thermal_sensors(&self, mask: i32) -> nvapi::Result<ThermalSensors> {
         self.gpu.thermal_sensors(mask).map_err(Into::into)
+    }
+
+    /// Thermal-channel capability descriptor (undocumented
+    /// `NvAPI_GPU_ThermChannelGetInfo`). Best-effort; returns `Ok` with the
+    /// descriptor or an error that should be tolerated by callers (some GPUs
+    /// stub this call). See [`PhysicalGpu::thermal_channel_info`](nvapi::PhysicalGpu::thermal_channel_info).
+    pub fn thermal_channel_info(&self) -> nvapi::Result<ThermalChannelInfo> {
+        self.gpu.thermal_channel_info().map_err(Into::into)
     }
 
     pub fn set_cooler_levels<I: IntoIterator<Item = (FanCoolerId, CoolerSettings)>>(
