@@ -324,66 +324,53 @@ impl Gpu {
             _ => None,
         };
 
-        // Build the typed sensor list from the RTSS channel data.
-        // - Known primary channels (GPU_AVG/MAX/BOARD/MEMORY/PWR_SUPPLY) get
-        //   their semantic name + target.
-        // - Remaining populated channels (ch_type=255, unclassified) get the
-        //   historical positional names: Memory Controller / Memory Module
-        //   Hotspot / Memory Junction (last), so output stays comparable to
-        //   the old values[40] heuristic.
+        // Build the sensor list from the RTSS channel data. Sensors are
+        // identified by their `channel_type` (GPU_AVG/GPU_MAX/BOARD/MEMORY/
+        // PWR_SUPPLY, or 255=unclassified) — there is no free-form name; the
+        // type IS the classification. Core (GPU_AVG) is emitted first so
+        // positional consumers (sensors.first()) still see the core temp.
         let mut extra_sensors: Vec<(SensorDesc, f32)> = Vec::new();
 
-        // Helper: emit a sensor for a channel index if it has a live reading.
-        let type_name_target: [(ThermalTarget, &str); 5] = [
-            (ThermalTarget::Gpu, "Core"),
-            (ThermalTarget::Gpu, "Hot Spot"),
-            (ThermalTarget::Board, "Board"),
-            (ThermalTarget::Memory, "Memory"),
-            (ThermalTarget::PowerSupply, "Power Supply"),
+        // ThermalTarget per standard channel type.
+        let type_target: [ThermalTarget; 5] = [
+            ThermalTarget::Gpu,          // GPU_AVG (core)
+            ThermalTarget::Gpu,          // GPU_MAX (hot spot)
+            ThermalTarget::Board,
+            ThermalTarget::Memory,
+            ThermalTarget::PowerSupply,
         ];
         if let (Some(info), Some(status)) = (therm_info.as_ref(), therm_status.as_ref()) {
-            for ty in 0..type_name_target.len() {
+            // Standard primary channels first, in type order (Core, then Hot
+            // Spot, Board, Memory, Power Supply).
+            for ty in 0..type_target.len() {
                 let Some(idx) = info.primary.get(ty).copied().flatten() else {
                     continue;
                 };
                 let Some(temp) = status.get(idx as usize) else {
                     continue;
                 };
-                let (target, name) = type_name_target[ty];
+                let target = type_target[ty];
                 extra_sensors.push((
-                    sensor_desc_for_channel(name, target, idx as u32, info.channel_info(idx as usize)),
+                    sensor_desc_for_channel(target, idx as u32, info.channel_info(idx as usize)),
                     temp,
                 ));
             }
 
-            // Unclassified channels (ch_type=255, not a primary typed channel):
-            // name by position. Collect their indices in ascending order.
-            let unclassified: Vec<u32> = status
-                .temps
-                .iter()
-                .filter_map(|(i, _)| {
-                    let idx = *i as u32;
-                    // Skip indices already consumed as a typed primary channel.
-                    let is_primary = info
-                        .primary
-                        .iter()
-                        .any(|p| p.map(|p| p as u32) == Some(idx));
-                    if is_primary {
-                        return None;
-                    }
-                    Some(idx)
-                })
-                .collect();
-            let last_unc = unclassified.last().copied();
-            for idx in &unclassified {
-                let name = if Some(*idx) == last_unc {
-                    "Memory Junction".to_string()
-                } else {
-                    "Memory Module Hotspot".to_string()
-                };
-                let temp = status.get(*idx as usize).unwrap_or(0.0);
+            // Remaining populated channels (ch_type=255, unclassified — e.g.
+            // per-VRAM-module hotspots on desktop cards). Emitted in ascending
+            // channel order, all uniformly unclassified (distinguished only by
+            // their channel index). Target defaults to Gpu.
+            for &(idx, _) in status.temps.iter() {
+                let is_primary = info
+                    .primary
+                    .iter()
+                    .any(|p| p.map(|p| p as usize) == Some(idx));
+                if is_primary {
+                    continue;
+                }
+                let temp = status.get(idx).unwrap_or(0.0);
                 extra_sensors.push((
-                    sensor_desc_for_channel(&name, ThermalTarget::Gpu, *idx, info.channel_info(*idx as usize)),
+                    sensor_desc_for_channel(ThermalTarget::Gpu, idx as u32, info.channel_info(idx)),
                     temp,
                 ));
             }
@@ -422,22 +409,15 @@ impl Gpu {
                 .collect(),
             sensors: {
                 // RTSS path: if we got authoritative channel data, Core is
-                // already at extra_sensors[0] (emitted first above). Prepend it
-                // so positional consumers (sensors.first()) still see Core.
-                // Otherwise fall back to the documented thermal_settings (Core
-                // only) for GPUs that don't expose GetInfo.
+                // already at extra_sensors[0] (emitted first above). Otherwise
+                // fall back to the documented thermal_settings (Core only) for
+                // GPUs that don't expose GetInfo.
                 let mut sensors: Vec<(SensorDesc, f32)> = Vec::new();
-                let have_rtss_core = extra_sensors
-                    .first()
-                    .is_some_and(|(d, _)| d.name.as_deref() == Some("Core"));
-                if !have_rtss_core {
+                if extra_sensors.is_empty() {
                     if let Ok(s) = allowable_result(self.gpu.thermal_settings(None))? {
                         for s in s {
-                            let mut desc: SensorDesc = From::from(s);
+                            let desc: SensorDesc = From::from(s);
                             let temp = s.current_temperature.0 as f32;
-                            if desc.target == ThermalTarget::Gpu {
-                                desc.name = Some("Core".to_string());
-                            }
                             sensors.push((desc, temp));
                         }
                     }
@@ -845,27 +825,15 @@ pub struct SensorDesc {
     pub controller: ThermalController,
     pub target: ThermalTarget,
     pub range: Range<Celsius>,
-    /// Human-readable semantic name for this sensor.
-    ///
-    /// `None` for sensors reported by the documented
-    /// `NvAPI_GPU_GetThermalSettings` (where `target` already identifies
-    /// them). Set for sensors decoded from the undocumented
-    /// `NvAPI_GPU_GetThermalSensors` positional array, e.g. "Hot Spot",
-    /// "Memory Controller", "Memory Junction", or "Memory Module Hotspot".
+    /// The RTSS ThermChannel channel index this reading comes from. Channel
+    /// 0 = GPU_AVG (Core), 1 = GPU_MAX (Hot Spot), etc. — indexed directly by
+    /// GetInfo's priChIdx. `None` for documented sensors that don't come from
+    /// the ThermChannel API.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub name: Option<String>,
-    /// The RTSS ThermChannel channel index this reading comes from (the
-    /// user-facing "Sensor Mask Number"). Channel 0 = GPU_AVG (Core),
-    /// 1 = GPU_MAX (Hot Spot), etc. — indexed directly by GetInfo's priChIdx.
-    /// `None` for documented sensors that don't come from the ThermChannel API.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
-    pub sensor_mask_number: Option<u32>,
+    pub channel_num: Option<u32>,
     /// `NV_GPU_THERMAL_THERM_CHANNEL_TYPE` (0=GPU_AVG, 1=GPU_MAX, 2=BOARD,
     /// 3=MEMORY, 4=PWR_SUPPLY, 255=unclassified). Research metadata from GetInfo.
     #[cfg_attr(
@@ -899,8 +867,7 @@ impl From<Sensor> for SensorDesc {
             controller: sensor.controller,
             target: sensor.target,
             range: sensor.default_temperature_range,
-            name: None,
-            sensor_mask_number: None,
+            channel_num: None,
             channel_type: None,
             offset_sw: None,
             offset_hw: None,
@@ -918,9 +885,10 @@ impl SensorDesc {
 }
 
 /// Build a `SensorDesc` for one RTSS thermal channel, attaching the channel
-/// index and (when available) the GetInfo metadata fields for research.
+/// index and (when available) the GetInfo metadata fields for research. The
+/// sensor is identified by its `channel_type` (set from the GetInfo record) —
+/// there is no free-form name.
 fn sensor_desc_for_channel(
-    name: &str,
     target: ThermalTarget,
     channel: u32,
     info: Option<&nvapi::ChannelInfo>,
@@ -929,8 +897,7 @@ fn sensor_desc_for_channel(
         controller: ThermalController::GpuInternal,
         target,
         range: Range::default(),
-        name: Some(name.to_string()),
-        sensor_mask_number: Some(channel),
+        channel_num: Some(channel),
         channel_type: info.map(|c| c.ch_type),
         offset_sw: info.map(|c| c.offset_sw),
         offset_hw: info.map(|c| c.offset_hw),
