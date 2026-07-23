@@ -27,8 +27,8 @@ pub use nvapi::{
     Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
     PciIdentifiers, Percentage, PerformanceDecreaseReason, PerfInfo, PerfLimitId, PerfStatus,
     PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm,
-    SystemType, ThermalChannelInfo, ThermalController, ThermalSensors, ThermalTarget,
-    UtilizationDomain, Utilizations,
+    SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalSensors,
+    ThermalTarget, UtilizationDomain, Utilizations,
     Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
 };
 
@@ -329,22 +329,37 @@ impl Gpu {
         positional.sort_by_key(|(i, _)| *i);
         positional.dedup_by_key(|(i, _)| *i);
 
-        // Authoritative thermal-channel map from the undocumented
-        // NvAPI_GPU_ThermChannelGetInfo (0x0bc8163d). When the driver supports
-        // it, `priChIdx` tells us the *true* channel index for the hot spot
-        // (GPU_MAX) and VRAM (MEMORY) readings — superseding the positional
-        // heuristic below. Best-effort: this call is stubbed on some GPUs
-        // (notably laptop builds); on failure we simply fall back to the
-        // heuristic and lose nothing.
+        // Authoritative thermal-channel path from the undocumented
+        // NvAPI_GPU_ThermChannelGetInfo (0x0bc8163d) + its STATUS half
+        // (0x65fe3aad, channel[32] layout). When the driver supports it,
+        // GetInfo returns a priChIdx LUT naming the *true* channel index for
+        // the hot spot (GPU_MAX) and VRAM (MEMORY) readings, and GetStatus
+        // (called with GetInfo's channel_mask) returns the live temp at that
+        // index directly — a single authoritative read, vs the positional
+        // heuristic's 8x bit-mask scan + guessed index mapping below.
+        //
+        // Best-effort: on some GPUs GetInfo/GetStatus may be unsupported; on
+        // failure we fall back to the heuristic and lose nothing. NOTE: the
+        // GetStatus channel[] index space is NOT the same as the values[40]
+        // positional space — do not cross-reference priChIdx into `positional`.
+        // (Verified on a laptop GPU: GetInfo returns OK with channel_mask=0xff,
+        // priChIdx GPU_MAX=1 / MEMORY=7; GetStatus reads them directly.)
         let therm_channels = allowable_result(self.thermal_channel_info())?.ok();
-        let auth_hotspot = therm_channels
-            .as_ref()
-            .and_then(|c| c.hotspot_index())
-            .and_then(|idx| positional.iter().find(|(i, _)| *i == idx as usize).map(|(_, t)| *t));
-        let auth_memory = therm_channels
-            .as_ref()
-            .and_then(|c| c.memory_index())
-            .and_then(|idx| positional.iter().find(|(i, _)| *i == idx as usize).map(|(_, t)| *t));
+        let (auth_hotspot, auth_memory) = match &therm_channels {
+            Some(info) if info.channel_mask != 0 => {
+                let status = allowable_result(self.thermal_channel_status(info.channel_mask))?.ok();
+                let hotspot = status
+                    .as_ref()
+                    .and_then(|s| info.hotspot_index())
+                    .and_then(|idx| status.as_ref().and_then(|s| s.get(idx as usize)));
+                let memory = status
+                    .as_ref()
+                    .and_then(|_| info.memory_index())
+                    .and_then(|idx| status.as_ref().and_then(|s| s.get(idx as usize)));
+                (hotspot, memory)
+            }
+            _ => (None, None),
+        };
 
         let last_index = positional.last().map(|(i, _)| *i);
         // High-precision core reading (undocumented index 8) to enrich the
@@ -622,6 +637,12 @@ impl Gpu {
     /// stub this call). See [`PhysicalGpu::thermal_channel_info`](nvapi::PhysicalGpu::thermal_channel_info).
     pub fn thermal_channel_info(&self) -> nvapi::Result<ThermalChannelInfo> {
         self.gpu.thermal_channel_info().map_err(Into::into)
+    }
+
+    /// Live thermal-channel readings (the STATUS half). `channel_mask` should
+    /// come from [`Self::thermal_channel_info`]. Best-effort.
+    pub fn thermal_channel_status(&self, channel_mask: u32) -> nvapi::Result<ThermalChannelStatus> {
+        self.gpu.thermal_channel_status(channel_mask).map_err(Into::into)
     }
 
     pub fn set_cooler_levels<I: IntoIterator<Item = (FanCoolerId, CoolerSettings)>>(

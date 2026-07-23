@@ -832,3 +832,42 @@ impl RawConversion for thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO {
         })
     }
 }
+
+/// Live thermal-channel readings from the STATUS half of the ThermChannel
+/// pair (ID 0x65fe3aad, same as `GetThermalSensors` but the `channel[32]`
+/// layout). Indexed DIRECTLY by channel number (matching GetInfo's priChIdx),
+/// so `temps` holds one Celsius reading per channel whose bit is set in the
+/// `channel_mask` passed in. Decode matches `ThermalSensors` (celsius*256).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ThermalChannelStatus {
+    pub channel_mask: u32,
+    /// `(channel_index, celsius)` for each populated channel.
+    pub temps: Vec<(usize, f32)>,
+}
+
+impl ThermalChannelStatus {
+    /// Temperature at a specific channel index (e.g. `priChIdx[GPU_MAX]`).
+    pub fn get(&self, channel: usize) -> Option<f32> {
+        self.temps.iter().find(|(i, _)| *i == channel).map(|(_, t)| *t)
+    }
+}
+
+impl RawConversion for thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS {
+    type Target = ThermalChannelStatus;
+    type Error = sys::ArgumentRangeError;
+
+    fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
+        trace!("convert_raw({:#?})", self);
+        let temps = self
+            .channel
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2::decode(v).map(|t| (i, t)))
+            .collect();
+        Ok(ThermalChannelStatus {
+            channel_mask: self.channel_mask,
+            temps,
+        })
+    }
+}

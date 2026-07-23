@@ -756,11 +756,13 @@ impl PhysicalGpu {
     }
 
     /// Thermal-channel capability descriptor (undocumented
-    /// `NvAPI_GPU_ThermChannelGetInfo`, 0x0bc8163d). Best-effort: on some
-    /// GPUs (notably laptop builds) this is stubbed and returns an error —
-    /// callers must tolerate failure. On success it provides the authoritative
-    /// `priChIdx` LUT (which channel index is the hot spot / VRAM reading) for
-    /// [`Self::thermal_sensors`] to consume.
+    /// `NvAPI_GPU_ThermChannelGetInfo`, 0x0bc8163d). Best-effort: callers
+    /// must tolerate failure (some driver/GPU combos may not expose it). On
+    /// success it provides the authoritative `priChIdx` LUT (which channel
+    /// index is the hot spot / VRAM reading) — feed its `channel_mask` to
+    /// [`Self::thermal_channel_status`] and index the result by priChIdx.
+    /// (Verified working on a laptop dGPU: channel_mask=0xff, priChIdx
+    /// GPU_MAX=1, MEMORY=7.)
     pub fn thermal_channel_info(
         &self,
     ) -> crate::Result<
@@ -776,6 +778,43 @@ impl PhysicalGpu {
         };
 
         unsafe { nvcall!(NvAPI_GPU_ThermChannelGetInfo@get{data}(self.0) => raw) }
+    }
+
+    /// Live thermal-channel readings (the STATUS half of the ThermChannel
+    /// pair; ID 0x65fe3aad, same QueryInterface entry as `GetThermalSensors`
+    /// but the `channel[32]` layout). `channel_mask` should come from
+    /// [`Self::thermal_channel_info`]'s `channel_mask`; the returned temps are
+    /// indexed directly by channel number, so `get(priChIdx[GPU_MAX])` is the
+    /// authoritative hot-spot temperature.
+    pub fn thermal_channel_status(
+        &self,
+        channel_mask: u32,
+    ) -> crate::Result<
+        <thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS as RawConversion>::Target,
+    > {
+        trace!("gpu.thermal_channel_status(0x{:x})", channel_mask);
+        let mut data = thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2 {
+            version: NvVersion::new(
+                size_of::<thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2>(),
+                2,
+            ),
+            ..Default::default()
+        };
+        data.channel_mask = channel_mask;
+
+        // Same FFI symbol as GetThermalSensors (identical QueryInterface ID
+        // 0x65fe3aad); cast the STATUS struct pointer to the sensors type the
+        // FFI signature expects — the driver only cares about the 168-byte size
+        // and the version/channel_mask fields, which match.
+        let status = unsafe {
+            sys::api::NvAPI_GPU_GetThermalSensors(
+                self.0,
+                ptr::from_mut(&mut data).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetThermalSensors, status)
+            .map_err(Into::into)
+            .and_then(|_| data.convert_raw().map_err(Into::into))
     }
 
     pub fn thermal_limit_info(
