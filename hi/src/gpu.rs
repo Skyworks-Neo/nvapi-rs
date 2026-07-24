@@ -374,6 +374,31 @@ impl Gpu {
                     temp,
                 ));
             }
+
+            // Sensor pairing: RTSS exposes two channels per physical sensor —
+            // `(thermDevIdx, 0)` (raw) and `(thermDevIdx, 1)` (with `offset_hw`
+            // applied by the driver). Mark each `ProvIdx==1` channel with the
+            // index of its `ProvIdx==0` sibling so the display can annotate it.
+            for (desc, _) in extra_sensors.iter_mut() {
+                let Some(chan) = desc.channel_num else {
+                    continue;
+                };
+                let Some(ci) = info.channel_info(chan as usize) else {
+                    continue;
+                };
+                if ci.therm_dev_prov_idx != 1 {
+                    continue;
+                }
+                // Find a populated channel with the same device and ProvIdx==0.
+                if let Some((sibling, _)) = info.channels.iter().enumerate().find(|(i, c)| {
+                    *i as u32 != chan
+                        && c.as_ref().is_some_and(|c| {
+                            c.therm_dev_idx == ci.therm_dev_idx && c.therm_dev_prov_idx == 0
+                        })
+                }) {
+                    desc.same_sensor_as = Some(sibling as u32);
+                }
+            }
         }
 
         Ok(GpuStatus {
@@ -859,6 +884,15 @@ pub struct SensorDesc {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub scaling: Option<i32>,
+    /// Cross-reference set when this channel is the `thermDevProvIdx==1` half
+    /// of a paired reading from the same physical sensor as another channel.
+    /// The driver has already applied `offset_hw` to this channel's STATUS
+    /// reading; the paired `(dev, 0)` channel has not. Display-only annotation.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub same_sensor_as: Option<u32>,
 }
 
 impl From<Sensor> for SensorDesc {
@@ -872,6 +906,7 @@ impl From<Sensor> for SensorDesc {
             offset_sw: None,
             offset_hw: None,
             scaling: None,
+            same_sensor_as: None,
         }
     }
 }
@@ -902,6 +937,7 @@ fn sensor_desc_for_channel(
         offset_sw: info.map(|c| c.offset_sw),
         offset_hw: info.map(|c| c.offset_hw),
         scaling: info.map(|c| c.scaling),
+        same_sensor_as: None,
     };
     // If the GetInfo record carried a min/max range, surface it. These are in
     // the same celsius*256 fixed-point as the live readings (see `scaling`),

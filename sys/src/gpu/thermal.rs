@@ -374,6 +374,24 @@ pub mod private {
         }
     }
 
+    impl NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1 {
+        /// `data.device.thermDevIdx` (byte 0 of the union): identifies the
+        /// physical thermal device (sensor group) this channel reads from.
+        /// Two channels sharing the same `therm_dev_idx` read the same physical
+        /// sensor — distinguished by `therm_dev_prov_idx`.
+        pub fn therm_dev_idx(&self) -> u8 {
+            self.data.data[0]
+        }
+
+        /// `data.device.thermDevProvIdx` (byte 1 of the union): the provider
+        /// index within the device. A `(dev, 1)` channel's STATUS reading has
+        /// `offset_hw` already applied by the driver; the matching `(dev, 0)`
+        /// reading has not (even when its own `offset_hw` is non-zero).
+        pub fn therm_dev_prov_idx(&self) -> u8 {
+            self.data.data[1]
+        }
+    }
+
     /// Number of thermal channels the params struct reserves room for.
     pub const NV_GPU_THERMAL_THERM_CHANNEL_MAX: usize = 32;
     /// Number of primary-channel LUT entries (`priChIdx`).

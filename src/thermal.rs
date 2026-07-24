@@ -775,6 +775,13 @@ pub struct ChannelInfo {
     pub max_temp: i32,
     pub is_temp_sim_supported: u8,
     pub flags: u8,
+    /// `data.device.thermDevIdx`: the physical thermal device this channel
+    /// reads from. Channels sharing this value read the same sensor.
+    pub therm_dev_idx: u8,
+    /// `data.device.thermDevProvIdx`: provider index within the device. For a
+    /// `(dev, 1)` channel the driver has already applied `offset_hw` to its
+    /// STATUS reading; the matching `(dev, 0)` channel has not.
+    pub therm_dev_prov_idx: u8,
 }
 
 impl From<&thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1> for ChannelInfo {
@@ -791,6 +798,8 @@ impl From<&thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1> for ChannelIn
             max_temp: c.max_temp,
             is_temp_sim_supported: c.is_temp_sim_supported,
             flags: c.flags,
+            therm_dev_idx: c.therm_dev_idx(),
+            therm_dev_prov_idx: c.therm_dev_prov_idx(),
         }
     }
 }
