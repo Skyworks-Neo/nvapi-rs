@@ -65,9 +65,29 @@ pub type EffectiveClocks = BTreeMap<ClockDomain, Kilohertz>;
 /// parity with GPU-Z should treat these labels as advisory, not authoritative,
 /// for non-public domains.
 ///
-/// Additionally, `Pciegen` (index 31) is NOT a clock frequency — its value is
-/// a PCIe link-rate tap/generation marker (1, 2, …), not kHz. Treat it as a
-/// diagnostic, not a clock.
+/// Observed on an RTX 4060 Laptop (Ada), under load:
+///   Gpc(0)≈2200MHz tracks the Graphics core clock (2145MHz reported by
+///     GetAllClockFrequencies); M(4)≈7993MHz tracks Memory (8000MHz).
+///   The fabric clocks that SCALE with load (Xbar(1) 71→1984, Sys(2) 249→1894,
+///     Host(5) 825→1350, Msd(21) 246→1970) are the dynamically-clocked fabric
+///     domains; the constant ones (Hub(3)=450, Disp(6)=675, Pwr(20)=540,
+///     Utils(22)=108) are fixed clocks. GPU-Z's "crossbar clock" most likely
+///     corresponds to whichever fabric domain scales with the core on a given
+///     architecture — verify against GPU-Z rather than trusting the enum label.
+///
+/// Additionally, `Pciegen` (index 31) is NOT a clock frequency — **its value
+/// IS the current PCIe link generation number** (1=Gen1 … 5=Gen5). It is
+/// stored in the same `effective_frequency` field as the clock kHz values but
+/// is a raw integer: observed 1 at idle (Gen1 link power-saving) rising to 4
+/// under load (Gen4) on an RTX 4060 Laptop. This is an alternative
+/// NVAPI-sourced way to read the current PCIe gen (vs NVML
+/// `nvmlDeviceGetCurrPcieLinkGeneration`). NB: the `Kilohertz` wrapper is
+/// semantically wrong here; consumers should interpret index 31 as a gen
+/// number, not kHz.
+///
+/// `Msd` (index 21) is a memory sub-domain clock (most likely the GDDR
+/// controller/PHY serdes) — observed scaling ~1/4 of the effective memory rate
+/// (1970 MHz at 8000 MHz memory on RTX 4060). Treat the MSD label as advisory.
 pub type AllClocks = BTreeMap<ClockDomainId, Kilohertz>;
 
 /// Extract all 32 clock domains from a raw GetAllClocks V2 result (companion
