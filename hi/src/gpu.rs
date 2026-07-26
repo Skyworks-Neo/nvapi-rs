@@ -23,12 +23,12 @@ pub use nvapi::{
     ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies, ClockLockEntry,
     ClockLockValue, ConnectedIdsFlags, CoolerControl, CoolerController, CoolerInfo, CoolerPolicy,
     CoolerSettings, CoolerStatus, CoolerTarget, CoolerType, DisplayId, DriverModel, EccErrors,
-    FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts,
-    MicrovoltsDelta, PState, PciIdentifiers, Percentage, PerfInfo, PerfLimitId, PerfStatus,
-    PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm,
-    SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalTarget,
-    UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain, VoltageStatus,
-    VoltageTable,
+    EffectiveClocks, FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta,
+    MemoryInfo, Microvolts, MicrovoltsDelta, PState, PciIdentifiers, Percentage, PerfInfo,
+    PerfLimitId, PerfStatus, PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker,
+    RamType, Range, Rpm, SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController,
+    ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain,
+    VoltageStatus, VoltageTable,
 };
 
 pub struct Gpu {
@@ -116,6 +116,10 @@ impl From<ClockRange> for VfpRange {
 pub struct GpuStatus {
     pub pstate: PState,
     pub clocks: ClockFrequencies,
+    /// Effective (actually-running) clocks from GetAllClocks V2
+    /// (`NV_GPU_CLOCK_INFO_V2`). `None` where the driver doesn't support the
+    /// V2 layout. Distinct from `clocks` (the GetAllClockFrequencies table).
+    pub effective_clocks: Option<EffectiveClocks>,
     pub memory: Option<MemoryInfo>,
     pub pcie_lanes: Option<u32>,
     pub ecc: EccStatus,
@@ -126,6 +130,10 @@ pub struct GpuStatus {
     pub tachometer: Option<u32>,
     pub utilization: Utilizations,
     pub power: BTreeMap<PowerTopologyChannelId, Percentage>,
+    /// Live per-channel/per-rail power from the NDA-private PowerMonitor pair
+    /// (`0xC12EB19E`/`0xF40238EF`). `None` when the GPU/driver doesn't support
+    /// it (stubbed on some combos — probed via GetInfo's `b_supported`).
+    pub power_monitor: Option<PowerMonitorStatus>,
     /// `(descriptor, celsius)` thermal readings with sub-degree precision.
     pub sensors: Vec<(SensorDesc, f32)>,
     pub coolers: BTreeMap<FanCoolerId, CoolerStatus>,
@@ -379,6 +387,7 @@ impl Gpu {
         Ok(GpuStatus {
             pstate: self.gpu.current_pstate()?,
             clocks: self.gpu.clock_frequencies(ClockFrequencyType::Current)?,
+            effective_clocks: self.gpu.effective_clocks().ok(),
             memory: allowable_result(self.gpu.memory_info())?.ok(),
             pcie_lanes: match self.gpu.bus_type() {
                 Ok(BusType::PciExpress) => {
@@ -407,6 +416,24 @@ impl Gpu {
                 .into_iter()
                 .map(|(ch, power)| (ch, power.into()))
                 .collect(),
+            power_monitor: {
+                // NDA-private PowerMonitor pair. Entirely best-effort: this is
+                // research/gated data and must never break the core status read.
+                // Swallow every error (NotSupported, NoImplementation,
+                // IncompatibleStructVersion/-9 from a struct-size mismatch, the
+                // -104 NVIDIA_DEVICE_NOT_FOUND stub, etc.) → just yield None.
+                let info = self.gpu.power_monitor_info().ok();
+                if info.as_ref().is_some_and(|i| i.supported && i.channel_mask != 0) {
+                    let mask = info.as_ref().unwrap().channel_mask;
+                    let mut status = self.gpu.power_monitor_status(mask).ok();
+                    if let Some(status) = status.as_mut() {
+                        status.merge_info(info.as_ref().unwrap());
+                    }
+                    status
+                } else {
+                    None
+                }
+            },
             sensors: {
                 // RTSS path: if we got authoritative channel data, Core is
                 // already at extra_sensors[0] (emitted first above). Otherwise
