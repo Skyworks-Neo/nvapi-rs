@@ -48,6 +48,26 @@ pub type EffectiveClocks = BTreeMap<ClockDomain, Kilohertz>;
 /// Gpc2/Xbar2/Sys2/Hub2, Pciegen, etc. — i.e. everything GPU-Z's "crossbar
 /// clock" and similar readings come from. Only domains with a non-zero
 /// `effective_frequency` are included.
+///
+/// **ARCHITECTURE-DEPENDENT LABELS — important caveat.** The
+/// [`ClockDomainId`] enum names (Gpc/Xbar/Sys/Hub/…) come from the RTSS
+/// (RivaTuner) NDA header and are a *historical* convention. The first four
+/// indices are dual-aliased in that header — `GPC≡NV=0, XBAR≡G=1, SYS≡S=2,
+/// HUB≡R=3` — reflecting that the NV/G/S/R names were the pre-Maxwell
+/// convention and GPC/XBAR/SYS/HUB the Maxwell+ convention. Because
+/// `NV_GPU_CLOCK_INFO_V2` is undocumented/NDA, **the physical clock living at
+/// each index SHIFTED across GPU architectures**, so on modern GPUs (Ada/
+/// Hopper/Blackwell) the value at e.g. index 3 (labelled "Hub" here) may be
+/// what GPU-Z calls "Xbar", and other fabric labels may be similarly rotated.
+/// The `effective_frequency` VALUES are correct (verified for Gpc/Graphics and
+/// M/Memory); only the human-readable LABELS are arch-stale. Tools like GPU-Z
+/// carry their own arch-specific index→name remap; consumers wanting exact
+/// parity with GPU-Z should treat these labels as advisory, not authoritative,
+/// for non-public domains.
+///
+/// Additionally, `Pciegen` (index 31) is NOT a clock frequency — its value is
+/// a PCIe link-rate tap/generation marker (1, 2, …), not kHz. Treat it as a
+/// diagnostic, not a clock.
 pub type AllClocks = BTreeMap<ClockDomainId, Kilohertz>;
 
 /// Extract all 32 clock domains from a raw GetAllClocks V2 result (companion
