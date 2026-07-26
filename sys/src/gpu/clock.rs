@@ -148,6 +148,119 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_GetAllClocks;
     }
 
+    // ------------------------------------------------------------------
+    // GetAllClocks V2 — the "effective clocks" layout (same function ID
+    // 0x1bd69f49, different struct). RTSS (RivaTuner) source names this
+    // `NV_GPU_CLOCK_INFO_V2` and reads `extendedDomain[GRAPHICS/MEMORY/
+    // PROCESSOR].effectiveFrequency` for the effective core/memory clocks
+    // (the actually-running, boosted clocks — distinct from the
+    // GetAllClockFrequencies base/boost/current table).
+    // ------------------------------------------------------------------
+
+    nvenum! {
+        /// Clock domain id (RTSS `NV_GPU_CLOCK_DOMAIN_ID`). Indexes the
+        /// `domain[]` / `extended_domain[]` arrays. Only GRAPHICS(0)/MEMORY(4)/
+        /// PROCESSOR(7) are read for effective clocks; the rest are research.
+        /// (RTSS aliases some domains to the same value — e.g. NV==GPC==0 —
+        /// those aliases are omitted; Rust enums can't repeat discriminants.)
+        pub enum NV_GPU_CLOCK_DOMAIN_ID / ClockDomainId {
+            NV_GPU_CLOCK_DOMAIN_GPC / Gpc = 0,
+            NV_GPU_CLOCK_DOMAIN_XBAR / Xbar = 1,
+            NV_GPU_CLOCK_DOMAIN_SYS / Sys = 2,
+            NV_GPU_CLOCK_DOMAIN_HUB / Hub = 3,
+            NV_GPU_CLOCK_DOMAIN_M / M = 4,
+            NV_GPU_CLOCK_DOMAIN_HOST / Host = 5,
+            NV_GPU_CLOCK_DOMAIN_DISP / Disp = 6,
+            NV_GPU_CLOCK_DOMAIN_HOTCLK / Hotclk = 7,
+            NV_GPU_CLOCK_DOMAIN_PCLK0 / Pclk0 = 8,
+            NV_GPU_CLOCK_DOMAIN_PCLK1 / Pclk1 = 9,
+            NV_GPU_CLOCK_DOMAIN_BYPCLK / Bypclk = 10,
+            NV_GPU_CLOCK_DOMAIN_XCLK / Xclk = 11,
+            NV_GPU_CLOCK_DOMAIN_VPV / Vpv = 12,
+            NV_GPU_CLOCK_DOMAIN_VPS / Vps = 13,
+            NV_GPU_CLOCK_DOMAIN_GPUCACHECLK / Gpucacheclk = 14,
+            NV_GPU_CLOCK_DOMAIN_GPC2 / Gpc2 = 15,
+            NV_GPU_CLOCK_DOMAIN_XBAR2 / Xbar2 = 16,
+            NV_GPU_CLOCK_DOMAIN_SYS2 / Sys2 = 17,
+            NV_GPU_CLOCK_DOMAIN_HUB2 / Hub2 = 18,
+            NV_GPU_CLOCK_DOMAIN_LEG / Leg = 19,
+            NV_GPU_CLOCK_DOMAIN_PWR / Pwr = 20,
+            NV_GPU_CLOCK_DOMAIN_MSD / Msd = 21,
+            NV_GPU_CLOCK_DOMAIN_UTILS / Utils = 22,
+            NV_GPU_CLOCK_DOMAIN_COLD_NV / ColdNv = 23,
+            NV_GPU_CLOCK_DOMAIN_COLD_HOTCLK / ColdHotclk = 24,
+            NV_GPU_CLOCK_DOMAIN_LTC2 / Ltc2 = 25,
+            NV_GPU_CLOCK_DOMAIN_2D / TwoD = 26,
+            NV_GPU_CLOCK_DOMAIN_3D / ThreeD = 27,
+            NV_GPU_CLOCK_DOMAIN_HOST1X / Host1x = 28,
+            NV_GPU_CLOCK_DOMAIN_DISP0 / Disp0 = 29,
+            NV_GPU_CLOCK_DOMAIN_DISP1 / Disp1 = 30,
+            NV_GPU_CLOCK_DOMAIN_PCIEGEN / Pciegen = 31,
+        }
+    }
+
+    nvstruct! {
+        /// Per-domain clock entry (RTSS `NV_GPU_CLOCK_INFO_DOMAIN`). The
+        /// `flags` word packs: `bIsPresent:1 | bDrivingDDR:1 | bSetClock:1 |
+        /// pstateUsage:2 | reserved:27` (RTSS C bitfield). `frequency` is kHz.
+        pub struct NV_GPU_CLOCK_INFO_DOMAIN {
+            pub frequency: u32,
+            pub flags: u32,
+        }
+    }
+
+    impl NV_GPU_CLOCK_INFO_DOMAIN {
+        /// Bit 0: this domain is present on the GPU.
+        pub fn is_present(&self) -> bool {
+            self.flags & 1 != 0
+        }
+        /// Bit 1: driving DDR memory.
+        pub fn is_driving_ddr(&self) -> bool {
+            self.flags & 2 != 0
+        }
+        /// Bit 2: clock is set (not default).
+        pub fn is_set_clock(&self) -> bool {
+            self.flags & 4 != 0
+        }
+        /// Bits 3..4: P-state usage (0..3, semantics undocumented; research).
+        pub fn pstate_usage(&self) -> u32 {
+            (self.flags >> 3) & 3
+        }
+    }
+
+    nvstruct! {
+        /// Per-domain effective-clock entry (RTSS inline struct inside
+        /// `NV_GPU_CLOCK_INFO_V2.extendedDomain[]`). `effective_frequency` is
+        /// the actually-running frequency in kHz; `ratio_domain`/`ratio`
+        /// relate it to a parent domain (research semantics).
+        pub struct NV_GPU_CLOCK_INFO_EXTENDED_DOMAIN {
+            pub effective_frequency: u32,
+            pub ratio_domain: NV_GPU_CLOCK_DOMAIN_ID,
+            pub ratio: u32,
+            pub reserved: Padding<[u32; 4]>,
+        }
+    }
+
+    nvstruct! {
+        /// GetAllClocks V2 "effective clocks" params (RTSS
+        /// `NV_GPU_CLOCK_INFO_V2`). `domain[]` holds per-domain presence +
+        /// base frequency; `extended_domain[]` holds the effective (running)
+        /// frequency per domain. 32 entries each (`NVAPI_MAX_GPU_CLOCKS`).
+        pub struct NV_GPU_CLOCK_INFO_V2 {
+            pub version: NvVersion,
+            pub domain: Array<[NV_GPU_CLOCK_INFO_DOMAIN; super::NVAPI_MAX_GPU_CLOCKS]>,
+            pub extended_domain: Array<[NV_GPU_CLOCK_INFO_EXTENDED_DOMAIN; super::NVAPI_MAX_GPU_CLOCKS]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_EFFECTIVE_INFO NV_GPU_CLOCK_INFO_V2(2) }
+
+    // Note: GetAllClocks (ID 0x1bd69f49) is FFI-bound once above with the V1
+    // `NV_CLOCKS_INFO` pointer type. The V2 effective-clocks layout uses the
+    // SAME function ID — callers pass a `*mut NV_GPU_CLOCK_INFO_V2` (cast to
+    // the V1 pointer type at the call site), since the driver only sees a
+    // version-tagged buffer. No separate FFI binding is needed.
+
     pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_PROG_V1 = i32;
 
     nvstruct! {
