@@ -45,6 +45,36 @@ NvAPI_GetInterfaceVersionString = 0x01053fa5,
 // Note: declared in nvapi.h but not present in nvapi_interface.h table.
 // Not in the interface table, so no known ID for NvAPI_QueryInterface.
 // NvAPI_GetInterfaceVersionStringEx = <unknown>,
+//
+// NOTE — `nvapi_pepQueryInterface` is NOT an IID and is deliberately NOT wrapped
+// here. It is a SEPARATE exported SYMBOL of nvapi.dll (resolved by name via
+// GetProcAddress, exactly like nvapi_QueryInterface itself — not by a 32-bit ID
+// passed to nvapi_QueryInterface), so it cannot be an `Api` enum variant.
+//
+// "PEP" = Privileged Execution Path. It is a SECOND QueryInterface entry point
+// that routes NVAPI calls through an elevated RM escape for controls that need
+// admin privileges. Discovered in MSI Afterburner's RTHAL.dll init stub
+// (sub_10001070): when its `a2==1` flag is set it does
+//     dword_100DFBE4 = GetProcAddress(hModule, "nvapi_pepQueryInterface");
+// and, if present, routes ALL subsequent NVAPI resolution through that pointer
+// instead of the normal nvapi_QueryInterface path (dword_100DFBE0).
+//
+// Why it is NOT wrapped / NOT used by nvapi-rs or nvoc:
+//  1. It is NOT needed for GPU detection or any monitoring read. nvapi-rs/nvoc
+//     enumerate GPUs fine via the normal nvapi_QueryInterface + an explicit
+//     NvAPI_Initialize (see core/src/target.rs). MSI uses the normal path for
+//     enumeration too — PEP is only taken for a few privileged RM controls.
+//  2. The PEP path routes to \\.\NvAdminDevice and returns
+//     NVAPI_INVALID_USER_PRIVILEGE without elevation, so wrapping it would add
+//     an admin-privilege failure mode to every consumer for no monitoring gain.
+//  3. It is undocumented, absent from NVIDIA's interface table, and
+//     MSI-specific in its usage — wrapping it would bind us to a private,
+//     unstable entry point.
+//  4. The only things MSI reaches via PEP (raw MMIO / privileged limit sets)
+//     are exactly the surfaces nvoc has already concluded are unreachable
+//     without a kernel driver (see docs/gpuz-per-rail-investigation.md).
+// Kept here as a documentation-only record. Do NOT add as an Api variant and
+// do NOT route nvapi-rs resolution through it.
 NvAPI_GetDisplayDriverVersion = 0xf951a4d1,
 NvAPI_SYS_GetDriverAndBranchVersion = 0x2926aaad,
 NvAPI_EnumNvidiaDisplayHandle = 0x9abdd40d,
