@@ -445,6 +445,27 @@ impl PhysicalGpu {
             })
     }
 
+    /// All 32 effective clock domains via GetAllClocks V2 (ID 0x1bd69f49,
+    /// RTSS `NV_GPU_CLOCK_INFO_V2.extendedDomain[]`), keyed by
+    /// [`ClockDomainId`](crate::clock::ClockDomainId). Superset of
+    /// [`effective_clocks`](Self::effective_clocks): additionally exposes the
+    /// internal fabric clocks (Gpc, **Xbar/crossbar**, Sys, Hub, Host, …,
+    /// Pciegen). Only domains with a non-zero effective frequency are
+    /// returned.
+    pub fn all_clocks(&self) -> crate::NvapiResult<crate::clock::AllClocks> {
+        trace!("gpu.all_clocks()");
+        let mut data = clock::private::NV_GPU_CLOCK_INFO_V2 {
+            version: NvVersion::new(size_of::<clock::private::NV_GPU_CLOCK_INFO_V2>(), 2),
+            ..Default::default()
+        };
+        let status = unsafe {
+            sys::api::NvAPI_GPU_GetAllClocks(self.0, ptr::from_mut(&mut data).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetAllClocks, status)
+            .map_err(Into::into)
+            .map(|_| crate::clock::all_clocks_from_raw(&data))
+    }
+
     pub fn current_pstate(&self) -> crate::Result<PState> {
         trace!("gpu.current_pstate()");
 

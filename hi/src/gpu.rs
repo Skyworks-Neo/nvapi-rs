@@ -30,6 +30,7 @@ pub use nvapi::{
     Range, Rpm, SystemType,
     EffectiveClocks, ThermalChannelInfo, ThermalChannelStatus, ThermalController,
     ThermalTarget, UtilizationDomain, Utilizations,
+    AllClocks,
     Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
 };
 
@@ -127,6 +128,11 @@ pub struct GpuStatus {
     /// (`NV_GPU_CLOCK_INFO_V2`). `None` where the driver doesn't support the
     /// V2 layout. Distinct from `clocks` (the GetAllClockFrequencies table).
     pub effective_clocks: Option<EffectiveClocks>,
+    /// All 32 effective clock domains from GetAllClocks V2 (superset of
+    /// `effective_clocks`): includes the internal fabric clocks — Gpc,
+    /// **Xbar (crossbar)**, Sys, Hub, Host, Disp, Hotclk, Gpc2/Xbar2/Sys2/Hub2,
+    /// Pciegen, etc. `None` where the driver doesn't support the V2 layout.
+    pub all_clocks: Option<AllClocks>,
     pub memory: Option<MemoryInfo>,
     pub pcie_lanes: Option<u32>,
     pub ecc: EccStatus,
@@ -410,6 +416,7 @@ impl Gpu {
             pstate: self.gpu.current_pstate()?,
             clocks: self.gpu.clock_frequencies(ClockFrequencyType::Current)?,
             effective_clocks: self.gpu.effective_clocks().ok(),
+            all_clocks: self.gpu.all_clocks().ok(),
             memory: allowable_result(self.gpu.memory_info())?.ok(),
             pcie_lanes: match self.gpu.bus_type() {
                 Ok(BusType::PciExpress) => {

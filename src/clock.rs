@@ -14,6 +14,7 @@ use std::convert::Infallible;
 use std::fmt;
 
 pub use sys::gpu::clock::PublicClockId as ClockDomain;
+pub use sys::gpu::clock::private::ClockDomainId;
 pub use sys::gpu::clock::private::{PerfLimitId, VfPointType};
 pub use sys::gpu::power::private::{PerfFlags, PowerTopologyChannelId};
 
@@ -38,6 +39,30 @@ impl RawConversion for clock::NV_GPU_CLOCK_FREQUENCIES {
 /// (Graphics/Memory/Processor). Distinct from [`ClockFrequencies`] (the
 /// GetAllClockFrequencies base/boost/current table).
 pub type EffectiveClocks = BTreeMap<ClockDomain, Kilohertz>;
+
+/// All 32 effective clock domains from GetAllClocks V2 (RTSS
+/// `NV_GPU_CLOCK_INFO_V2.extendedDomain[]`), keyed by [`ClockDomainId`].
+/// Superset of [`EffectiveClocks`] (which only carries the 4 *public* clocks
+/// Graphics/Memory/Processor/Video): this additionally exposes the internal
+/// fabric clocks — Gpc, **Xbar (crossbar)**, Sys, Hub, Host, Disp, Hotclk,
+/// Gpc2/Xbar2/Sys2/Hub2, Pciegen, etc. — i.e. everything GPU-Z's "crossbar
+/// clock" and similar readings come from. Only domains with a non-zero
+/// `effective_frequency` are included.
+pub type AllClocks = BTreeMap<ClockDomainId, Kilohertz>;
+
+/// Extract all 32 clock domains from a raw GetAllClocks V2 result (companion
+/// to `NV_GPU_CLOCK_INFO_V2`'s `EffectiveClocks` conversion, which only reads
+/// the 4 public domains). Returns every present domain keyed by
+/// [`ClockDomainId`].
+pub fn all_clocks_from_raw(
+    raw: &clock::private::NV_GPU_CLOCK_INFO_V2,
+) -> AllClocks {
+    ClockDomainId::values()
+        .map(|id| (id, raw.extended_domain[id.raw() as usize].effective_frequency))
+        .filter(|(_, freq)| *freq != 0)
+        .map(|(id, freq)| (id, Kilohertz(freq)))
+        .collect()
+}
 
 impl RawConversion for clock::private::NV_GPU_CLOCK_INFO_V2 {
     type Target = EffectiveClocks;
@@ -835,5 +860,59 @@ impl RawConversion for power::private::NV_VOLT_STATUS {
             unknown0: self.unknown,
             voltage: Microvolts(self.value_uV),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sys::gpu::clock::private::NV_GPU_CLOCK_INFO_V2;
+
+    /// Build a GetAllClocks V2 buffer with a fabricated per-domain frequency
+    /// map, then confirm `all_clocks_from_raw` surfaces every present (non-zero)
+    /// domain keyed by `ClockDomainId` — including the internal fabric clocks
+    /// (Xbar/crossbar, Sys, Hub, …) that `EffectiveClocks` deliberately omits.
+    #[test]
+    fn all_clocks_surfaces_all_32_domains() {
+        let mut raw = NV_GPU_CLOCK_INFO_V2::default();
+        // Populate a handful of domains with plausible fabric-clock kHz. Index
+        // by the ClockDomainId discriminant (Gpc=0, Xbar=1, …, Pciegen=31).
+        let samples: &[(ClockDomainId, u32)] = &[
+            (ClockDomainId::Gpc, 2_100_000),      // Graphics (0)
+            (ClockDomainId::Xbar, 1_800_000),     // Crossbar (1)
+            (ClockDomainId::Sys, 900_000),
+            (ClockDomainId::Hub, 600_000),
+            (ClockDomainId::M, 7_500_000),        // Memory (4)
+            (ClockDomainId::Host, 100_000),
+            (ClockDomainId::Disp, 67_500),
+            (ClockDomainId::Hotclk, 0),           // zero -> dropped
+            (ClockDomainId::Pciegen, 8_000),
+        ];
+        for (dom, freq) in samples {
+            raw.extended_domain[dom.raw() as usize].effective_frequency = *freq;
+        }
+
+        let all = all_clocks_from_raw(&raw);
+
+        // Zero-frequency domains are dropped; the rest are keyed by ClockDomainId.
+        assert_eq!(all.get(&ClockDomainId::Gpc), Some(&Kilohertz(2_100_000)));
+        assert_eq!(all.get(&ClockDomainId::Xbar), Some(&Kilohertz(1_800_000)));
+        assert_eq!(all.get(&ClockDomainId::M), Some(&Kilohertz(7_500_000)));
+        assert_eq!(all.get(&ClockDomainId::Pciegen), Some(&Kilohertz(8_000)));
+        // Hotclk was zero -> absent.
+        assert!(!all.contains_key(&ClockDomainId::Hotclk));
+        // The 4-public-clock EffectiveClocks conversion would only return
+        // Gpc(0)/M(4); all_clocks additionally returns the fabric clocks.
+        assert!(all.contains_key(&ClockDomainId::Xbar));
+        assert!(all.contains_key(&ClockDomainId::Sys));
+        assert!(all.contains_key(&ClockDomainId::Hub));
+    }
+
+    /// `all_clocks_from_raw` over an all-zero buffer yields an empty map (no
+    /// domains present), never panics on the 32-element array indexing.
+    #[test]
+    fn all_clocks_empty_when_nothing_present() {
+        let raw = NV_GPU_CLOCK_INFO_V2::default();
+        assert!(all_clocks_from_raw(&raw).is_empty());
     }
 }

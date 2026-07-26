@@ -199,6 +199,10 @@ pub mod private {
         }
     }
 
+    nvenum_display! {
+        ClockDomainId => _
+    }
+
     nvstruct! {
         /// Per-domain clock entry (RTSS `NV_GPU_CLOCK_INFO_DOMAIN`). The
         /// `flags` word packs: `bIsPresent:1 | bDrivingDDR:1 | bSetClock:1 |
