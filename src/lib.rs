@@ -14,7 +14,6 @@ mod gsync;
 mod i2c_impl;
 mod info;
 mod pstate;
-mod power;
 mod thermal;
 mod types;
 
@@ -27,7 +26,6 @@ pub use gsync::*;
 pub use i2c_impl::*;
 pub use info::*;
 pub use pstate::*;
-pub use power::*;
 pub use thermal::*;
 pub use types::*;
 

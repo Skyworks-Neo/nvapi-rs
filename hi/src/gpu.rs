@@ -26,8 +26,8 @@ pub use nvapi::{
     DriverModel, EccErrors, FanArbiterControl, FanArbiterStatus, FanCoolerId, Foundry, GpuType,
     Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
     PciIdentifiers, Percentage, PerformanceDecreaseReason, PerfInfo, PerfLimitId, PerfStatus,
-    PffCurve, PffPoint, PhysicalGpu, PowerMonitorInfo, PowerMonitorStatus,
-    PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType,
+    PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker, RamType,
+    Range, Rpm, SystemType,
     EffectiveClocks, ThermalChannelInfo, ThermalChannelStatus, ThermalController,
     ThermalTarget, UtilizationDomain, Utilizations,
     Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
@@ -137,10 +137,6 @@ pub struct GpuStatus {
     pub tachometer: Option<u32>,
     pub utilization: Utilizations,
     pub power: BTreeMap<PowerTopologyChannelId, Percentage>,
-    /// Live per-channel/per-rail power from the NDA-private PowerMonitor pair
-    /// (`0xC12EB19E`/`0xF40238EF`). `None` when the GPU/driver doesn't support
-    /// it (stubbed on some combos — probed via GetInfo's `b_supported`).
-    pub power_monitor: Option<PowerMonitorStatus>,
     /// `(descriptor, celsius)` thermal readings with sub-degree precision.
     pub sensors: Vec<(SensorDesc, f32)>,
     pub coolers: BTreeMap<FanCoolerId, CoolerStatus>,
@@ -442,24 +438,6 @@ impl Gpu {
                 .into_iter()
                 .map(|(ch, power)| (ch, power.into()))
                 .collect(),
-            power_monitor: {
-                // NDA-private PowerMonitor pair. Entirely best-effort: this is
-                // research/gated data and must never break the core status read.
-                // Swallow every error (NotSupported, NoImplementation,
-                // IncompatibleStructVersion/-9 from a struct-size mismatch, the
-                // -104 NVIDIA_DEVICE_NOT_FOUND stub, etc.) → just yield None.
-                let info = self.gpu.power_monitor_info().ok();
-                if info.as_ref().is_some_and(|i| i.supported && i.channel_mask != 0) {
-                    let mask = info.as_ref().unwrap().channel_mask;
-                    let mut status = self.gpu.power_monitor_status(mask).ok();
-                    if let Some(status) = status.as_mut() {
-                        status.merge_info(info.as_ref().unwrap());
-                    }
-                    status
-                } else {
-                    None
-                }
-            },
             sensors: {
                 // RTSS path: if we got authoritative channel data, Core is
                 // already at extra_sensors[0] (emitted first above). Otherwise
