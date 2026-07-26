@@ -1147,5 +1147,20 @@ NvAPI_GPU_PowerMonitorGetInfo = 0xc12eb19e,
 /// (`bSupported`) before calling. Wrap best-effort (allowable_result → None on
 /// NotSupported), mirroring the NVML power_usage fallback already in nvoc.
 NvAPI_GPU_PowerMonitorGetStatus = 0xf40238ef,
+/// Internal NVAPI unload/cleanup function — the sibling of `NvAPI_Unload`
+/// (`0xD22BDD7E`). MSI Afterburner's RTHAL.dll `CNVAPIInterface::Uninit`
+/// (handler `?Uninit@CNVAPIInterface@@QAEXXZ_0` @0x10029D00) resolves BOTH
+/// `0xD7C61344` (primary) and `0xD22BDD7E` (fallback) via nvapi_QueryInterface at
+/// teardown and calls whichever is present to decrement NVAPI's refcount /
+/// tear down the session before `FreeLibrary(nvapi.dll)`. Present in the
+/// reference NVAPI dispatch table `nvapi64_impl_qi_table.txt` at idx 6
+/// (handler VA 0x1800E62E0 in nvapi64_impl.dll), but unnamed there.
+/// This was the SINGLE real IID gap found when auditing MSI Afterburner's full
+/// NVAPI surface vs nvapi-rs (~70 IIDs used, all others already registered).
+/// DO NOT WRAP: it is a cleanup-only teardown helper with no monitoring or
+/// control value. nvapi-rs already exposes `NvAPI_Unload` (0xD22BDD7E) for the
+/// unload path, which is the documented public API. Kept here as a
+/// documentation-only record so the IID is reserved/known.
+Unknown_D7C61344_InternalUnload = 0xd7c61344,
 
 }
