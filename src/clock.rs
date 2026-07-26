@@ -99,6 +99,11 @@ pub fn all_clocks_from_raw(
 ) -> AllClocks {
     ClockDomainId::values()
         .map(|id| (id, raw.extended_domain[id.raw() as usize].effective_frequency))
+        // Skip Pciegen(31): its effective_frequency holds the current PCIe link
+        // generation NUMBER (1..5), not a kHz clock — including it would render
+        // a misleading "Pciegen 0.001 MHz" in the All Clocks list. It is read
+        // via the dedicated pcie_link_gen status field instead.
+        .filter(|(id, _)| *id != ClockDomainId::Pciegen)
         .filter(|(_, freq)| *freq != 0)
         .map(|(id, freq)| (id, Kilohertz(freq)))
         .collect()
@@ -926,7 +931,7 @@ mod tests {
             (ClockDomainId::Host, 100_000),
             (ClockDomainId::Disp, 67_500),
             (ClockDomainId::Hotclk, 0),           // zero -> dropped
-            (ClockDomainId::Pciegen, 8_000),
+            (ClockDomainId::Pciegen, 8_000),      // PCIe gen NUMBER -> filtered out
         ];
         for (dom, freq) in samples {
             raw.extended_domain[dom.raw() as usize].effective_frequency = *freq;
@@ -938,7 +943,8 @@ mod tests {
         assert_eq!(all.get(&ClockDomainId::Gpc), Some(&Kilohertz(2_100_000)));
         assert_eq!(all.get(&ClockDomainId::Xbar), Some(&Kilohertz(1_800_000)));
         assert_eq!(all.get(&ClockDomainId::M), Some(&Kilohertz(7_500_000)));
-        assert_eq!(all.get(&ClockDomainId::Pciegen), Some(&Kilohertz(8_000)));
+        // Pciegen is filtered out (its value is a PCIe gen number, not kHz).
+        assert!(!all.contains_key(&ClockDomainId::Pciegen));
         // Hotclk was zero -> absent.
         assert!(!all.contains_key(&ClockDomainId::Hotclk));
         // The 4-public-clock EffectiveClocks conversion would only return
