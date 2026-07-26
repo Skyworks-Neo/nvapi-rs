@@ -423,6 +423,28 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetAllClockFrequencies@get{clocks}(self.0) => raw) }
     }
 
+    /// Effective (actually-running) clocks via GetAllClocks V2 (ID 0x1bd69f49,
+    /// RTSS `NV_GPU_CLOCK_INFO_V2`). Returns the `extendedDomain` effective
+    /// frequency per present public domain (Graphics/Memory/Processor).
+    pub fn effective_clocks(&self) -> crate::NvapiResult<crate::clock::EffectiveClocks> {
+        trace!("gpu.effective_clocks()");
+        let mut data = clock::private::NV_GPU_CLOCK_INFO_V2 {
+            version: NvVersion::new(size_of::<clock::private::NV_GPU_CLOCK_INFO_V2>(), 2),
+            ..Default::default()
+        };
+        // Same function ID as the V1 GetAllClocks; pass the V2 buffer via a
+        // cast pointer (the driver reads the version tag to pick the layout).
+        let status = unsafe {
+            sys::api::NvAPI_GPU_GetAllClocks(self.0, ptr::from_mut(&mut data).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetAllClocks, status)
+            .map_err(Into::into)
+            .and_then(|_| {
+                use crate::types::RawConversion;
+                data.convert_raw().map_err(Into::into)
+            })
+    }
+
     pub fn current_pstate(&self) -> crate::Result<PState> {
         trace!("gpu.current_pstate()");
 
@@ -789,6 +811,46 @@ impl PhysicalGpu {
         data.channel_mask = channel_mask;
 
         unsafe { nvcall!(NvAPI_GPU_ThermChannelGetStatus@get{data}(self.0) => raw) }
+    }
+
+    /// Power-monitor capability/topology descriptor (NDA-private 0xC12EB19E).
+    /// Probe `supported` on the result before calling [`power_monitor_status`].
+    pub fn power_monitor_info(
+        &self,
+    ) -> crate::Result<<power::private::NV_GPU_POWER_MONITOR_GET_INFO as RawConversion>::Target>
+    {
+        trace!("gpu.power_monitor_info()");
+        let data = power::private::NV_GPU_POWER_MONITOR_GET_INFO_V2 {
+            version: NvVersion::new(
+                size_of::<power::private::NV_GPU_POWER_MONITOR_GET_INFO_V2>(),
+                1,
+            ),
+            ..Default::default()
+        };
+
+        unsafe { nvcall!(NvAPI_GPU_PowerMonitorGetInfo@get{data}(self.0) => raw) }
+    }
+
+    /// Power-monitor live readings (NDA-private 0xF40238EF). Pass GetInfo's
+    /// `channel_mask`. Stubbed (-104) on some GPU/driver combos — gate on
+    /// GetInfo's `b_supported`.
+    pub fn power_monitor_status(
+        &self,
+        channel_mask: u32,
+    ) -> crate::Result<
+        <power::private::NV_GPU_POWER_MONITOR_GET_STATUS as RawConversion>::Target,
+    > {
+        trace!("gpu.power_monitor_status(0x{:x})", channel_mask);
+        let mut data = power::private::NV_GPU_POWER_MONITOR_GET_STATUS_V2 {
+            version: NvVersion::new(
+                size_of::<power::private::NV_GPU_POWER_MONITOR_GET_STATUS_V2>(),
+                1,
+            ),
+            ..Default::default()
+        };
+        data.channel_mask = channel_mask;
+
+        unsafe { nvcall!(NvAPI_GPU_PowerMonitorGetStatus@get{data}(self.0) => raw) }
     }
 
     pub fn thermal_limit_info(

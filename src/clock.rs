@@ -32,6 +32,28 @@ impl RawConversion for clock::NV_GPU_CLOCK_FREQUENCIES {
     }
 }
 
+/// Effective (actually-running) clocks from GetAllClocks V2
+/// (`NvAPI_GPU_GetAllClocks`, RTSS `NV_GPU_CLOCK_INFO_V2`). The
+/// `extendedDomain[]` effective frequency for each present public domain
+/// (Graphics/Memory/Processor). Distinct from [`ClockFrequencies`] (the
+/// GetAllClockFrequencies base/boost/current table).
+pub type EffectiveClocks = BTreeMap<ClockDomain, Kilohertz>;
+
+impl RawConversion for clock::private::NV_GPU_CLOCK_INFO_V2 {
+    type Target = EffectiveClocks;
+    type Error = Infallible;
+
+    fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
+        trace!("convert_raw({:#?})", self);
+        Ok(ClockDomain::values()
+            .filter(|&c| c != ClockDomain::Undefined)
+            .map(|id| (id, &self.extended_domain[id.raw() as usize]))
+            .filter(|(_, d)| d.effective_frequency != 0)
+            .map(|(id, d)| (id, Kilohertz(d.effective_frequency)))
+            .collect())
+    }
+}
+
 impl RawConversion for clock::private::NV_USAGES_INFO {
     type Target = BTreeMap<crate::pstate::UtilizationDomain, Percentage>;
     type Error = sys::ArgumentRangeError;

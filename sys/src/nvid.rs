@@ -1086,7 +1086,21 @@ NvAPI_GPU_ThermChannelGetInfo = 0x0bc8163d,
 /// calling 0xF40238EF. The per-rail INPUT rails (PEX12V/8PIN/3V3/…) map to the
 /// GPU-Z WinRing0 readings — but live per-rail read needs the STATUS half + a
 /// supporting GPU; see docs/gpuz-per-rail-investigation.md.
-Unknown_C12EB19E = 0xc12eb19e,
+///
+/// STRUCT-SIZE GATE (verified @0x180258170): the handler reads the caller's
+/// first DWORD (version magic `(ver<<16)|sizeof`) and accepts ONLY these
+/// values — anything else returns -9 INCOMPATIBLE_STRUCT_VERSION:
+///   65928  = (1<<16)|392    66972 = (1<<16)|1436
+///   69408  = (1<<16)|3872   74968 = (1<<16)|9432
+/// (336752 = (5<<16)|9072 is the INTERNAL RM buffer version, not a caller
+/// struct.) The RTSS `NVAPIInterface.h` GET_INFO_V2 layout (32×channel +
+/// 32×rel) does NOT match any accepted size, so the shipped RTSS header is
+/// stale relative to this driver build. TODO: determine which accepted size
+/// is the current one and its field/array layout (needs the caller-struct
+/// fill path in the handler, or a desktop GPU raw probe). The nvoc wrap
+/// currently sizes the struct to match the documented RTSS layout (rejected
+/// → -9), so GetInfo degrades to None on every GPU until this is resolved.
+NvAPI_GPU_PowerMonitorGetInfo = 0xc12eb19e,
 /// `NvAPI_GPU_PowerMonitorGetStatus(hGpu, *NV_GPU_POWER_MONITOR_GET_STATUS)` — live
 /// absolute GPU power in mW (the STATUS half of the PowerMonitor pair). NDA-
 /// developer-SDK private API. Identity confirmed by RTSS source:
@@ -1102,6 +1116,6 @@ Unknown_C12EB19E = 0xc12eb19e,
 /// where the driver wired the handler, stubbed on others. Probe with 0xC12EB19E
 /// (`bSupported`) before calling. Wrap best-effort (allowable_result → None on
 /// NotSupported), mirroring the NVML power_usage fallback already in nvoc.
-Unknown_F40238EF = 0xf40238ef,
+NvAPI_GPU_PowerMonitorGetStatus = 0xf40238ef,
 
 }
