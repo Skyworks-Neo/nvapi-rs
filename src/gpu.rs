@@ -801,46 +801,6 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ThermChannelGetStatus@get{data}(self.0) => raw) }
     }
 
-    /// Power-monitor capability/topology descriptor (NDA-private 0xC12EB19E).
-    /// Probe `supported` on the result before calling [`power_monitor_status`].
-    pub fn power_monitor_info(
-        &self,
-    ) -> crate::Result<<power::private::NV_GPU_POWER_MONITOR_GET_INFO as RawConversion>::Target>
-    {
-        trace!("gpu.power_monitor_info()");
-        let data = power::private::NV_GPU_POWER_MONITOR_GET_INFO_V2 {
-            version: NvVersion::new(
-                size_of::<power::private::NV_GPU_POWER_MONITOR_GET_INFO_V2>(),
-                1,
-            ),
-            ..Default::default()
-        };
-
-        unsafe { nvcall!(NvAPI_GPU_PowerMonitorGetInfo@get{data}(self.0) => raw) }
-    }
-
-    /// Power-monitor live readings (NDA-private 0xF40238EF). Pass GetInfo's
-    /// `channel_mask`. Stubbed (-104) on some GPU/driver combos — gate on
-    /// GetInfo's `b_supported`.
-    pub fn power_monitor_status(
-        &self,
-        channel_mask: u32,
-    ) -> crate::Result<
-        <power::private::NV_GPU_POWER_MONITOR_GET_STATUS as RawConversion>::Target,
-    > {
-        trace!("gpu.power_monitor_status(0x{:x})", channel_mask);
-        let mut data = power::private::NV_GPU_POWER_MONITOR_GET_STATUS_V2 {
-            version: NvVersion::new(
-                size_of::<power::private::NV_GPU_POWER_MONITOR_GET_STATUS_V2>(),
-                1,
-            ),
-            ..Default::default()
-        };
-        data.channel_mask = channel_mask;
-
-        unsafe { nvcall!(NvAPI_GPU_PowerMonitorGetStatus@get{data}(self.0) => raw) }
-    }
-
     pub fn thermal_limit_info(
         &self,
     ) -> crate::Result<
