@@ -415,13 +415,18 @@ pub mod private {
     // ------------------------------------------------------------------
     // PowerMonitor — per-channel / per-rail power monitoring (NDA-private).
     // IDs 0xC12EB19E (GetInfo) + 0xF40238EF (GetStatus). Reversed from RTSS
-    // (RivaTuner) source `NVAPIInterface.h` + nvapi64_impl.dll handlers.
-    // GetInfo returns a capability/topology descriptor (which of up to 32
-    // power channels exist, each channel's type/rail/limit); GetStatus returns
-    // the live per-channel wattage/current/voltage/energy plus a top-level
-    // total GPU power. Best-effort only — the STATUS handler is stubbed
-    // (returns -104 NVIDIA_DEVICE_NOT_FOUND) on some GPU/driver combos; probe
-    // with GetInfo's `b_supported` before calling GetStatus.
+    // (RivaTuner) source `NVAPIInterface.h` + nvapi64_impl.dll handlers
+    // (GetInfo @0x180257660, GetStatus @0x180258170; both funnel into the same
+    // RM escape 0x06FF0016).
+    //
+    // WRAPPED & LIVE (validated on RTX 4060 Laptop, units confirmed by exact
+    // GPU-Z match: raw mW ÷ 1000 = W). GetInfo returns a capability/topology
+    // descriptor (which of up to 32 channels exist, each channel's type/rail/
+    // scaling); GetStatus returns the live per-rail wattage. The V2 structs
+    // below are the RTSS-derived research layout — they do NOT match the
+    // deployed driver's accepted struct sizes (see the V1_2728/V3_3240/V4
+    // structs and `nvapi_rs::power` for the live path). Kept as a research
+    // record of the RTSS field semantics (channel_type / PowerRail enums etc).
     // ------------------------------------------------------------------
 
     /// Number of power channels the params structs reserve room for.
@@ -652,8 +657,11 @@ pub mod private {
     nvapi! {
         /// Undocumented (NDA-private, ID 0xF40238EF). Power-monitor live readings
         /// (the STATUS half). Pass GetInfo's `channel_mask`; read
-        /// `total_gpu_power_mw` + per-channel `channels[i]`. Stubbed (-104) on
-        /// some GPU/driver combos — gate on GetInfo's `b_supported`.
+        /// `total_gpu_power_mw` + per-channel `channels[i]`. LIVE on validated
+        /// hardware (units confirmed: mW ÷ 1000 = W). This is the RTSS-derived
+        /// V2 layout for research; the deployed driver's live path uses the
+        /// v1|392 status buffer — see `nvapi_rs::power::PowerRails` / the
+        /// `powermonitor-v4-prewrap` work for the production read path.
         pub unsafe fn NvAPI_GPU_PowerMonitorGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_POWER_MONITOR_GET_STATUS) -> NvAPI_Status;
     }
 

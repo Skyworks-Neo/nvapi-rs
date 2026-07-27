@@ -1064,10 +1064,13 @@ Unknown_GetROPCount = 0xfdc129fa,
 
 // --- RE-record entries: 3 unknown QueryInterface IDs resolved via static RE of
 // nvapi64_impl.dll (IDA). Dispatch table `off_1804DE000` is 12-byte entries
-// [4B id][4B pad][4B handler ptr]. These three are NOT live per-rail watts
-// sources (those come from GPU-Z's WinRing0 PCI/MMIO driver, not NVAPI — see
-// docs/gpuz-per-rail-investigation.md). Kept here as documentation-only records;
-// all three are table/descriptor/stub queries, not status reads — do not wrap.
+// [4B id][4B pad][4B handler ptr]. These three are thermal/descriptor queries,
+// not power-rail sources — kept here as documentation-only records; all three
+// are table/descriptor/stub queries, not status reads — do not wrap.
+// (NB: live per-rail power DOES come from NVAPI — see PowerMonitor
+// 0xC12EB19E/0xF40238EF above, now wrapped. The earlier "per-rail watts are
+// WinRing0-only" conclusion in docs/gpuz-per-rail-investigation.md was for the
+// specific IDs probed there, not PowerMonitor.)
 
 /// `ThermChannelGetStatus(hGpu, *mut { version, .. })`.
 /// Reversed from nvapi64_impl.dll handler @0x1801E0BC0. Identity proven by embedded
@@ -1102,50 +1105,55 @@ NvAPI_GPU_ThermChannelGetInfo = 0x0bc8163d,
 /// `NvAPI_GPU_PowerMonitorGetInfo(hGpu, *NV_GPU_POWER_MONITOR_GET_INFO)` — power-
 /// monitor capability/topology descriptor (the INFO half; live wattage is the STATUS
 /// half `0xF40238EF`). NDA-developer-SDK private API. Identity confirmed by RTSS
-/// source: `NVAPIIID_GPU_PowerMonitorGetInfo = 0xC12EB19E`. Reversed from
-/// nvapi64_impl.dll handler @0x180258170 (RTTI `_NV_ESC_NVAPI_GPU_POWER_RMCTRLS`,
-/// same family as NvAPI_GPU_GetPowerTopology @0x180232C80). Prototype:
-/// `__int64 __fastcall(uint hGpu, _DWORD *structPtr)`.
-/// Input struct first DWORD = version magic `(v<<16)|sizeof`; RTSS uses
-/// `NV_GPU_POWER_MONITOR_GET_INFO_V2` with version 1. Returns a DESCRIPTOR table:
-/// `bSupported`, `channelMask`, `totalGpuPowerChannelMask`, `totalGpuChannelIdx`, and
-/// per-channel info (type, pwrRail, pwrLimitmW, …). NOT live wattage by itself.
-/// RE detail: allocates two 0x60B30 RM buffers + a 0x12370 caller buffer; stage 1
-/// escape 0x2080A612, stage 2 escape 0x2080A613 (same as GetPowerTopology); iterates
-/// 255 rails copying 600B records. Use to probe caps (`if info.bSupported`) before
-/// calling 0xF40238EF. The per-rail INPUT rails (PEX12V/8PIN/3V3/…) map to the
-/// GPU-Z WinRing0 readings — but live per-rail read needs the STATUS half + a
-/// supporting GPU; see docs/gpuz-per-rail-investigation.md.
+/// source: `NVAPIIID_GPU_PowerMonitorGetInfo = 0xC12EB19E`. Handler @0x180257660 in
+/// nvapi64_impl.dll (RTTI `_NV_ESC_NVAPI_GPU_POWER_RMCTRLS`, same family as
+/// NvAPI_GPU_GetPowerTopology). Prototype: `__int64 __fastcall(uint hGpu, _DWORD*)`.
 ///
-/// STRUCT-SIZE GATE (verified @0x180258170): the handler reads the caller's
-/// first DWORD (version magic `(ver<<16)|sizeof`) and accepts ONLY these
-/// values — anything else returns -9 INCOMPATIBLE_STRUCT_VERSION:
-///   65928  = (1<<16)|392    66972 = (1<<16)|1436
-///   69408  = (1<<16)|3872   74968 = (1<<16)|9432
-/// (336752 = (5<<16)|9072 is the INTERNAL RM buffer version, not a caller
-/// struct.) The RTSS `NVAPIInterface.h` GET_INFO_V2 layout (32×channel +
-/// 32×rel) does NOT match any accepted size, so the shipped RTSS header is
-/// stale relative to this driver build. TODO: determine which accepted size
-/// is the current one and its field/array layout (needs the caller-struct
-/// fill path in the handler, or a desktop GPU raw probe). The nvoc wrap
-/// currently sizes the struct to match the documented RTSS layout (rejected
-/// → -9), so GetInfo degrades to None on every GPU until this is resolved.
+/// WRAPPED & LIVE. Returns a DESCRIPTOR table: `bSupported`, `channelMask`,
+/// `totalGpuPowerChannelMask`, `totalGpuChannelIdx`, and per-channel info
+/// (channel_type, pwr_rail, volt_fixed_uv, pwr_corr_slope, …). The descriptor
+/// region is variable-stride (record length depends on channel_type; type 5/7
+/// carry VF-estimation LUTs) — parsed by signature scan in `nvapi_rs::power`.
+/// Use to discover `channelMask` + per-channel identity.
+///
+/// STRUCT-SIZE GATE (verified @0x180257660): the handler reads the caller's
+/// first DWORD (version magic `(ver<<16)|sizeof`) and accepts ONLY these:
+///   65940  = (1<<16)|396   (header-only: just channel_mask, no descriptors)
+///   68264  = (1<<16)|2728  (descriptors; type=5 VF-LUTs truncated)
+///   199848 = (3<<16)|3208  (more complete VF-LUTs)
+///   268456 = (4<<16)|6312  (richest; full VF-LUTs)
+///   377896 = (5<<16)|50216 (different header layout — mask@+0x2C, not +0x10)
+/// Anything else → -9 INCOMPATIBLE_STRUCT_VERSION. v1|2728 / v3|3208 / v4|6312
+/// share an IDENTICAL header + descriptor-offset layout (differ only in
+/// type=5 VF-LUT truncation), so the reader works on whichever the driver
+/// accepts; nvapi-rs tries v4→v3→v1|2728.
+///
+/// HISTORICAL: an earlier probe concluded GetInfo was "unsupported on all GPUs"
+/// — that was a probe BUG (it fed the GetStatus accepted-magics to GetInfo;
+/// the two IIDs share NO accepted magics). With the correct per-IID magics
+/// both return Ok. See `powermonitor-per-channel-working` memory.
 NvAPI_GPU_PowerMonitorGetInfo = 0xc12eb19e,
 /// `NvAPI_GPU_PowerMonitorGetStatus(hGpu, *NV_GPU_POWER_MONITOR_GET_STATUS)` — live
-/// absolute GPU power in mW (the STATUS half of the PowerMonitor pair). NDA-
-/// developer-SDK private API. Identity confirmed by RTSS source:
-/// `NVAPIIID_GPU_PowerMonitorGetStatus = 0xF40238EF`. RTSS reads
-/// `status.totalGpuPowermW` and per-channel `channels[i].{pwrAvgmW,pwrMinmW,pwrMaxmW,
-/// currmA,voltuV,energymJ}`.
+/// per-rail GPU power in mW (the STATUS half of the PowerMonitor pair).
+/// NDA-developer-SDK private API. `NVAPIIID_GPU_PowerMonitorGetStatus = 0xF40238EF`.
 ///
-/// NOTE — conflict with local RE: on the dev laptop's nvapi64_impl.dll build, the
-/// handler dispatched for this id (@0x18024D4E0) is a STUB that returns -104
-/// NVAPI_NVIDIA_DEVICE_NOT_FOUND with no RM call. Yet RTSS ships and calls it as a
-/// real absolute-power read. Reconciliation: this id IS PowerMonitorGetStatus, but
-/// its implementation is GPU/driver-version gated — present+functional on hardware
-/// where the driver wired the handler, stubbed on others. Probe with 0xC12EB19E
-/// (`bSupported`) before calling. Wrap best-effort (allowable_result → None on
-/// NotSupported), mirroring the NVML power_usage fallback already in nvoc.
+/// WRAPPED & LIVE. Handler @0x180258170 in nvapi64_impl.dll, funneling into the
+/// same RM escape 0x06FF0016 as GetInfo. The caller sets the INPUT `channel_mask`
+/// at struct +0x04 (copy from GetInfo); the driver fills only those channels.
+/// Units CONFIRMED by exact GPU-Z OCR match (raw mW ÷ 1000 = W) under core +
+/// memory load: +0x08=Board, +0x14=Chip, +0x2C=MVDDC, +0x98=PWR_SRC (channel-
+/// order-dependent offsets, validated on RTX 4060 Laptop). nvapi-rs surfaces
+/// these 4 as `PowerRails`; the full per-channel table is `PowerMonitor`.
+///
+/// STRUCT-SIZE GATE (@0x180258170) accepts these (NOT the same as GetInfo's):
+///   65928  = (1<<16)|392   66972 = (1<<16)|1436
+///   69408  = (1<<16)|3872  74968 = (1<<16)|9432
+///   336752 = (5<<16)|9072
+/// HISTORICAL: an earlier RE thought the handler was a -104 stub — that was the
+/// wrong IID's handler (0x18024D4E0); the real GetStatus handler @0x180258170
+/// is functional. Units earlier seemed ambiguous (idle ratio to NVML
+/// collapsed) but that was because ch0 is an input/16-pin summation channel,
+/// not the board total — resolved by GPU-Z cross-validation.
 NvAPI_GPU_PowerMonitorGetStatus = 0xf40238ef,
 /// Internal NVAPI unload/cleanup function — the sibling of `NvAPI_Unload`
 /// (`0xD22BDD7E`). MSI Afterburner's RTHAL.dll `CNVAPIInterface::Uninit`
