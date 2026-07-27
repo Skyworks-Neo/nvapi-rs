@@ -534,11 +534,12 @@ impl PhysicalGpu {
     /// [`crate::power::PowerRails`] for the layout caveat.
     pub fn power_rails(&self) -> crate::NvapiResult<crate::power::PowerRails> {
         trace!("gpu.power_rails()");
-        // GetInfo: need only channel_mask. Try the smallest descriptor-bearing
-        // layout first (v1|2728 — cheapest that yields the mask), fall back to
-        // v3|3240 / v4|6312. GetStatus only populates channels whose bits are
-        // set in the INPUT channel_mask at +0x04 — passing 0xFFFFFFFF (all 32)
-        // makes the driver return empty on some GPUs, so pass the real mask.
+        // GetInfo (v4 -> v3 -> v1|2728 fallback) for the descriptor table +
+        // channel_mask. The descriptors tell us each channel's pwr_rail
+        // identity — we label each reading by that, NOT by a hardcoded GetStatus
+        // offset (offsets are channel-order-dependent and differ per GPU:
+        // e.g. +0x44 is InputTotalBoard on a 4060 laptop but InputPex12v1 / PCIe
+        // slot on a desktop Turing).
         macro_rules! try_getinfo {
             ($ty:ty, $ver:expr) => {{
                 let mut info = <$ty>::default();
@@ -547,29 +548,85 @@ impl PhysicalGpu {
                     sys::api::NvAPI_GPU_PowerMonitorGetInfo(self.0, ptr::from_mut(&mut info).cast())
                 };
                 if crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, status).is_ok() {
-                    Some(info.channel_mask)
+                    Some(crate::power::PowerMonitorInfo::from(&info))
                 } else {
                     None
                 }
             }};
         }
-        let mask = try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 1)
+        let info = try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4, 4)
             .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V3_3240, 3))
-            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4, 4))
-            .ok_or(crate::NvapiError::new(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, sys::Status::NotSupported))?;
+            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 1))
+            .ok_or(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_PowerMonitorGetInfo,
+                sys::Status::NotSupported,
+            ))?;
 
-        let mut status_buf = [0u8; 392];
-        // GetStatus v1|392: +0x00 version=(1<<16)|392, +0x04 input channel_mask.
-        status_buf[0..4].copy_from_slice(&(NvVersion::new(392, 1).data).to_le_bytes());
-        status_buf[4..8].copy_from_slice(&mask.to_le_bytes());
-        let status = unsafe {
-            sys::api::NvAPI_GPU_PowerMonitorGetStatus(
-                self.0,
-                status_buf.as_mut_ptr().cast(),
-            )
+        // channel_bit -> (pwr_rail, channel_type) from the descriptors.
+        let rail_map = crate::power::descriptor_rail_map(&info);
+
+        // Per-bit GetStatus isolation: one call per channel with
+        // channel_mask = (1<<bit). This is the order-independent path (the
+        // full-mask call returns -1 on some GPUs, e.g. desktop Turing), and
+        // it isolates each channel's record so we extract its value without a
+        // hardcoded offset. Cheap: each call is a sub-ms RM escape, ≤11 calls.
+        //
+        // EXTRACTION: every per-bit buffer shares a baseline of header/offset
+        // slots (version, mask, the +0x08 accumulator, the +0x80 calibration
+        // offset, and channel-0's slot at +0x44). The channel's OWN value is
+        // at an offset that is nonzero in THIS bit's buffer but absent from the
+        // shared baseline. We compute the baseline = offsets present across ALL
+        // sampled bits, then each channel's value = largest nonzero u32 at a
+        // non-baseline offset (channel-0 falls back to +0x44, which is its own
+        // slot). This is offset-agnostic and correct per-GPU.
+        let bits: Vec<u32> = rail_map.iter().map(|(b, _, _)| *b).collect();
+        // Sample every bit first, collect (bit -> Vec<(offset,value)>).
+        let mut per_bit: Vec<(u32, Vec<(usize, u32)>)> = Vec::new();
+        for &bit in &bits {
+            let mut status_buf = [0u8; 392];
+            status_buf[0..4].copy_from_slice(&(NvVersion::new(392, 1).data).to_le_bytes());
+            status_buf[4..8].copy_from_slice(&(1u32 << bit).to_le_bytes());
+            let status = unsafe {
+                sys::api::NvAPI_GPU_PowerMonitorGetStatus(self.0, status_buf.as_mut_ptr().cast())
+            };
+            if crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetStatus, status).is_ok() {
+                let nz = crate::power::nonzero_offsets(&status_buf);
+                per_bit.push((bit, nz));
+            } else {
+                per_bit.push((bit, Vec::new())); // rail present but unreadable
+            }
+        }
+        // Baseline = offsets present in EVERY sampled bit's buffer (the shared
+        // header + calibration + channel-0 slot). Each channel's own value is
+        // at an offset OUTSIDE this baseline.
+        let baseline: std::collections::HashSet<usize> = {
+            let sets: Vec<std::collections::HashSet<usize>> = per_bit
+                .iter()
+                .map(|(_, nz)| nz.iter().map(|(o, _)| *o).collect())
+                .collect();
+            let mut iter = sets.into_iter();
+            match iter.next() {
+                Some(first) => iter.fold(first, |acc, s| acc.intersection(&s).copied().collect()),
+                None => std::collections::HashSet::new(),
+            }
         };
-        crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetStatus, status)?;
-        Ok(crate::power::power_rails_from_status(&status_buf))
+        let mut rails = Vec::new();
+        for &(bit, pwr_rail, channel_type) in &rail_map {
+            let nz = per_bit
+                .iter()
+                .find(|(b, _)| *b == bit)
+                .map(|(_, nz)| nz.clone())
+                .unwrap_or_default();
+            let pwr_mw = crate::power::extract_channel_mw(&nz, &baseline);
+            rails.push(crate::power::PowerRailReading {
+                channel_bit: bit,
+                pwr_rail,
+                rail_name: crate::power::power_rail_name_owned(pwr_rail),
+                channel_type,
+                pwr_mw,
+            });
+        }
+        Ok(rails)
     }
 
     pub fn current_pstate(&self) -> crate::Result<PState> {

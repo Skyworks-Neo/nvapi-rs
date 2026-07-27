@@ -176,68 +176,203 @@ pub fn power_monitor_from_raw(info: &PowerMonitorInfo, status_bytes: &[u8]) -> P
     channels
 }
 
-/// Per-rail live power readings from PowerMonitor GetStatus, in **milliwatts**
-/// (units confirmed by exact GPU-Z match: raw ÷ 1000 = W). Each field is the
-/// draw on that rail, or `None` if GetStatus didn't populate it.
-///
-/// **Layout caveat:** the byte offsets are from the v1|392 GetStatus layout on
-/// an RTX 4060 Laptop (Ada), confirmed against GPU-Z under core + memory load.
-/// The offsets are channel-order-dependent and may differ on other GPUs — the
-/// robust channel-bit→offset mapping needs per-bit isolation (see the test
-/// `nvapi_power_monitor_bit_isolation`). If a value looks implausible on a new
-/// GPU, treat it as unvalidated until re-checked.
+/// One rail's live power reading, labeled by its **descriptor identity**
+/// (not by a hardcoded GetStatus offset). The rail identity comes from the
+/// GetInfo descriptor table; the power value comes from a per-channel GetStatus
+/// call. Units: milliwatts (confirmed by exact GPU-Z match: raw ÷ 1000 = W).
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PowerRails {
-    /// Total board power draw (incl. PCIe slot + USB overhead). = GPU-Z "Board
-    /// Power Draw"; matches NVML `power_usage`. GetStatus +0x08.
-    pub board_mw: Option<u32>,
-    /// GPU core/chip power draw. = GPU-Z "GPU Chip Power Draw". GetStatus +0x14.
-    pub chip_mw: Option<u32>,
-    /// Memory (MVDDC) power draw. = GPU-Z "MVDDC Power Draw". GetStatus +0x2C.
-    pub mvddc_mw: Option<u32>,
-    /// Main board power-source rail. = GPU-Z "PWR_SRC Power Draw".
-    /// GetStatus +0x98.
-    pub pwr_src_mw: Option<u32>,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PowerRailReading {
+    /// Bit index of this channel in GetInfo's `channel_mask` (0..32).
+    pub channel_bit: u32,
+    /// `pwr_rail` from the GetInfo descriptor
+    /// (RTSS `NV_GPU_POWER_CHANNEL_POWER_RAIL`). May be an unnamed value
+    /// (e.g. 218 on some Ada SKUs).
+    pub pwr_rail: u32,
+    /// Human-readable rail name from [`power_rail_name_owned`] (e.g.
+    /// "InputTotalBoard", "InputPex12v1", "UNNAMED_218"). Pre-rendered so
+    /// downstream consumers (CLI/pynvoc/TUI) need no nvapi-rs import to label.
+    pub rail_name: String,
+    /// `channel_type` from the GetInfo descriptor
+    /// (1=Summation, 2=Estimation, 3=Slow, 4=GeminiCorrection, 5=OneX,
+    /// 6=Sensor, 7=PstateEstimationLut, 8=SensorClientAligned).
+    pub channel_type: u32,
+    /// Live power draw on this rail, in milliwatts. 0 when GetStatus didn't
+    /// populate the channel (rail present but currently unreadable).
+    pub pwr_mw: u32,
 }
 
-impl PowerRails {
-    /// Board power in watts (rounded), or `None`.
-    pub fn board_w(&self) -> Option<f32> {
-        self.board_mw.map(|mw| mw as f32 / 1000.0)
-    }
-    /// Chip/core power in watts (rounded), or `None`.
-    pub fn chip_w(&self) -> Option<f32> {
-        self.chip_mw.map(|mw| mw as f32 / 1000.0)
-    }
-    /// Memory (MVDDC) power in watts, or `None`.
-    pub fn mvddc_w(&self) -> Option<f32> {
-        self.mvddc_mw.map(|mw| mw as f32 / 1000.0)
-    }
-    /// PWR_SRC rail power in watts, or `None`.
-    pub fn pwr_src_w(&self) -> Option<f32> {
-        self.pwr_src_mw.map(|mw| mw as f32 / 1000.0)
+impl PowerRailReading {
+    /// Power in watts, or `None` if the rail reported 0.
+    pub fn watts(&self) -> Option<f32> {
+        (self.pwr_mw != 0).then(|| self.pwr_mw as f32 / 1000.0)
     }
 }
 
-/// Extract the four GPU-Z-confirmed named rails from a raw GetStatus v1|392
-/// buffer. See [`PowerRails`] for the layout caveat. A slot is `None` when the
-/// driver left it zero (rail absent on this GPU) — board/chip are essentially
-/// always present; mvddc/pwr_src may be absent on some SKUs.
-pub fn power_rails_from_status(status_bytes: &[u8]) -> PowerRails {
-    let slot = |off: usize| -> Option<u32> {
-        if off + 4 > status_bytes.len() {
-            return None;
+/// All rail readings from a PowerMonitor GetInfo + per-bit GetStatus pass.
+/// Keyed/identified by the descriptor's `pwr_rail` (via [`power_rail_name`]),
+/// NOT by a fixed offset — so it's correct on every GPU regardless of how the
+/// driver orders channels (the RTX 4060 Laptop and a desktop Turing expose
+/// different rail sets and orderings; both decode correctly here).
+pub type PowerRails = Vec<PowerRailReading>;
+
+/// Build the `channel_bit -> (pwr_rail, channel_type)` map from a GetInfo
+/// descriptor table. The descriptor records are found by signature scan
+/// (channel_type 1..=8 + plausible PowerRail); the Nth descriptor found maps
+/// to the Nth set bit of `channel_mask` (the channels are enumerated in
+/// ascending bit order by the driver).
+pub fn descriptor_rail_map(info: &PowerMonitorInfo) -> Vec<(u32, u32, u32)> {
+    // Ordered set bits of the channel mask — descriptor N corresponds to bit N.
+    let bits: Vec<u32> = (0..32).filter(|i| info.channel_mask & (1 << i) != 0).collect();
+    let desc = info.descriptors.as_slice();
+    let desc_words = desc.len() / 4;
+    let w = |i: usize| -> u32 {
+        if i < desc_words {
+            u32::from_le_bytes(desc[i * 4..i * 4 + 4].try_into().unwrap_or([0; 4]))
+        } else {
+            0
         }
-        let v = u32::from_le_bytes(
-            status_bytes[off..off + 4].try_into().unwrap_or([0; 4]),
-        );
-        (v != 0).then_some(v)
     };
-    PowerRails {
-        board_mw: slot(0x08),
-        chip_mw: slot(0x14),
-        mvddc_mw: slot(0x2C),
-        pwr_src_mw: slot(0x98),
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 1 < desc_words && out.len() < bits.len() {
+        let ctype = w(i);
+        let rail = w(i + 1);
+        if (1..=8).contains(&ctype) && plausible_rail(rail) {
+            let bit = bits[out.len()];
+            out.push((bit, rail, ctype));
+            i += 8; // skip past this descriptor's header
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Nonzero `(byte_offset, value)` u32 pairs in a GetStatus buffer.
+pub fn nonzero_offsets(status_bytes: &[u8]) -> Vec<(usize, u32)> {
+    let n = status_bytes.len() / 4;
+    let mut out = Vec::new();
+    for w in 0..n {
+        let off = w * 4;
+        if off + 4 > status_bytes.len() {
+            break;
+        }
+        let v = u32::from_le_bytes(status_bytes[off..off + 4].try_into().unwrap_or([0; 4]));
+        if v != 0 {
+            out.push((off, v));
+        }
+    }
+    out
+}
+
+/// Extract a single channel's power value (mW) from its per-bit GetStatus
+/// nonzero-offset list, given the shared `baseline` offsets (those present in
+/// every channel's buffer — header, accumulator, calibration offset, and
+/// channel-0's slot).
+///
+/// The channel's OWN value is at an offset OUTSIDE the baseline. Take the
+/// largest plausible such value (the rail power is the dominant reading; small
+/// sub-fields and sentinels ≥ 10_000_000 like accumulators/version magics are
+/// excluded). Channel 0 (total) has no non-baseline offset — its value IS the
+/// +0x44 baseline slot — so fall back to the +0x44 value when present.
+pub fn extract_channel_mw(
+    nz: &[(usize, u32)],
+    baseline: &std::collections::HashSet<usize>,
+) -> u32 {
+    let mut best: u32 = 0;
+    for &(off, v) in nz {
+        if baseline.contains(&off) {
+            continue;
+        }
+        if v != 0 && v < 10_000_000 && v > best {
+            best = v;
+        }
+    }
+    if best == 0 {
+        // Channel 0 (total): its value is the shared +0x44 slot.
+        for &(off, v) in nz {
+            if off == 0x44 {
+                return v;
+            }
+        }
+    }
+    best
+}
+
+/// Name a `NV_GPU_POWER_CHANNEL_POWER_RAIL` value. Delegates to the
+/// `PowerRail` enum (single source of truth for the RTSS rail names); unknown
+/// values (not in the enum, e.g. Ada-private 218) return a rendered
+/// `"UNNAMED_<n>"` string via the owned-return variant below.
+pub fn power_rail_name(rail: u32) -> &'static str {
+    use crate::sys::gpu::power::private::PowerRail;
+    // Owned variants of the known enum values map to their Display name. We
+    // can't return a borrow of PowerRail's Display (it's formatted, not
+    // &'static), so use a static match derived from the enum's known values.
+    // For values outside the enum, callers should use power_rail_name_owned.
+    match PowerRail::from_raw(rail as i32) {
+        Ok(r) => match r {
+            PowerRail::Unknown => "Unknown",
+            PowerRail::OutputNvvdd => "OutputNvvdd",
+            PowerRail::OutputFbvdd => "OutputFbvdd",
+            PowerRail::OutputFbvddq => "OutputFbvddq",
+            PowerRail::OutputFbvddQ => "OutputFbvddQ",
+            PowerRail::OutputPexvdd => "OutputPexvdd",
+            PowerRail::OutputA3v3 => "OutputA3v3",
+            PowerRail::Output3v3nv => "Output3v3nv",
+            PowerRail::OutputTotalGpu => "OutputTotalGpu",
+            PowerRail::OutputFbvddqGpu => "OutputFbvddqGpu",
+            PowerRail::OutputFbvddqMem => "OutputFbvddqMem",
+            PowerRail::OutputSram => "OutputSram",
+            PowerRail::InputPex12v1 => "InputPex12v1",
+            PowerRail::InputTotalBoard2 => "InputTotalBoard2",
+            PowerRail::InputHighVolt0 => "InputHighVolt0",
+            PowerRail::InputHighVolt1 => "InputHighVolt1",
+            PowerRail::InputNvvdd1 => "InputNvvdd1",
+            PowerRail::InputNvvdd2 => "InputNvvdd2",
+            PowerRail::InputExt12v8pin2 => "InputExt12v8pin2",
+            PowerRail::InputExt12v8pin3 => "InputExt12v8pin3",
+            PowerRail::InputExt12v8pin4 => "InputExt12v8pin4",
+            PowerRail::InputExt12v8pin5 => "InputExt12v8pin5",
+            PowerRail::InputMisc0 => "InputMisc0",
+            PowerRail::InputMisc1 => "InputMisc1",
+            PowerRail::InputMisc2 => "InputMisc2",
+            PowerRail::InputMisc3 => "InputMisc3",
+            PowerRail::InputUsbc0 => "InputUsbc0",
+            PowerRail::InputUsbc1 => "InputUsbc1",
+            PowerRail::InputFan0 => "InputFan0",
+            PowerRail::InputFan1 => "InputFan1",
+            PowerRail::InputSram => "InputSram",
+            PowerRail::InputPwrSrcPp => "InputPwrSrcPp",
+            PowerRail::Input3v3Pp => "Input3v3Pp",
+            PowerRail::Input3v3Main => "Input3v3Main",
+            PowerRail::Input3v3Aon => "Input3v3Aon",
+            PowerRail::InputTotalBoard => "InputTotalBoard",
+            PowerRail::InputNvvdd => "InputNvvdd",
+            PowerRail::InputFbvdd => "InputFbvdd",
+            PowerRail::InputFbvddq => "InputFbvddq",
+            PowerRail::InputFbvddQ => "InputFbvddQ",
+            PowerRail::InputExt12v8pin0 => "InputExt12v8pin0",
+            PowerRail::InputExt12v8pin1 => "InputExt12v8pin1",
+            PowerRail::InputExt12v6pin0 => "InputExt12v6pin0",
+            PowerRail::InputExt12v6pin1 => "InputExt12v6pin1",
+            PowerRail::InputPex3v3 => "InputPex3v3",
+            PowerRail::InputPex12v => "InputPex12v",
+            // non_exhaustive / future variants — fall through to UNNAMED.
+            _ => "UNNAMED",
+        },
+        Err(_) => "UNNAMED",
     }
 }
+
+/// Owned rail label for unknown values: `"UNNAMED_<n>"` when not in the enum.
+pub fn power_rail_name_owned(rail: u32) -> String {
+    use crate::sys::gpu::power::private::PowerRail;
+    if PowerRail::from_raw(rail as i32).is_ok() {
+        power_rail_name(rail).to_string()
+    } else {
+        format!("UNNAMED_{}", rail)
+    }
+}
+
+
