@@ -1,18 +1,18 @@
 //! PowerMonitor v4 — per-channel / per-rail power descriptor + live readings.
 //!
 //! `NvAPI_GPU_PowerMonitorGetInfo` (0xC12EB19E) / `GetStatus` (0xF40238EF).
-//! Pre-wrap / research: the deployed driver's **v4 GetInfo** layout (6312 B)
-//! carries a per-channel descriptor table (channel_type + PowerRail identity +
-//! Q12 scaling fields), and GetStatus returns live per-channel values. Both
-//! were long thought unsupported — that was a probe bug (feeding GetStatus's
-//! accepted magics to GetInfo). With the correct per-IID magics both return Ok.
+//! The deployed driver's **v4 GetInfo** layout (6312 B) carries a per-channel
+//! descriptor table (channel_type + PowerRail identity + Q12 scaling fields),
+//! and GetStatus returns live per-channel values in **milliwatts** (units
+//! confirmed by exact GPU-Z match: raw ÷ 1000 = W). Both were long thought
+//! unsupported — that was a probe bug (feeding GetStatus's accepted magics to
+//! GetInfo). With the correct per-IID magics both return Ok.
 //!
-//! **STATUS: pre-wrap, units UNCONFIRMED.** Under load the channel-0 value
-//! tracks NVML board power at ~0.95×, but at idle the ratio collapses to
-//! ~0.15–0.54, so the raw values cannot yet be converted to W/A reliably —
-//! the per-channel type-specific scaling (slope/offset from the descriptors)
-//! must be cross-validated against GPU-Z first. Do NOT surface decoded power
-//! to the UI yet; the values here are deliberately raw.
+//! Two surfaces:
+//! - [`PowerRails`] — the 4 GPU-Z-confirmed named rails (Board/Chip/MVDDC/
+//!   PWR_SRC) extracted from GetStatus by known offsets. Safe to display.
+//! - [`PowerMonitor`] — the full decoded descriptor table (channel identity +
+//!   scaling), research-grade; channel-0 carries a live status at +0x44.
 
 use crate::sys::gpu::power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4;
 #[cfg(feature = "serde")]
@@ -142,4 +142,70 @@ pub fn power_monitor_from_raw(info: &NV_GPU_POWER_MONITOR_GET_INFO_V4, status_by
         }
     }
     channels
+}
+
+/// Per-rail live power readings from PowerMonitor GetStatus, in **milliwatts**
+/// (units confirmed by exact GPU-Z match: raw ÷ 1000 = W). Each field is the
+/// draw on that rail, or `None` if GetStatus didn't populate it.
+///
+/// **Layout caveat:** the byte offsets are from the v1|392 GetStatus layout on
+/// an RTX 4060 Laptop (Ada), confirmed against GPU-Z under core + memory load.
+/// The offsets are channel-order-dependent and may differ on other GPUs — the
+/// robust channel-bit→offset mapping needs per-bit isolation (see the test
+/// `nvapi_power_monitor_bit_isolation`). If a value looks implausible on a new
+/// GPU, treat it as unvalidated until re-checked.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PowerRails {
+    /// Total board power draw (incl. PCIe slot + USB overhead). = GPU-Z "Board
+    /// Power Draw"; matches NVML `power_usage`. GetStatus +0x08.
+    pub board_mw: Option<u32>,
+    /// GPU core/chip power draw. = GPU-Z "GPU Chip Power Draw". GetStatus +0x14.
+    pub chip_mw: Option<u32>,
+    /// Memory (MVDDC) power draw. = GPU-Z "MVDDC Power Draw". GetStatus +0x2C.
+    pub mvddc_mw: Option<u32>,
+    /// Main board power-source rail. = GPU-Z "PWR_SRC Power Draw".
+    /// GetStatus +0x98.
+    pub pwr_src_mw: Option<u32>,
+}
+
+impl PowerRails {
+    /// Board power in watts (rounded), or `None`.
+    pub fn board_w(&self) -> Option<f32> {
+        self.board_mw.map(|mw| mw as f32 / 1000.0)
+    }
+    /// Chip/core power in watts (rounded), or `None`.
+    pub fn chip_w(&self) -> Option<f32> {
+        self.chip_mw.map(|mw| mw as f32 / 1000.0)
+    }
+    /// Memory (MVDDC) power in watts, or `None`.
+    pub fn mvddc_w(&self) -> Option<f32> {
+        self.mvddc_mw.map(|mw| mw as f32 / 1000.0)
+    }
+    /// PWR_SRC rail power in watts, or `None`.
+    pub fn pwr_src_w(&self) -> Option<f32> {
+        self.pwr_src_mw.map(|mw| mw as f32 / 1000.0)
+    }
+}
+
+/// Extract the four GPU-Z-confirmed named rails from a raw GetStatus v1|392
+/// buffer. See [`PowerRails`] for the layout caveat. A slot is `None` when the
+/// driver left it zero (rail absent on this GPU) — board/chip are essentially
+/// always present; mvddc/pwr_src may be absent on some SKUs.
+pub fn power_rails_from_status(status_bytes: &[u8]) -> PowerRails {
+    let slot = |off: usize| -> Option<u32> {
+        if off + 4 > status_bytes.len() {
+            return None;
+        }
+        let v = u32::from_le_bytes(
+            status_bytes[off..off + 4].try_into().unwrap_or([0; 4]),
+        );
+        (v != 0).then_some(v)
+    };
+    PowerRails {
+        board_mw: slot(0x08),
+        chip_mw: slot(0x14),
+        mvddc_mw: slot(0x2C),
+        pwr_src_mw: slot(0x98),
+    }
 }

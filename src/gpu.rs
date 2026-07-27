@@ -511,6 +511,41 @@ impl PhysicalGpu {
         Ok(crate::power::power_monitor_from_raw(&info, &status_buf))
     }
 
+    /// The 4 GPU-Z-confirmed per-rail power readings (Board / Chip / MVDDC /
+    /// PWR_SRC) in milliwatts, via PowerMonitor GetStatus v1|392. Units
+    /// confirmed by exact GPU-Z match. Returns `Ok(PowerRails::default())`
+    /// (all-None) if the GPU/driver doesn't expose PowerMonitor — callers can
+    /// treat any `None` field as "not available on this GPU". See
+    /// [`crate::power::PowerRails`] for the layout caveat.
+    pub fn power_rails(&self) -> crate::NvapiResult<crate::power::PowerRails> {
+        trace!("gpu.power_rails()");
+        // GetInfo v4 first: its channel_mask tells us which channels actually
+        // exist on this GPU. GetStatus only populates channels whose bits are
+        // set in the INPUT channel_mask at +0x04 — passing 0xFFFFFFFF (all 32)
+        // makes the driver return empty on some GPUs, so pass the real mask.
+        let mut info = power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4 {
+            version: NvVersion::new(size_of::<power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4>(), 4),
+            ..Default::default()
+        };
+        let status = unsafe {
+            sys::api::NvAPI_GPU_PowerMonitorGetInfo(self.0, ptr::from_mut(&mut info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, status)?;
+
+        let mut status_buf = [0u8; 392];
+        // GetStatus v1|392: +0x00 version=(1<<16)|392, +0x04 input channel_mask.
+        status_buf[0..4].copy_from_slice(&(NvVersion::new(392, 1).data).to_le_bytes());
+        status_buf[4..8].copy_from_slice(&info.channel_mask.to_le_bytes());
+        let status = unsafe {
+            sys::api::NvAPI_GPU_PowerMonitorGetStatus(
+                self.0,
+                status_buf.as_mut_ptr().cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetStatus, status)?;
+        Ok(crate::power::power_rails_from_status(&status_buf))
+    }
+
     pub fn current_pstate(&self) -> crate::Result<PState> {
         trace!("gpu.current_pstate()");
 

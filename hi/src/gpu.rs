@@ -32,6 +32,7 @@ pub use nvapi::{
     ThermalTarget, UtilizationDomain, Utilizations,
     AllClocks,
     PowerMonitor,
+    PowerRails,
     Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
 };
 
@@ -139,6 +140,11 @@ pub struct GpuStatus {
     /// expose PowerMonitor. **Pre-wrap / research: raw values, units
     /// unconfirmed** — see `nvapi::power` for the validation status.
     pub power_monitor: Option<PowerMonitor>,
+    /// The 4 GPU-Z-confirmed named power rails (Board / Chip / MVDDC /
+    /// PWR_SRC) in milliwatts, via PowerMonitor GetStatus v1|392. `None`
+    /// where PowerMonitor isn't exposed; individual rail fields are `None`
+    /// when absent on a given GPU. Units confirmed (raw ÷ 1000 = W).
+    pub power_rails: Option<PowerRails>,
     pub memory: Option<MemoryInfo>,
     pub pcie_lanes: Option<u32>,
     pub ecc: EccStatus,
@@ -424,6 +430,7 @@ impl Gpu {
             effective_clocks: self.gpu.effective_clocks().ok(),
             all_clocks: self.gpu.all_clocks().ok(),
             power_monitor: self.gpu.power_monitor_v4().ok(),
+            power_rails: self.gpu.power_rails().ok(),
             memory: allowable_result(self.gpu.memory_info())?.ok(),
             pcie_lanes: match self.gpu.bus_type() {
                 Ok(BusType::PciExpress) => {
