@@ -200,6 +200,13 @@ pub struct PowerRailReading {
     /// Live power draw on this rail, in milliwatts. 0 when GetStatus didn't
     /// populate the channel (rail present but currently unreadable).
     pub pwr_mw: u32,
+    /// Confidence: `true` when per-bit isolation gave this channel a PRIVATE
+    /// GetStatus offset (a trustworthy per-channel reading). `false` when the
+    /// channel's per-bit buffer was a full-board view (ambiguous — the value
+    /// is surfaced but may be a board-total duplicate, not this rail's draw).
+    /// On some GPUs (desktop Turing) only type=8 channels isolate cleanly;
+    /// summation (type=1) channels return a full-board view there.
+    pub isolated: bool,
 }
 
 impl PowerRailReading {
