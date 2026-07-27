@@ -477,18 +477,33 @@ impl PhysicalGpu {
     /// supporting PowerMonitor — returns an error otherwise.
     pub fn power_monitor_v4(&self) -> crate::NvapiResult<crate::power::PowerMonitor> {
         trace!("gpu.power_monitor_v4()");
-        // GetInfo v4: stamp (4<<16)|sizeof to request the 6312-byte layout.
-        let mut info = power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4 {
-            version: NvVersion::new(size_of::<power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4>(), 4),
-            ..Default::default()
-        };
-        let status = unsafe {
-            sys::api::NvAPI_GPU_PowerMonitorGetInfo(
-                self.0,
-                ptr::from_mut(&mut info).cast(),
-            )
-        };
-        crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, status)?;
+        // GetInfo: try the richest layout first, fall back to smaller ones so
+        // older drivers that reject v4 still yield descriptors. v4|6312,
+        // v3|3240, v1|2728 share an identical header + descriptor-offset
+        // format (differ only in type=5 VF-LUT truncation), so the reader
+        // works on whichever succeeds. Each arm stamps its version magic and,
+        // on Ok, builds a version-independent PowerMonitorInfo.
+        macro_rules! try_getinfo {
+            ($ty:ty, $ver:expr) => {{
+                let mut info = <$ty>::default();
+                info.version = NvVersion::new(size_of::<$ty>(), $ver);
+                let status = unsafe {
+                    sys::api::NvAPI_GPU_PowerMonitorGetInfo(
+                        self.0,
+                        ptr::from_mut(&mut info).cast(),
+                    )
+                };
+                if crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, status).is_ok() {
+                    Some(crate::power::PowerMonitorInfo::from(&info))
+                } else {
+                    None
+                }
+            }};
+        }
+        let info = try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4, 4)
+            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V3_3240, 3))
+            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 1))
+            .ok_or(crate::NvapiError::new(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, sys::Status::NotSupported))?;
 
         // GetStatus v1|392: the driver only fills channels whose bits are set
         // in the INPUT channel_mask at +0x04. Default (zero) fills only ch0;
@@ -519,23 +534,34 @@ impl PhysicalGpu {
     /// [`crate::power::PowerRails`] for the layout caveat.
     pub fn power_rails(&self) -> crate::NvapiResult<crate::power::PowerRails> {
         trace!("gpu.power_rails()");
-        // GetInfo v4 first: its channel_mask tells us which channels actually
-        // exist on this GPU. GetStatus only populates channels whose bits are
+        // GetInfo: need only channel_mask. Try the smallest descriptor-bearing
+        // layout first (v1|2728 — cheapest that yields the mask), fall back to
+        // v3|3240 / v4|6312. GetStatus only populates channels whose bits are
         // set in the INPUT channel_mask at +0x04 — passing 0xFFFFFFFF (all 32)
         // makes the driver return empty on some GPUs, so pass the real mask.
-        let mut info = power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4 {
-            version: NvVersion::new(size_of::<power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4>(), 4),
-            ..Default::default()
-        };
-        let status = unsafe {
-            sys::api::NvAPI_GPU_PowerMonitorGetInfo(self.0, ptr::from_mut(&mut info).cast())
-        };
-        crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, status)?;
+        macro_rules! try_getinfo {
+            ($ty:ty, $ver:expr) => {{
+                let mut info = <$ty>::default();
+                info.version = NvVersion::new(size_of::<$ty>(), $ver);
+                let status = unsafe {
+                    sys::api::NvAPI_GPU_PowerMonitorGetInfo(self.0, ptr::from_mut(&mut info).cast())
+                };
+                if crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, status).is_ok() {
+                    Some(info.channel_mask)
+                } else {
+                    None
+                }
+            }};
+        }
+        let mask = try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 1)
+            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V3_3240, 3))
+            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4, 4))
+            .ok_or(crate::NvapiError::new(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, sys::Status::NotSupported))?;
 
         let mut status_buf = [0u8; 392];
         // GetStatus v1|392: +0x00 version=(1<<16)|392, +0x04 input channel_mask.
         status_buf[0..4].copy_from_slice(&(NvVersion::new(392, 1).data).to_le_bytes());
-        status_buf[4..8].copy_from_slice(&info.channel_mask.to_le_bytes());
+        status_buf[4..8].copy_from_slice(&mask.to_le_bytes());
         let status = unsafe {
             sys::api::NvAPI_GPU_PowerMonitorGetStatus(
                 self.0,

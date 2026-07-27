@@ -14,9 +14,38 @@
 //! - [`PowerMonitor`] — the full decoded descriptor table (channel identity +
 //!   scaling), research-grade; channel-0 carries a live status at +0x44.
 
-use crate::sys::gpu::power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4;
+use crate::sys::gpu::power::private::{
+    NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, NV_GPU_POWER_MONITOR_GET_INFO_V3_3240,
+    NV_GPU_POWER_MONITOR_GET_INFO_V4,
+};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+
+/// Version-independent view of a PowerMonitor GetInfo result: the channel
+/// mask + the raw descriptor bytes (owned, so it outlives the source struct).
+/// The v1|2728 / v3|3240 / v4|6312 layouts share an identical header +
+/// descriptor-offset format, so a descriptor reader only needs these two
+/// fields regardless of which version the driver accepted.
+pub struct PowerMonitorInfo {
+    pub channel_mask: u32,
+    pub descriptors: Vec<u8>,
+}
+
+macro_rules! impl_powermonitorinfo {
+    ($ty:ty) => {
+        impl From<&$ty> for PowerMonitorInfo {
+            fn from(info: &$ty) -> Self {
+                PowerMonitorInfo {
+                    channel_mask: info.channel_mask,
+                    descriptors: info.descriptors_bytes().to_vec(),
+                }
+            }
+        }
+    };
+}
+impl_powermonitorinfo!(NV_GPU_POWER_MONITOR_GET_INFO_V1_2728);
+impl_powermonitorinfo!(NV_GPU_POWER_MONITOR_GET_INFO_V3_3240);
+impl_powermonitorinfo!(NV_GPU_POWER_MONITOR_GET_INFO_V4);
 
 /// A per-channel live reading from PowerMonitor GetStatus. **Raw values,
 /// units unconfirmed** — fields are the observed slots (avg/min/max power,
@@ -69,19 +98,22 @@ fn plausible_rail(r: u32) -> bool {
     r == 0 || r <= 11 || (218..=255).contains(&r)
 }
 
-/// Decode the variable-stride per-channel descriptor table from a GetInfo v4
+/// Decode the variable-stride per-channel descriptor table from a GetInfo
 /// buffer by signature scan: a descriptor is recognized by `(channel_type in
 /// 1..=8)` immediately followed by a plausible `pwr_rail`. Record length varies
 /// with channel_type (type 5/7 carry VF-estimation LUT tables), so this scans
 /// rather than stepping a fixed stride — mirroring the proven probe logic in
-/// `core/tests/gpu_readonly.rs::nvapi_power_monitor_raw`.
+/// `core/tests/gpu_readonly.rs::nvapi_power_monitor_raw`. Works identically
+/// across the v1|2728 / v3|3240 / v4|6312 layouts (same header + descriptor
+/// offsets); pass a [`PowerMonitorInfo`] built from whichever version the
+/// driver accepted.
 ///
 /// `status_bytes` is the raw GetStatus v1|392 buffer (the live per-channel
 /// values). Status values are best-effort positionally matched to descriptors;
 /// matching is intentionally loose because the status record stride is also
 /// irregular and not yet fully decoded.
-pub fn power_monitor_from_raw(info: &NV_GPU_POWER_MONITOR_GET_INFO_V4, status_bytes: &[u8]) -> PowerMonitor {
-    let desc = info.descriptors_bytes();
+pub fn power_monitor_from_raw(info: &PowerMonitorInfo, status_bytes: &[u8]) -> PowerMonitor {
+    let desc = info.descriptors.as_slice();
     let desc_words = desc.len() / 4;
     let w = |i: usize| -> u32 {
         if i < desc_words {

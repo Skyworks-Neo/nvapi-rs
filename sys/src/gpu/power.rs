@@ -676,45 +676,61 @@ pub mod private {
     // descriptor's decoded header is: [pwr_device_mask, channel_type,
     // pwr_rail, volt_fixed_uv, pwr_corr_slope(4096=Q12), curr_corr_slope, ...].
     //
-    // This is a RESEARCH/PRE-WRAP struct: units of the corresponding
-    // GetStatus values are NOT yet confirmed (load ratio ~0.95 vs NVML but
-    // idle collapses to ~0.15-0.54), so do NOT surface decoded power to the
-    // UI until the channel->rail->units mapping is cross-validated.
+    // VERSION ALIGNMENT: v1|2728 (magic 68264), v3|3240 (199848), and v4|6312
+    // (268456) share an IDENTICAL header + descriptor-offset layout — they
+    // differ ONLY in where the type=5 VF-LUT records truncate (smaller magic
+    // = less VF-curve detail, but the same channel identity). v1|404 (65940)
+    // is header-only (just channel_mask, no descriptors). The hi-layer reader
+    // tries v4 -> v3 -> v1|2728 in order so older drivers that reject v4
+    // still get descriptors. See `nvapi_rs::power` for the fallback chain.
     // ------------------------------------------------------------------
-    nvstruct! {
-        pub struct NV_GPU_POWER_MONITOR_GET_INFO_V4 {
-            pub version: NvVersion,
-            pub b_supported: BoolU32,
-            pub sampling_period_ms: u32,
-            pub sample_count: u32,
-            pub channel_mask: u32,
-            pub ch_rel_mask: u32,
-            pub total_gpu_power_channel_mask: u32,
-            pub total_gpu_channel_idx: u8,
-            /// Header padding to byte offset 0x34 (where the first descriptor
-            /// begins in the observed v4 layout).
-            pub header_rsvd: Padding<[u8; 0x34 - 0x1D]>,
-            /// Variable-length, sparsely-packed per-channel descriptors.
-            /// Parsed by signature scan — record length varies with channel_type.
-            pub descriptors: Padding<[u8; 6312 - 0x34]>,
-        }
+
+    /// Shared header fields for the v1|2728 / v3|3240 / v4|6312 GetInfo
+    /// layouts (identical across all three). The descriptor region that
+    /// follows is version-sized, so each version struct embeds this header
+    /// then a differently-sized raw descriptor buffer.
+    macro_rules! powermonitor_getinfo_versioned {
+        ($name:ident, $magic_size:expr) => {
+            nvstruct! {
+                pub struct $name {
+                    pub version: NvVersion,
+                    pub b_supported: BoolU32,
+                    pub sampling_period_ms: u32,
+                    pub sample_count: u32,
+                    pub channel_mask: u32,
+                    pub ch_rel_mask: u32,
+                    pub total_gpu_power_channel_mask: u32,
+                    pub total_gpu_channel_idx: u8,
+                    /// Header padding to byte offset 0x34 (first descriptor).
+                    pub header_rsvd: Padding<[u8; 0x34 - 0x1D]>,
+                    /// Variable-length, sparsely-packed per-channel descriptors.
+                    /// Parsed by signature scan (channel_type 1..=8 + plausible
+                    /// PowerRail); record length varies with channel_type.
+                    pub descriptors: Padding<[u8; $magic_size - 0x34]>,
+                }
+            }
+
+            impl $name {
+                /// The descriptor region as a raw byte slice (signature-scan
+                /// parsed by the hi layer).
+                pub fn descriptors_bytes(&self) -> &[u8] {
+                    &self.descriptors[..]
+                }
+            }
+
+            impl Default for $name {
+                fn default() -> Self {
+                    unsafe { std::mem::zeroed() }
+                }
+            }
+        };
     }
 
-    impl NV_GPU_POWER_MONITOR_GET_INFO_V4 {
-        /// The descriptor region as a raw byte slice (signature-scan parsed
-        /// by the hi layer — see `nvapi_rs::power::power_monitor_from_raw`).
-        pub fn descriptors_bytes(&self) -> &[u8] {
-            &self.descriptors[..]
-        }
-    }
+    powermonitor_getinfo_versioned!(NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 2728);
+    powermonitor_getinfo_versioned!(NV_GPU_POWER_MONITOR_GET_INFO_V3_3240, 3240);
+    powermonitor_getinfo_versioned!(NV_GPU_POWER_MONITOR_GET_INFO_V4, 6312);
 
-    // Manual Default: zeroes the buffer. (The `nvversion!` `@=` form would
-    // provide this, but we use the bare form to avoid shadowing the V2 alias.)
-    impl Default for NV_GPU_POWER_MONITOR_GET_INFO_V4 {
-        fn default() -> Self {
-            unsafe { std::mem::zeroed() }
-        }
-    }
-
+    nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V1_2728(1) = 2728 }
+    nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V3_3240(3) = 3240 }
     nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V4(4) = 6312 }
 }
