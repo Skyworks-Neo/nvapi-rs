@@ -90,8 +90,7 @@ pub fn power_monitor_from_raw(info: &NV_GPU_POWER_MONITOR_GET_INFO_V4, status_by
             0
         }
     };
-    // Read a u32 from the STATUS buffer at a byte offset (used for best-effort
-    // positional matching of the live value to each descriptor).
+    // Read a u32 from the STATUS buffer at a byte offset.
     let s = |off: usize| -> u32 {
         if off + 4 <= status_bytes.len() {
             u32::from_le_bytes(status_bytes[off..off + 4].try_into().unwrap_or([0; 4]))
@@ -100,8 +99,19 @@ pub fn power_monitor_from_raw(info: &NV_GPU_POWER_MONITOR_GET_INFO_V4, status_by
         }
     };
 
+    // NOTE on GetStatus matching: the GetStatus v1|392 buffer does NOT carry a
+    // per-record channel_type signature like GetInfo does, so its per-channel
+    // record stride cannot be recovered by the same signature scan. Only
+    // channel 0's value is at a known, confirmed offset (+0x44 — the total GPU
+    // power channel). The other channels' offsets are irregular and not yet
+    // decoded; decoding them requires correlating the GetStatus nonzero slots
+    // (+0x2C/+0x44/+0x80/+0x98/+0xE0/+0xEC/+0x14C observed) to channels under
+    // controlled per-rail load. Until then only ch0 gets a live status; the
+    // raw byte-dump probe (nvapi_power_monitor_raw) remains the source of truth
+    // for all-channel status bytes.
     let mut channels = Vec::new();
     let mut i = 0usize; // word index into the descriptor region
+    let mut desc_idx = 0usize;
     while i + 1 < desc_words {
         let ctype = w(i);
         let rail = w(i + 1);
@@ -112,15 +122,12 @@ pub fn power_monitor_from_raw(info: &NV_GPU_POWER_MONITOR_GET_INFO_V4, status_by
             let base = i * 4;
             let volt_fixed = w(i + 2);
             let slope = w(i + 3);
-            // Best-effort live status: the probe observed the channel-0 value
-            // at GetStatus +0x44; for other channels the status record offsets
-            // are irregular, so we only attach a status when we can read a
-            // plausible nonzero slot near a heuristic position. This is loose
-            // by design until the status stride is fully decoded.
-            let raw_status = (i == 0).then(|| PowerMonitorStatus {
+            // Only channel 0's live status is at a confirmed GetStatus offset.
+            let raw_status = (desc_idx == 0).then(|| PowerMonitorStatus {
                 pwr_avg: s(0x44),
                 ..Default::default()
             });
+            desc_idx += 1;
             channels.push(PowerMonitorChannel {
                 byte_offset: base,
                 channel_type: ctype,
