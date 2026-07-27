@@ -656,4 +656,65 @@ pub mod private {
         /// some GPU/driver combos — gate on GetInfo's `b_supported`.
         pub unsafe fn NvAPI_GPU_PowerMonitorGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_POWER_MONITOR_GET_STATUS) -> NvAPI_Status;
     }
+
+    // ------------------------------------------------------------------
+    // PowerMonitor V4 — the deployed driver's richest GetInfo layout.
+    //
+    // RE'd 2026-07-27 from the live driver on RTX 4060 Laptop: GetInfo
+    // (0xC12EB19E) accepts magic (4<<16)|6312 = 268456, returning a 6312-byte
+    // buffer whose first 0x34 bytes are the header below and whose remaining
+    // 6260 bytes hold a VARIABLE-LENGTH, SPARSELY-PACKED per-channel
+    // descriptor table. Each descriptor's length depends on its channel_type
+    // (type 5/7 carry VF-estimation LUT tables; type 1/8 are small), so the
+    // records are NOT a fixed-stride array — observed descriptor offsets were
+    // 0x34, 0x74, 0xE8, 0x160, 0x28C, ... (irregular strides).
+    //
+    // Because of that, this struct exposes the descriptor region as a raw
+    // byte buffer (`descriptors`); the hi layer parses it by signature scan
+    // (channel_type in 1..=8 + a plausible PowerRail), reusing the exact logic
+    // proven in core/tests/gpu_readonly.rs::nvapi_power_monitor_raw. Each
+    // descriptor's decoded header is: [pwr_device_mask, channel_type,
+    // pwr_rail, volt_fixed_uv, pwr_corr_slope(4096=Q12), curr_corr_slope, ...].
+    //
+    // This is a RESEARCH/PRE-WRAP struct: units of the corresponding
+    // GetStatus values are NOT yet confirmed (load ratio ~0.95 vs NVML but
+    // idle collapses to ~0.15-0.54), so do NOT surface decoded power to the
+    // UI until the channel->rail->units mapping is cross-validated.
+    // ------------------------------------------------------------------
+    nvstruct! {
+        pub struct NV_GPU_POWER_MONITOR_GET_INFO_V4 {
+            pub version: NvVersion,
+            pub b_supported: BoolU32,
+            pub sampling_period_ms: u32,
+            pub sample_count: u32,
+            pub channel_mask: u32,
+            pub ch_rel_mask: u32,
+            pub total_gpu_power_channel_mask: u32,
+            pub total_gpu_channel_idx: u8,
+            /// Header padding to byte offset 0x34 (where the first descriptor
+            /// begins in the observed v4 layout).
+            pub header_rsvd: Padding<[u8; 0x34 - 0x1D]>,
+            /// Variable-length, sparsely-packed per-channel descriptors.
+            /// Parsed by signature scan — record length varies with channel_type.
+            pub descriptors: Padding<[u8; 6312 - 0x34]>,
+        }
+    }
+
+    impl NV_GPU_POWER_MONITOR_GET_INFO_V4 {
+        /// The descriptor region as a raw byte slice (signature-scan parsed
+        /// by the hi layer — see `nvapi_rs::power::power_monitor_from_raw`).
+        pub fn descriptors_bytes(&self) -> &[u8] {
+            &self.descriptors[..]
+        }
+    }
+
+    // Manual Default: zeroes the buffer. (The `nvversion!` `@=` form would
+    // provide this, but we use the bare form to avoid shadowing the V2 alias.)
+    impl Default for NV_GPU_POWER_MONITOR_GET_INFO_V4 {
+        fn default() -> Self {
+            unsafe { std::mem::zeroed() }
+        }
+    }
+
+    nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V4(4) = 6312 }
 }

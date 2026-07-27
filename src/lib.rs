@@ -13,6 +13,7 @@ mod gsync;
 #[cfg(feature = "i2c")]
 mod i2c_impl;
 mod info;
+mod power;
 mod pstate;
 mod thermal;
 mod types;
@@ -25,6 +26,7 @@ pub use gsync::*;
 #[cfg(feature = "i2c")]
 pub use i2c_impl::*;
 pub use info::*;
+pub use power::*;
 pub use pstate::*;
 pub use thermal::*;
 pub use types::*;

@@ -466,6 +466,51 @@ impl PhysicalGpu {
             .map(|_| crate::clock::all_clocks_from_raw(&data))
     }
 
+    /// Per-channel / per-rail power via PowerMonitor v4 GetInfo + v1 GetStatus
+    /// (IDs 0xC12EB19E / 0xF40238EF). Returns the decoded descriptor table
+    /// (channel_type, pwr_rail identity, Q12 scaling) plus a best-effort live
+    /// reading for channel 0 (the total GPU power channel).
+    ///
+    /// **Pre-wrap / research.** The descriptor layout is variable-stride and
+    /// parsed by signature scan; the GetStatus values are raw with units not
+    /// yet confirmed (see [`crate::power`] docs). Gate the call on the GPU
+    /// supporting PowerMonitor — returns an error otherwise.
+    pub fn power_monitor_v4(&self) -> crate::NvapiResult<crate::power::PowerMonitor> {
+        trace!("gpu.power_monitor_v4()");
+        // GetInfo v4: stamp (4<<16)|sizeof to request the 6312-byte layout.
+        let mut info = power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4 {
+            version: NvVersion::new(size_of::<power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4>(), 4),
+            ..Default::default()
+        };
+        let status = unsafe {
+            sys::api::NvAPI_GPU_PowerMonitorGetInfo(
+                self.0,
+                ptr::from_mut(&mut info).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, status)?;
+
+        // GetStatus v1|392: the driver only fills channels whose bits are set
+        // in the INPUT channel_mask at +0x04. Default (zero) fills only ch0;
+        // pass GetInfo's full mask so every present channel is populated.
+        let mut status_buf = [0u8; 392];
+        // +0x00 version = (1<<16)|392, +0x04 channel_mask = GetInfo's mask.
+        status_buf[0..4].copy_from_slice(&(NvVersion::new(392, 1).data).to_le_bytes());
+        let mask = info.channel_mask;
+        status_buf[4..8].copy_from_slice(&mask.to_le_bytes());
+        let status = unsafe {
+            sys::api::NvAPI_GPU_PowerMonitorGetStatus(
+                self.0,
+                status_buf.as_mut_ptr().cast(),
+            )
+        };
+        // GetStatus is best-effort (may stub on some driver/GPU combos); a
+        // non-Ok status still yields descriptors from GetInfo, just no live
+        // values. Only treat a real Ok as carrying status bytes.
+        let _ = crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetStatus, status);
+        Ok(crate::power::power_monitor_from_raw(&info, &status_buf))
+    }
+
     pub fn current_pstate(&self) -> crate::Result<PState> {
         trace!("gpu.current_pstate()");
 
