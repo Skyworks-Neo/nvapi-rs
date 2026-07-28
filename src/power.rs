@@ -200,13 +200,25 @@ pub struct PowerRailReading {
     /// Live power draw on this rail, in milliwatts. 0 when GetStatus didn't
     /// populate the channel (rail present but currently unreadable).
     pub pwr_mw: u32,
-    /// Confidence: `true` when per-bit isolation gave this channel a PRIVATE
-    /// GetStatus offset (a trustworthy per-channel reading). `false` when the
-    /// channel's per-bit buffer was a full-board view (ambiguous — the value
-    /// is surfaced but may be a board-total duplicate, not this rail's draw).
-    /// On some GPUs (desktop Turing) only type=8 channels isolate cleanly;
-    /// summation (type=1) channels return a full-board view there.
-    pub isolated: bool,
+    /// How `pwr_mw` was obtained — see [`Confidence`]. Drives downstream
+    /// rendering (Measured=plain, Inferred=`~`, Ambiguous=`?`, Unavailable
+    /// =omitted). Replaces the earlier `isolated: bool`; callers that only
+    /// need the trusted/untrusted split can use `confidence.is_trusted()`.
+    pub confidence: Confidence,
+    /// Secondary private GetStatus readings for this channel (offset, value),
+    /// when the channel had >1 private offset (e.g. type=8 channels exposing
+    /// both an instantaneous and an averaged/peak slot). The primary reading
+    /// is in `pwr_mw` (lowest-offset private slot); these are the rest, kept
+    /// so downstream can surface them rather than silently `max()`-ing them
+    /// away. Empty for Inferred/Ambiguous channels (single attributed offset).
+    pub aux_readings: Vec<(usize, u32)>,
+    /// GPU-Z-equivalent friendly name for this rail (e.g. "Board", "Chip",
+    /// "MVDDC", "PWR_SRC", "16-Pin"), from the semantic map
+    /// [`gpu_z_rail_name`]. `None` when no GPU-Z equivalent is known (the
+    /// rail is NVAPI-specific; use `rail_name` to label it). Owned `String`
+    /// so the struct remains `Deserialize`-able (a `&'static str` would not
+    /// survive deserialization from JSON).
+    pub gpuz_name: Option<String>,
 }
 
 impl PowerRailReading {
@@ -220,7 +232,9 @@ impl PowerRailReading {
 /// Keyed/identified by the descriptor's `pwr_rail` (via [`power_rail_name`]),
 /// NOT by a fixed offset — so it's correct on every GPU regardless of how the
 /// driver orders channels (the RTX 4060 Laptop and a desktop Turing expose
-/// different rail sets and orderings; both decode correctly here).
+/// different rail sets and orderings; both decode correctly here). Each
+/// reading carries a [`Confidence`] tier so callers can render trustworthy
+/// (Measured) vs inferred (`~`) vs ambiguous (`?`) values distinctly.
 pub type PowerRails = Vec<PowerRailReading>;
 
 /// Build the `channel_bit -> (pwr_rail, channel_type)` map from a GetInfo
@@ -305,6 +319,329 @@ pub fn extract_channel_mw(
         }
     }
     best
+}
+
+/// Per-channel intermediate state used by [`disambiguate_power_rails`].
+struct DisChan {
+    bit: u32,
+    pwr_rail: u32,
+    channel_type: u32,
+    /// This bit's GetStatus nonzero `(offset, value)` slots.
+    nz: Vec<(usize, u32)>,
+    /// Private offsets (nonzero here, absent from every other bit).
+    private: Vec<(usize, u32)>,
+    confidence: Confidence,
+    pwr_mw: u32,
+    /// Secondary private readings beyond the primary (lowest-offset) one.
+    aux_readings: Vec<(usize, u32)>,
+}
+
+/// Resolve per-rail power readings from a GetInfo descriptor map + per-bit
+/// GetStatus samples, assigning each channel a [`Confidence`] tier.
+///
+/// Algorithm (adversarially reviewed — see commit history for the bug list it
+/// closes): ownership is monotonic via `resolved_owner`; values are computed
+/// only after ownership settles. For each still-ambiguous channel we look for a
+/// candidate offset that (a) isn't baseline, (b) isn't already owned, (c) has
+/// every other claimant already resolved, (d) agrees with all claimants on the
+/// value within 25% (else it's sensor cross-talk, not clean ownership), and
+/// (e) whose GPU-Z label (if known) matches the descriptor rail. The first
+/// channel to satisfy these for an offset claims it; the worklist iterates to a
+/// fixed point. This never synthesizes a reading from no signal (Turing, where
+/// the baseline swallows everything, stays all-Ambiguous — the safe outcome).
+pub fn disambiguate_power_rails(
+    rail_map: &[(u32, u32, u32)],
+    per_bit: &[(u32, Vec<(usize, u32)>)],
+) -> PowerRails {
+    use std::collections::{HashMap, HashSet};
+    let n = rail_map.len();
+    let all_sets: Vec<HashSet<usize>> = per_bit
+        .iter()
+        .map(|(_, nz)| nz.iter().map(|(o, _)| *o).collect())
+        .collect();
+
+    // Baseline = offsets present in EVERY non-empty buffer (an empty buffer is
+    // an unreadable channel, not evidence for the shared baseline).
+    let baseline: HashSet<usize> = {
+        let nonempty: Vec<&HashSet<usize>> = all_sets.iter().filter(|s| !s.is_empty()).collect();
+        if nonempty.is_empty() {
+            HashSet::new()
+        } else {
+            let mut iter = nonempty.iter();
+            let first = (*iter.next().unwrap()).clone();
+            iter.fold(first, |acc, s| acc.intersection(s).copied().collect())
+        }
+    };
+
+    // Per-channel private offsets + initial confidence.
+    let mut chans: Vec<DisChan> = (0..n)
+        .map(|i| {
+            let my = all_sets.get(i).cloned().unwrap_or_default();
+            let other_union: HashSet<usize> = (0..n)
+                .filter(|&j| j != i)
+                .flat_map(|j| all_sets.get(j).into_iter().flat_map(|s| s.iter().copied()))
+                .collect();
+            let private: Vec<(usize, u32)> = per_bit
+                .get(i)
+                .map(|(_, nz)| {
+                    nz.iter()
+                        .filter(|(o, _)| my.contains(o) && !other_union.contains(o))
+                        .copied()
+                        .collect()
+                })
+                .unwrap_or_default();
+            let confidence = if my.is_empty() {
+                Confidence::Unavailable
+            } else if !private.is_empty() {
+                Confidence::Measured
+            } else {
+                Confidence::Ambiguous
+            };
+            DisChan {
+                bit: rail_map[i].0,
+                pwr_rail: rail_map[i].1,
+                channel_type: rail_map[i].2,
+                nz: per_bit.get(i).map(|(_, v)| v.clone()).unwrap_or_default(),
+                private: private.clone(),
+                confidence,
+                pwr_mw: 0,
+                aux_readings: Vec::new(),
+            }
+        })
+        .collect();
+
+    // Phase 1: seed ownership from Measured channels' private offsets. First
+    // claimant wins (private offsets are exclusive by definition, so there is
+    // no real contention — but two Measured channels could in principle both
+    // list an offset if the per-bit buffers were noisy; first-wins is safe).
+    let mut resolved_owner: HashMap<usize, usize> = HashMap::new();
+    for (i, c) in chans.iter().enumerate() {
+        if c.confidence == Confidence::Measured {
+            for &(o, _) in &c.private {
+                resolved_owner.entry(o).or_insert(i);
+            }
+        }
+    }
+
+    // Phase 2: iterate disambiguation to a fixed point. Order doesn't affect
+    // the final ownership map (monotonic), only how many passes it takes.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        // Process channels with FEWER candidate offsets first (more private
+        // offsets ≈ more constrained) — stable by original index.
+        let mut order: Vec<usize> = (0..n)
+            .filter(|&i| chans[i].confidence == Confidence::Ambiguous)
+            .collect();
+        order.sort_by_key(|&i| {
+            let nonbase = chans[i].nz.iter().filter(|(o, _)| !baseline.contains(o)).count();
+            (std::cmp::Reverse(nonbase), i)
+        });
+
+        for i in order {
+            // Collect candidate offsets for channel i.
+            let mut candidates: Vec<(usize, u32)> = Vec::new();
+            for &(o, v) in &chans[i].nz {
+                if baseline.contains(&o) {
+                    continue;
+                }
+                if resolved_owner.contains_key(&o) {
+                    continue; // already owned — never leak a resolved offset
+                }
+                // claimants = OTHER bits whose buffer also contains o.
+                let claimants: Vec<usize> = (0..n)
+                    .filter(|&j| j != i && all_sets.get(j).map(|s| s.contains(&o)).unwrap_or(false))
+                    .collect();
+                // Need every other claimant to already be resolved (have a
+                // value), so o is uniquely attributable to i.
+                let all_resolved = claimants.iter().all(|&j| {
+                    matches!(
+                        chans[j].confidence,
+                        Confidence::Measured | Confidence::Inferred
+                    )
+                });
+                if !all_resolved {
+                    continue;
+                }
+                // Value consistency: if claimants disagree on o by >25%, this
+                // is sensor cross-talk (one read the rail, another the board
+                // sum), not clean ownership — reject.
+                let mut vals: Vec<u32> = vec![v];
+                for &j in &claimants {
+                    if let Some(vj) = chans[j].nz.iter().find(|(oo, _)| *oo == o).map(|(_, vv)| *vv)
+                    {
+                        vals.push(vj);
+                    }
+                }
+                let mx = *vals.iter().max().unwrap_or(&0);
+                let mn = *vals.iter().min().unwrap_or(&0);
+                if mn > 0 && (mx as f64) / (mn as f64) > 1.25 {
+                    continue;
+                }
+                // Semantic gate: if o has a known GPU-Z label, i's descriptor
+                // rail must match it (else we'd mislabel the rail). Unlabeled
+                // offsets pass through unchecked.
+                if let Some(label) = gpuz_offset_label(o) {
+                    if !rail_matches_label(chans[i].pwr_rail, label) {
+                        continue;
+                    }
+                }
+                candidates.push((o, v));
+            }
+
+            if !candidates.is_empty() {
+                // Prefer the largest-value candidate (the dominant reading);
+                // tie-break by lowest offset (the record's primary slot).
+                candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                let (o, v) = candidates[0];
+                resolved_owner.insert(o, i);
+                chans[i].pwr_mw = v;
+                chans[i].confidence = Confidence::Inferred;
+                changed = true;
+            }
+        }
+    }
+
+    // Phase 3: compute values for channels not set during the loop.
+    for c in chans.iter_mut() {
+        match c.confidence {
+            Confidence::Measured => {
+                // Primary = lowest-offset private slot; rest are aux readings
+                // (don't `max()` them away — e.g. type=8 instant + avg slots).
+                let mut private_sorted = c.private.clone();
+                private_sorted.sort_by_key(|(o, _)| *o);
+                c.pwr_mw = private_sorted.first().map(|(_, v)| *v).unwrap_or(0);
+                c.aux_readings = private_sorted[1..].to_vec();
+            }
+            Confidence::Inferred => {
+                // pwr_mw already set during disambiguation.
+            }
+            Confidence::Ambiguous => {
+                c.pwr_mw = extract_channel_mw(&c.nz, &baseline);
+            }
+            Confidence::Unavailable => {
+                c.pwr_mw = 0;
+            }
+        }
+    }
+
+    // Phase 4: build PowerRailReading (gpuz_name populated here — the earlier
+    // build site omitted it, which silently no-op'd the semantic gate).
+    chans
+        .into_iter()
+        .map(|c| PowerRailReading {
+            channel_bit: c.bit,
+            pwr_rail: c.pwr_rail,
+            rail_name: power_rail_name_owned(c.pwr_rail),
+            channel_type: c.channel_type,
+            pwr_mw: c.pwr_mw,
+            confidence: c.confidence,
+            aux_readings: c.aux_readings,
+            gpuz_name: gpu_z_rail_name(c.pwr_rail).map(|s| s.to_string()),
+        })
+        .collect()
+}
+
+/// GPU-Z-equivalent friendly name for an NVAPI `pwr_rail` value, or `None`
+/// when no GPU-Z equivalent is known. This is a SEMANTIC map (NVAPI rail →
+/// GPU-Z sensor label), validated by cross-referencing load/idle readings
+/// against GPU-Z on RTX 4060 Laptop + desktop Turing:
+///   - `InputTotalBoard` (245) ≈ GPU-Z "Board Power" / the 16-pin input on
+///     laptops. (GPU-Z "Board Power" includes PCIe-slot overhead, so this is
+///     close but not identical at idle.)
+///   - `InputNvvdd` (246) / `InputNvvdd1` (226) ≈ GPU-Z "GPU Chip Power"
+///     (the core input rail).
+///   - `InputFbvdd` (247) ≈ GPU-Z "MVDDC" (memory input rail).
+///   - `InputPwrSrcPp` (241) ≈ GPU-Z "PWR_SRC".
+///   - `InputPex12v1` (222) / `InputPex12v` (255) ≈ GPU-Z "PCIe slot" power.
+///   - `InputTotalBoard2` (223) ≈ GPU-Z "Board Power" (a second board-total
+///     channel, same semantic as 245; present on some SKUs alongside 245).
+///   - `OutputNvvdd` (1) ≈ GPU-Z "Chip" output regulator.
+/// Other rails (PEX3V3, Misc, Ext12v connectors, …) have no clean GPU-Z
+/// single-rail equivalent → `None` (label by `rail_name` instead).
+pub fn gpu_z_rail_name(rail: u32) -> Option<&'static str> {
+    match rail {
+        245 | 223 => Some("Board"),      // InputTotalBoard / InputTotalBoard2
+        246 | 226 => Some("Chip"),       // InputNvvdd / InputNvvdd1 (core in)
+        247 => Some("MVDDC"),            // InputFbvdd (memory in)
+        241 => Some("PWR_SRC"),          // InputPwrSrcPp
+        222 | 255 => Some("PCIe"),       // InputPex12v1 / InputPex12v (slot)
+        1 => Some("Chip-out"),           // OutputNvvdd
+        _ => None,
+    }
+}
+
+/// Confidence tier for a per-rail power reading, expressing how the value
+/// was obtained. Drives downstream rendering (CLI/pynvoc/TUI suffix the rail
+/// name: Measured=plain, Inferred=`~`, Ambiguous=`?`, Unavailable=omitted).
+///
+/// - [`Confidence::Measured`]: the channel had ≥1 genuinely PRIVATE GetStatus
+///   offset (nonzero in this channel's per-bit buffer only). Trustworthy.
+/// - [`Confidence::Inferred`]: no private offset, but topology disambiguation
+///   (the channel is the unique un-owned claimant of a shared offset) plus a
+///   semantic + value-consistency check attributed a shared offset to it.
+///   Display with a `~` marker — best-effort, usually right.
+/// - [`Confidence::Ambiguous`]: disambiguation found no clean candidate; the
+///   value is the largest non-baseline reading (a full-board view that may be
+///   a duplicate of another rail). Display with a `?` marker.
+/// - [`Confidence::Unavailable`]: the channel exists in GetInfo but GetStatus
+///   did not populate it (empty buffer). Omit from display.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Confidence {
+    /// GetStatus did not populate this channel (empty per-bit buffer).
+    #[default]
+    Unavailable,
+    /// No clean disambiguation; value is a full-board-view fallback.
+    Ambiguous,
+    /// Unique-claimant topology + semantic + value-consistency attribution.
+    Inferred,
+    /// ≥1 genuinely private GetStatus offset — trustworthy per-channel read.
+    Measured,
+}
+
+impl Confidence {
+    /// `true` for tiers a caller may display as a per-channel value without a
+    /// caveat marker (Measured; Inferred is shown but flagged `~`).
+    pub fn is_trusted(self) -> bool {
+        matches!(self, Confidence::Measured)
+    }
+}
+
+/// GPU-Z-confirmed GetStatus byte-offset → rail-label map, for the semantic
+/// cross-check during disambiguation. This is the ONLY place a hardcoded
+/// offset appears, and it is used solely as a soft gate (reject a candidate
+/// whose descriptor rail contradicts the offset's known GPU-Z label), never
+/// as the extraction mechanism. Offsets not in this table return `None` and
+/// are allowed through the gate unchecked. Per-GPU validated on RTX 4060
+/// Laptop; unknown on other SKUs (the soft gate is a no-op there).
+const GPUZ_OFFSET_LABELS: &[(usize, &str)] = &[
+    (0x14, "Chip"),       // GPU Chip Power Draw
+    (0x2C, "MVDDC"),      // MVDDC Power Draw
+    (0xE0, "Chip-out"),   // core sub-channel (≈ GPU Chip output)
+    (0xEC, "Chip-out"),   // core sub-channel (≈ GPU Chip output)
+    (0x98, "PWR_SRC"),    // PWR_SRC Power Draw
+    // +0x08 (Board), +0x44 (16-pin) are baseline/ch0 slots handled elsewhere;
+    // +0x14C ≈ +0x2C duplicate, left ungated (no unique label).
+];
+
+/// Look up the GPU-Z rail label for a GetStatus byte offset, or `None` when
+/// the offset has no confirmed GPU-Z equivalent. Used only by the
+/// disambiguation semantic gate — see [`GPUZ_OFFSET_LABELS`].
+pub fn gpuz_offset_label(offset: usize) -> Option<&'static str> {
+    GPUZ_OFFSET_LABELS
+        .binary_search_by_key(&offset, |e| e.0)
+        .ok()
+        .map(|i| GPUZ_OFFSET_LABELS[i].1)
+}
+
+/// `true` when a descriptor `pwr_rail` is semantically compatible with a GPU-Z
+/// offset label (via [`gpu_z_rail_name`]). Rails with no known GPU-Z name
+/// (`None`) are accepted unchecked so the gate doesn't starve unnamed SKUs.
+pub fn rail_matches_label(rail: u32, label: &str) -> bool {
+    gpu_z_rail_name(rail)
+        .map(|r| r == label)
+        .unwrap_or(true)
 }
 
 /// Name a `NV_GPU_POWER_CHANNEL_POWER_RAIL` value. Delegates to the

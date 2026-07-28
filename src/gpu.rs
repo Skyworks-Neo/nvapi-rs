@@ -596,79 +596,31 @@ impl PhysicalGpu {
                 per_bit.push((bit, Vec::new())); // rail present but unreadable
             }
         }
-        // EXTRACTION with confidence flag.
+        // EXTRACTION + DISAMBIGUATION with confidence tiers.
         //
         // On some GPUs (e.g. desktop Turing) a per-bit GetStatus does NOT
         // isolate one channel — summation (type=1) channels return a full-board
         // view (the same shared offsets +0x08/+0x2C/+0x44/+0x74 appear for
         // every bit). Only some channels (type=8 SensorClientAligned) get a
-        // genuinely private offset. So:
-        //  - A bit's PRIVATE offsets = nonzero in THIS bit's buffer but absent
-        //    from EVERY other bit's buffer.
-        //  - If a bit has ≥1 private offset → `isolated=true`, value = largest
-        //    private value (trustworthy per-channel reading).
-        //  - Else → `isolated=false`, value = largest non-baseline value in its
-        //    buffer (a full-board-view number; ambiguous, surfaced but flagged).
-        // Baseline (for the fallback) = offsets present across ALL bits.
-        let all_sets: Vec<std::collections::HashSet<usize>> = per_bit
-            .iter()
-            .map(|(_, nz)| nz.iter().map(|(o, _)| *o).collect())
-            .collect();
-        let baseline: std::collections::HashSet<usize> = {
-            let mut iter = all_sets.iter();
-            match iter.next() {
-                Some(first) => iter.fold(first.clone(), |acc, s| {
-                    acc.intersection(s).copied().collect()
-                }),
-                None => std::collections::HashSet::new(),
-            }
-        };
-        // Union of offsets each OTHER bit has, for private-offset detection.
-        let mut rails = Vec::new();
-        for (i, &(bit, pwr_rail, channel_type)) in rail_map.iter().enumerate() {
-            let my_offsets: std::collections::HashSet<usize> = all_sets
-                .get(i)
-                .cloned()
-                .unwrap_or_default();
-            // other_union = offsets present in any OTHER bit's buffer.
-            let other_union: std::collections::HashSet<usize> = all_sets
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != i)
-                .flat_map(|(_, s)| s.iter().copied())
-                .collect();
-            // Private offsets = in mine, not in any other bit.
-            let private: Vec<(usize, u32)> = per_bit
-                .get(i)
-                .map(|(_, nz)| {
-                    nz.iter()
-                        .filter(|(o, _)| my_offsets.contains(o) && !other_union.contains(o))
-                        .copied()
-                        .collect()
-                })
-                .unwrap_or_default();
-            let nz = per_bit
-                .get(i)
-                .map(|(_, v)| v.clone())
-                .unwrap_or_default();
-            let (pwr_mw, isolated) = if !private.is_empty() {
-                // Trustworthy: largest private offset value.
-                let v = private.iter().map(|(_, v)| *v).max().unwrap_or(0);
-                (v, true)
-            } else {
-                // Ambiguous: largest non-baseline value (full-board view).
-                (crate::power::extract_channel_mw(&nz, &baseline), false)
-            };
-            rails.push(crate::power::PowerRailReading {
-                channel_bit: bit,
-                pwr_rail,
-                rail_name: crate::power::power_rail_name_owned(pwr_rail),
-                channel_type,
-                pwr_mw,
-                isolated,
-            });
-        }
-        Ok(rails)
+        // genuinely private offset. So a channel's reading is assigned a
+        // [`crate::power::Confidence`] tier:
+        //  - Measured: ≥1 PRIVATE offset (nonzero here, absent from every other
+        //    bit). Trustworthy.
+        //  - Inferred: no private offset, but topology disambiguation found a
+        //    shared offset this channel is the UNIQUE un-owned claimant of
+        //    (every other bit sharing it is already resolved), AND the offset's
+        //    GPU-Z label (if known) matches the descriptor rail, AND all
+        //    claimants agree on the value within 25%. Best-effort.
+        //  - Ambiguous: no clean candidate; value = largest non-baseline read
+        //    (a full-board view that may duplicate another rail).
+        //  - Unavailable: GetStatus didn't populate this channel.
+        //
+        // The disambiguation runs as a worklist to a fixed point: ownership is
+        // MONOTONIC (once an offset is claimed via `resolved_owner`, no other
+        // channel may claim it — this prevents a private offset of an already-
+        // resolved type=8 channel from leaking into every other channel's
+        // candidate pool). Values are computed AFTER ownership settles.
+        Ok(crate::power::disambiguate_power_rails(&rail_map, &per_bit))
     }
 
     pub fn current_pstate(&self) -> crate::Result<PState> {

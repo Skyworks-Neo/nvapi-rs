@@ -140,10 +140,11 @@ pub struct GpuStatus {
     /// expose PowerMonitor. **Pre-wrap / research: raw values, units
     /// unconfirmed** — see `nvapi::power` for the validation status.
     pub power_monitor: Option<PowerMonitor>,
-    /// The 4 GPU-Z-confirmed named power rails (Board / Chip / MVDDC /
-    /// PWR_SRC) in milliwatts, via PowerMonitor GetStatus v1|392. `None`
-    /// where PowerMonitor isn't exposed; individual rail fields are `None`
-    /// when absent on a given GPU. Units confirmed (raw ÷ 1000 = W).
+    /// Per-rail power readings (Board / Chip / MVDDC / PWR_SRC / …, whichever
+    /// the GPU exposes), via PowerMonitor GetStatus v1|392 with per-bit
+    /// isolation + topology disambiguation. `None` where PowerMonitor isn't
+    /// exposed. Each reading carries a `Confidence` tier (Measured/Inferred/
+    /// Ambiguous/Unavailable); units confirmed (raw ÷ 1000 = W).
     pub power_rails: Option<PowerRails>,
     pub memory: Option<MemoryInfo>,
     pub pcie_lanes: Option<u32>,
