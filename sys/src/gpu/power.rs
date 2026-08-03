@@ -224,11 +224,21 @@ pub mod private {
     nvapi! {
         /// Undocumented (NDA-private, ID 0x1504FC3D). PPAB / Dynamic-Boost
         /// controller enable. `active` = 0 disables, non-zero enables. This is a
-        /// raw boolean by-value setter (NOT a `*const` struct setStatus) —
-        /// reversed from GPUMon.exe (`[GPUHandle::setDynamicBoost] active: %d`,
-        /// CLI `-db`). Matches the "PPAB Enable" checkbox on the Dynamic-Boost
-        /// tab of OEM partner tools.
-        pub unsafe fn NvAPI_GPU_ClientDynamicBoostSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, active: BoolU32) -> NvAPI_Status;
+        /// GLOBAL single-argument by-value setter (NOT a per-GPU `*const` struct
+        /// setStatus): GPUMon's thunk calls the resolved fn as `fn(active)` with
+        /// NO hPhysicalGPU arg (targets the implicitly-selected GPU). Reversed
+        /// from GPUMon.exe/GPUMonCmd.exe (`[GPUHandle::setDynamicBoost] active:
+        /// %d`, CLI `-db`). Matches the "PPAB Enable" checkbox on the
+        /// Dynamic-Boost tab of OEM partner tools.
+        pub unsafe fn NvAPI_GPU_ClientDynamicBoostSetStatus(active: BoolU32) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA-private, ID 0xAD298D3F). Private lifecycle/controller
+        /// init. GPUMon's init stub calls `fn(arg)` with arg=1 BEFORE any
+        /// Dynamic-Boost / QBoost power setter; without it those setters return
+        /// NVAPI_API_NOT_INITIALIZED. GLOBAL single u32 by-value arg.
+        pub unsafe fn NvAPI_GPU_PrivateLifecycleInit(arg: BoolU32) -> NvAPI_Status;
     }
 
     // ------------------------------------------------------------------

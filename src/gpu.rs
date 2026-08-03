@@ -933,10 +933,22 @@ impl PhysicalGpu {
     /// Set the PPAB / Dynamic-Boost controller enable state (notebook platform
     /// power coordination between dGPU and CPU). `active = true` enables the
     /// controller (the "PPAB Enable" checkbox in OEM partner tools), `false`
-    /// disables it. NDA-private ID 0x1504FC3D; raw boolean setter.
+    /// disables it. NDA-private ID 0x1504FC3D; GLOBAL single-arg boolean setter
+    /// (no per-GPU handle — targets the implicitly-selected GPU, like GPUMon).
+    /// Calls the private lifecycle init (0xAD298D3F) first, exactly as GPUMon's
+    /// init stub does — without it the driver returns API_NOT_INITIALIZED.
     pub fn set_dynamic_boost(&self, active: bool) -> crate::NvapiResult<()> {
         trace!("gpu.set_dynamic_boost({})", active);
-        unsafe { nvcall!(NvAPI_GPU_ClientDynamicBoostSetStatus(self.0, active.into())) }
+        self.private_lifecycle_init()?;
+        unsafe { nvcall!(NvAPI_GPU_ClientDynamicBoostSetStatus(active.into())) }
+    }
+
+    /// Private NVAPI lifecycle/controller init (NDA 0xAD298D3F). GPUMon calls
+    /// this with arg=1 at init, before any Dynamic-Boost/QBoost power setter.
+    /// Required to avoid NVAPI_API_NOT_INITIALIZED from those setters.
+    pub fn private_lifecycle_init(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.private_lifecycle_init()");
+        unsafe { nvcall!(NvAPI_GPU_PrivateLifecycleInit(true.into())) }
     }
 
     /// TGP-watts power range (min/default/max in **milliwatts**) + the active

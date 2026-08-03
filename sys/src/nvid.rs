@@ -1450,8 +1450,12 @@ Unknown_01510308 = 0x01510308,
 // --- GPUMon.exe init-stub lifecycle resolvers (resolved at LoadLibrary time,
 // cached in qword_140F1A7A8/A7B0/A7C8/A7D0; not per-frame thunks). Kept as
 // documentation-only records so the IIDs are reserved/known. ---
-/// `Unknown_AD298D3F` — GPUMon.exe init - primary lifecycle resolver (QI at init, cached @ qword_140F1A7A8)
-Unknown_AD298D3F_LifecycleInit = 0xad298d3f,
+/// Private NVAPI lifecycle/controller init (NDA, ID 0xAD298D3F). GPUMon's
+/// init stub (sub_140001060) resolves this and calls it as `fn(arg)` with
+/// arg=1 (the "controller/client register" path) BEFORE any power-control
+/// setter. Without it, the Dynamic-Boost / QBoost setters return
+/// NVAPI_API_NOT_INITIALIZED. Single u32 by-value arg (NOT a per-GPU call).
+NvAPI_GPU_PrivateLifecycleInit = 0xad298d3f,
 /// `Unknown_33C7358C` — GPUMon.exe init - secondary lifecycle resolver (cached @ qword_140F1A7C8)
 Unknown_33C7358C_LifecycleInit = 0x33c7358c,
 /// `Unknown_593E8644` — GPUMon.exe init - secondary lifecycle resolver (cached @ qword_140F1A7D0)
