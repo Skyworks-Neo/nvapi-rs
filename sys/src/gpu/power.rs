@@ -275,17 +275,22 @@ pub mod private {
     }
 
     impl NV_GPU_CLIENT_TGP_WATT_STATUS_V1 {
-        /// First power-mW dword offset (entry 0): byte 0x8A4 = 2212.
-        const POWER_FIRST_DWORD: usize = 553;
-        /// Per-entry stride in dwords (40 bytes).
-        const POWER_STRIDE_DWORDS: usize = 10;
+        /// Per-entry stride in bytes (verified: idx N power @ +0x8A0 + 40*N).
+        const POWER_STRIDE_BYTES: usize = 40;
+        /// Byte offset WITHIN `payload` of entry 0's power-mW field.
+        /// Live-verified via WinDbg on GPUMon: it writes the power dword at
+        /// buffer+0x8F0 for idx=2; payload starts at buffer+8, so the idx-0
+        /// base in payload = 0x8A0 - 8 = 0x898.
+        const POWER_BASE_PAYLOAD_OFF: usize = 0x898;
+
+        fn power_off(&self, index: usize) -> Option<usize> {
+            Self::POWER_BASE_PAYLOAD_OFF
+                .checked_add(Self::POWER_STRIDE_BYTES.checked_mul(index)?)
+        }
 
         /// Read the power-mW field for the given policy entry index.
         pub fn power_mw(&self, index: usize) -> Option<u32> {
-            // See set_power_mw: GPUMon indexes from byte 0; subtract the 8-byte
-            // header to land in `payload`.
-            let dword = Self::POWER_FIRST_DWORD + Self::POWER_STRIDE_DWORDS * index;
-            let off = dword.checked_mul(4).and_then(|b| b.checked_sub(8))?;
+            let off = self.power_off(index)?;
             self.payload
                 .get(off..off + 4)
                 .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
@@ -294,12 +299,7 @@ pub mod private {
         /// Write the power-mW field for the given policy entry index (sets the
         /// mask bit for that entry as well).
         pub fn set_power_mw(&mut self, index: usize, milliwatts: u32) {
-            // GPUMon indexes v14[dword] from byte 0 of the whole struct; our
-            // `payload` starts after the 8-byte (version+mask) header, so
-            // subtract 8 bytes (2 dwords) to land in the right slot.
-            let dword = Self::POWER_FIRST_DWORD + Self::POWER_STRIDE_DWORDS * index;
-            let off = dword.checked_mul(4).and_then(|b| b.checked_sub(8));
-            if let Some(off) = off {
+            if let Some(off) = self.power_off(index) {
                 if let Some(slot) = self.payload.get_mut(off..off + 4) {
                     slot.copy_from_slice(&milliwatts.to_le_bytes());
                     self.mask |= 1u32 << index;

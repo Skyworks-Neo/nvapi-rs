@@ -990,8 +990,28 @@ impl PhysicalGpu {
     /// field to `watts × 1000` mW, SET it back (NDA 0xBFF09E59). `policy_index`
     /// selects the entry (the mask bit); use the index from [`tgp_watt_range`].
     /// Returns the resolved milliwatts actually written.
+    /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
+    /// read-modify-write the GPUMon `setTgpWatt` does: GET the 10016-byte
+    /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
+    /// field to `watts × 1000` mW, SET it back (NDA 0xBFF09E59). `policy_index`
+    /// selects the entry (the mask bit); use the index from [`tgp_watt_range`].
+    /// Returns the resolved milliwatts actually written.
+    ///
+    /// **Driver-gate caveat (RTX 4060 Laptop, driver r576):** the SET entry
+    /// point 0xBFF09E59 is NOT resolvable from nvoc's process —
+    /// `nvapi_QueryInterface(0xBFF09E59)` returns NULL (QI for the paired GET
+    /// 0x8B3E7343 succeeds). GPUMon's process resolves it, so GPUMon's
+    /// `-gpupwr:<watts>` works; something in GPUMon's full driver-invoker setup
+    /// (NvPCF/QBoost-controller init, or even WinRing0) registers the entry
+    /// point. The call here therefore returns `NoImplementation` on this driver
+    /// until that registration path is reproduced. The buffer layout, magic,
+    /// mask, and power-field offset are all byte-verified against GPUMon via
+    /// WinDbg (handle 0x100, magic 0x12720, mask 1<<idx, mW @ buf+0x8A0+40*idx).
     pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> crate::NvapiResult<u32> {
         trace!("gpu.set_tgp_watt({} W, idx {})", watts, policy_index);
+        // GPUMon's init stub calls the private lifecycle init 0xAD298D3F(1) at
+        // process startup before ANY power-control NVAPI call. Mirror that.
+        self.private_lifecycle_init()?;
         // GPUMon's setTgpWatt runs AFTER queryPowerPolicy (GetInfoPrivate) has
         // populated the GPUHandle's policy state. Mirror that: call the private
         // GetInfo first so the driver's power-policy state is primed.
