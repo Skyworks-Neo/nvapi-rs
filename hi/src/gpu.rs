@@ -587,6 +587,30 @@ impl Gpu {
             .map_err(Into::into)
     }
 
+    /// Set the PPAB / Dynamic-Boost controller enable state (notebook dGPU↔CPU
+    /// power coordination). `active = true` = "PPAB Enable" on. NDA-private
+    /// ID 0x1504FC3D; raw boolean setter.
+    pub fn set_dynamic_boost(&self, active: bool) -> nvapi::Result<()> {
+        self.gpu.set_dynamic_boost(active).map_err(Into::into)
+    }
+
+    /// TGP-watts range (min/default/max mW) + active policy index (NDA
+    /// 0x67F31384). `Ok(None)` where the driver doesn't expose it.
+    pub fn tgp_watt_range(&self) -> nvapi::Result<Option<nvapi::TgpWattRange>> {
+        self.gpu.tgp_watt_range().map_err(Into::into)
+    }
+
+    /// Set GPU TGP in watts (the watts-form TGP slider; read-modify-write over
+    /// NDA 0x8B3E7343 GET + 0xBFF09E59 SET). Returns the mW actually written.
+    pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> nvapi::Result<u32> {
+        self.gpu.set_tgp_watt(watts, policy_index).map_err(Into::into)
+    }
+
+    /// Reset GPU TGP to rated/default (NDA triplet). Returns the default mW, if known.
+    pub fn reset_tgp_watt(&self, policy_index: usize) -> nvapi::Result<Option<u32>> {
+        self.gpu.reset_tgp_watt(policy_index).map_err(Into::into)
+    }
+
     pub fn set_sensor_limits<I: IntoIterator<Item = SensorThrottle>>(
         &self,
         limits: I,

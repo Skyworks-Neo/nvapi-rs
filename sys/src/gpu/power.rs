@@ -221,6 +221,166 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClientPowerPoliciesSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPowerStatus: *const NV_GPU_CLIENT_POWER_POLICIES_STATUS) -> NvAPI_Status;
     }
 
+    nvapi! {
+        /// Undocumented (NDA-private, ID 0x1504FC3D). PPAB / Dynamic-Boost
+        /// controller enable. `active` = 0 disables, non-zero enables. This is a
+        /// raw boolean by-value setter (NOT a `*const` struct setStatus) —
+        /// reversed from GPUMon.exe (`[GPUHandle::setDynamicBoost] active: %d`,
+        /// CLI `-db`). Matches the "PPAB Enable" checkbox on the Dynamic-Boost
+        /// tab of OEM partner tools.
+        pub unsafe fn NvAPI_GPU_ClientDynamicBoostSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, active: BoolU32) -> NvAPI_Status;
+    }
+
+    // ------------------------------------------------------------------
+    // TGP-watts power control (NDA-private triplet, GPUMon `setTgpWatt`).
+    //
+    // RE'd from GPUMon.exe sub_1400324A0 ([GPUHandle::setTgpWatt]):
+    //   GET  0x8B3E7343 (NvAPI_GPU_ClientTgpWattGetStatus)
+    //   SET  0xBFF09E59 (NvAPI_GPU_ClientTgpWattSetStatus)
+    // both take a 10016-byte read-modify-write buffer (version magic 0x12720 =
+    // v1|10016). dword0 = version, dword1 = mask = (1 << policy_index). The
+    // target power in MILLIWATTS is written at dword (553 + 10*policy_index)
+    // = byte 0x8A4 + 40*index (the first dword of each 40-byte entry).
+    // Caller passes watts; ×1000 → mW; 0xFFFFFFFF = reset to rated/default.
+    //
+    // The min/default/max mW range + active policy index come from a SEPARATE
+    // private GetInfo: NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate (0x67F31384,
+    // NOT the public 0x34206D86). It returns a 347136-byte struct; see below.
+    // ------------------------------------------------------------------
+
+    /// Number of TGP-watts power-policy entries the params struct reserves.
+    pub const NV_GPU_CLIENT_TGP_WATT_ENTRIES_MAX: usize = 32;
+
+    nvstruct! {
+        /// TGP-watts control read-modify-write buffer (RE'd from GPUMon; NDA).
+        /// dword0 = version (0x12720), dword1 = mask = (1 << policy_index);
+        /// per-entry power-mW at dword (553 + 10*index). The bulk of the buffer
+        /// is opaque — GET fills it, the caller patches one entry, SET applies.
+        pub struct NV_GPU_CLIENT_TGP_WATT_STATUS_V1 {
+            pub version: NvVersion,
+            pub mask: u32,
+            /// Opaque header/descriptor + entry table (raw; GET-filled).
+            pub payload: Padding<[u8; 10016 - 8]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_TGP_WATT_STATUS_V1 {
+        /// First power-mW dword offset (entry 0): byte 0x8A4 = 2212.
+        const POWER_FIRST_DWORD: usize = 553;
+        /// Per-entry stride in dwords (40 bytes).
+        const POWER_STRIDE_DWORDS: usize = 10;
+
+        /// Read the power-mW field for the given policy entry index.
+        pub fn power_mw(&self, index: usize) -> Option<u32> {
+            let dword = Self::POWER_FIRST_DWORD + Self::POWER_STRIDE_DWORDS * index;
+            self.payload
+                .get(dword * 4..dword * 4 + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        }
+
+        /// Write the power-mW field for the given policy entry index (sets the
+        /// mask bit for that entry as well).
+        pub fn set_power_mw(&mut self, index: usize, milliwatts: u32) {
+            let dword = Self::POWER_FIRST_DWORD + Self::POWER_STRIDE_DWORDS * index;
+            if let Some(slot) = self.payload.get_mut(dword * 4..dword * 4 + 4) {
+                slot.copy_from_slice(&milliwatts.to_le_bytes());
+                self.mask |= 1u32 << index;
+            }
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_TGP_WATT_STATUS NV_GPU_CLIENT_TGP_WATT_STATUS_V1(1) = 10016 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0x8B3E7343). Fills the TGP-watts control buffer
+        /// (the GET half of setTgpWatt). Pair with SetStatus.
+        pub unsafe fn NvAPI_GPU_ClientTgpWattGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLIENT_TGP_WATT_STATUS) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xBFF09E59). Applies the TGP-watts control
+        /// buffer (the SET half of setTgpWatt). Caller writes target mW into the
+        /// active policy entry first.
+        pub unsafe fn NvAPI_GPU_ClientTgpWattSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *const NV_GPU_CLIENT_TGP_WATT_STATUS) -> NvAPI_Status;
+    }
+
+    // ------------------------------------------------------------------
+    // ClientPowerPoliciesGetInfoPrivate (NDA, ID 0x67F31384) — the TGP-watts
+    // RANGE source. NOT the public 0x34206D86. Returns a 347136-byte struct
+    // (86784 dwords), version magic 0x0F4BF4, per-policy entry stride 10604 B
+    // (2651 dwords). Only the fields GPUMon reads are decoded here:
+    //   - policy-table selector index: byte offset 0x14 (dword5 low byte; 0xFF
+    //     ⇒ default to index 2).
+    //   - per-entry min/default/max mW: entry dword +275 / +276 / +277.
+    // The rest is opaque research layout (mirrors the PowerMonitor-V4 approach).
+    // ------------------------------------------------------------------
+
+    nvstruct! {
+        /// TGP-watts policy/range descriptor (RE'd from GPUMon; NDA). Opaque
+        /// except for the decoded accessors below.
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_V1 {
+            pub version: NvVersion,
+            pub count_or_flags: u32,
+            /// dword 2..4 (opaque).
+            pub hdr0: u32,
+            pub hdr1: u32,
+            pub hdr2: u32,
+            /// Byte 0x14 (dword5 low byte) = active policy table index; 0xFF ⇒
+            /// caller should default to index 2. Pad to a dword boundary.
+            pub policy_index_byte: u8,
+            pub rsvd0: Padding<[u8; 3]>,
+            /// dword 6..11 (opaque).
+            pub hdr3: Padding<[u32; 6]>,
+            /// dword 12 (GPUMon reads it into a "hide TGP" sibling field).
+            pub hide_tgp_flag_dword: u32,
+            /// Per-policy entry table (10604 B each); raw, parsed by accessors.
+            /// Header before this = 52 bytes (dwords 0..12 + the index byte).
+            pub entries: Padding<[u8; 347136 - 52]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_V1 {
+        /// Per-policy-entry stride in dwords (10604 bytes).
+        const ENTRY_STRIDE_DWORDS: usize = 2651;
+        const MIN_DWORD: usize = 275;
+        const DEFAULT_DWORD: usize = 276;
+        const MAX_DWORD: usize = 277;
+
+        /// Active policy-table index; None ⇒ 0xFF (caller should default to 2).
+        pub fn policy_index(&self) -> Option<u8> {
+            (self.policy_index_byte != 0xFF).then_some(self.policy_index_byte)
+        }
+
+        fn entry_dword(&self, index: usize, field: usize) -> Option<u32> {
+            let off = (Self::ENTRY_STRIDE_DWORDS * index + field) * 4;
+            // entries start right after the fixed header above
+            self.entries.get(off..off + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        }
+
+        /// Minimum TGP in mW for the given policy entry.
+        pub fn min_mw(&self, index: usize) -> Option<u32> {
+            self.entry_dword(index, Self::MIN_DWORD)
+        }
+        /// Rated/default TGP in mW for the given policy entry.
+        pub fn default_mw(&self, index: usize) -> Option<u32> {
+            self.entry_dword(index, Self::DEFAULT_DWORD)
+        }
+        /// Maximum TGP in mW for the given policy entry.
+        pub fn max_mw(&self, index: usize) -> Option<u32> {
+            self.entry_dword(index, Self::MAX_DWORD)
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_V1(1) = 347136 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0x67F31384). Private ClientPowerPoliciesGetInfo
+        /// variant — the TGP-watts min/default/max range + active policy index.
+        /// NOT the public 0x34206D86. Returns a 347136-byte struct.
+        pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE) -> NvAPI_Status;
+    }
+
     nvstruct! {
         pub struct NV_GPU_CLIENT_POWER_TOPOLOGY_INFO_V1 {
             pub version: NvVersion,

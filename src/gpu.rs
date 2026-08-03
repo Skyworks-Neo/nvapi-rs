@@ -930,6 +930,100 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesSetStatus(self.0, &data)) }
     }
 
+    /// Set the PPAB / Dynamic-Boost controller enable state (notebook platform
+    /// power coordination between dGPU and CPU). `active = true` enables the
+    /// controller (the "PPAB Enable" checkbox in OEM partner tools), `false`
+    /// disables it. NDA-private ID 0x1504FC3D; raw boolean setter.
+    pub fn set_dynamic_boost(&self, active: bool) -> crate::NvapiResult<()> {
+        trace!("gpu.set_dynamic_boost({})", active);
+        unsafe { nvcall!(NvAPI_GPU_ClientDynamicBoostSetStatus(self.0, active.into())) }
+    }
+
+    /// TGP-watts power range (min/default/max in **milliwatts**) + the active
+    /// policy-table index, from the private ClientPowerPoliciesGetInfo variant
+    /// (NDA, ID 0x67F31384). `policy_index` defaults to 2 when the driver
+    /// reports none (0xFF), matching GPUMon. Returns `Ok(None)` where the
+    /// driver does not expose the private interface.
+    pub fn tgp_watt_range(
+        &self,
+    ) -> crate::NvapiResult<Option<TgpWattRange>> {
+        trace!("gpu.tgp_watt_range()");
+        // 347KB struct — allocate the backing bytes on the heap directly to
+        // avoid a stack temporary, then cast in place. version is set via the
+        // StructVersion::versioned() layout (dword0).
+        let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE>()];
+        // stamp the version magic the driver expects (StructVersion for ver 1)
+        let ver = <power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
+        let info: &power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE =
+            unsafe { &*(buf.as_ptr() as *const _) };
+        let status = unsafe {
+            sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(self.0, buf.as_mut_ptr() as *mut _)
+        };
+        if crate::status_result(sys::Api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate, status).is_err() {
+            return Ok(None);
+        }
+        let idx = info.policy_index().unwrap_or(2) as usize;
+        Ok(Some(TgpWattRange {
+            policy_index: idx,
+            min_mw: info.min_mw(idx),
+            default_mw: info.default_mw(idx),
+            max_mw: info.max_mw(idx),
+        }))
+    }
+
+    /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
+    /// read-modify-write the GPUMon `setTgpWatt` does: GET the 10016-byte
+    /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
+    /// field to `watts × 1000` mW, SET it back (NDA 0xBFF09E59). `policy_index`
+    /// selects the entry (the mask bit); use the index from [`tgp_watt_range`].
+    /// Returns the resolved milliwatts actually written.
+    pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> crate::NvapiResult<u32> {
+        trace!("gpu.set_tgp_watt({} W, idx {})", watts, policy_index);
+        // 10KB — heap-backed to be stack-safe.
+        let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
+        let ver = <power::private::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
+        unsafe {
+            let status = sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)?;
+        }
+        let milliwatts = watts.saturating_mul(1000);
+        let data: &mut power::private::NV_GPU_CLIENT_TGP_WATT_STATUS =
+            unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
+        data.set_power_mw(policy_index, milliwatts);
+        unsafe {
+            let status = sys::api::NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattSetStatus, status)?;
+        }
+        Ok(milliwatts)
+    }
+
+    /// Reset the GPU TGP to its rated/default value (the TGP slider's "Reset").
+    /// Same read-modify-write as [`set_tgp_watt`], but writes the default mW
+    /// reported by [`tgp_watt_range`] (or 0 if unavailable) into the entry.
+    pub fn reset_tgp_watt(&self, policy_index: usize) -> crate::NvapiResult<Option<u32>> {
+        trace!("gpu.reset_tgp_watt(idx {})", policy_index);
+        let default_mw = self.tgp_watt_range()?.and_then(|r| r.default_mw);
+        let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
+        let ver = <power::private::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
+        unsafe {
+            let status = sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)?;
+        }
+        if let Some(mw) = default_mw {
+            let data: &mut power::private::NV_GPU_CLIENT_TGP_WATT_STATUS =
+                unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
+            data.set_power_mw(policy_index, mw);
+        }
+        unsafe {
+            let status = sys::api::NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattSetStatus, status)?;
+        }
+        Ok(default_mw)
+    }
+
     pub fn thermal_settings(
         &self,
         index: Option<u32>,
@@ -1998,6 +2092,22 @@ impl RawConversion for sys::gpu::NV_GPU_COMPUTE_CAPS_INFO_V1 {
 pub struct VfpInfo {
     pub domains: ClockDomainInfo,
     pub mask: VfpMask,
+}
+
+/// TGP-watts range + active policy index (from the private
+/// ClientPowerPoliciesGetInfo variant, NDA 0x67F31384). All power values are in
+/// **milliwatts**.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default)]
+pub struct TgpWattRange {
+    /// Active power-policy table entry index (default 2 when driver reports none).
+    pub policy_index: usize,
+    /// Minimum TGP (mW), if the entry exposed it.
+    pub min_mw: Option<u32>,
+    /// Rated/default TGP (mW), if the entry exposed it.
+    pub default_mw: Option<u32>,
+    /// Maximum TGP (mW), if the entry exposed it.
+    pub max_mw: Option<u32>,
 }
 
 impl VfpInfo {

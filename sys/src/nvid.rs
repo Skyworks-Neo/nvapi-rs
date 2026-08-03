@@ -1171,4 +1171,278 @@ NvAPI_GPU_PowerMonitorGetStatus = 0xf40238ef,
 /// documentation-only record so the IID is reserved/known.
 Unknown_D7C61344_InternalUnload = 0xd7c61344,
 
+// source: gpumon.exe (NVIDIA OEM partner tool, reverse/GPUMon/GPUMon.exe)
+//
+// These IDs were discovered by extracting GPUMon.exe's complete
+// `nvapi_QueryInterface` surface (128 call sites on the cached
+// qword_140F1A7B8 pointer; see reverse/gpumon-raw-id-table.md) and naming
+// each via its caller's labeled `GPUHandle::*` / `DriverInvoker::*` /
+// `Connector::*` method (GPUMon embeds the method name in its own
+// `[Class::method] NvAPI fail to ...` log strings). They are NDA /
+// undocumented IDs NOT present in NVIDIA's public interface table.
+//
+// Names use the `Unknown_<HEX>` convention (we do NOT assert a public
+// NvAPI_* name unless independently confirmed); the doc comment records
+// the GPUMon method + role as the evidence trail. id_hex values are
+// re-verified from fresh decompiles (the phase-1 extraction misread a
+// few probe-wrapper literals). See reverse/gpumon-id-catalog-for-review.md
+// for the prioritized wrap list.
+
+/// `Unknown_845866AD` — GPUHandle::pollPcieErrorCount - PCIe link error COUNT (new NDA, !=GetPCIEInfo)
+Unknown_845866AD = 0x845866ad,
+/// `Unknown_DB9ED906` — GPUHandle::queryPowerDevice - GetPowerSensorInfo (power-rail topology descriptor, 32-ch INA/Internal/OVR-M)
+Unknown_DB9ED906 = 0xdb9ed906,
+/// `Unknown_5D1D3A4E` — GPUHandle::pollVoltage - voltage rail info (ClientVoltRailsGetInfo)
+Unknown_5D1D3A4E = 0x5d1d3a4e,
+/// `Unknown_2C73AFDC` — GPUHandle::pollVoltage - voltage rail data (ClientVoltRailsGetStatus)
+Unknown_2C73AFDC = 0x2c73afdc,
+/// `Unknown_3B51F399` — GPUHandle::pollPcieBandwidth - NVPCF status data (PCIE Rx/Tx bandwidth)
+Unknown_3B51F399 = 0x3b51f399,
+/// `Unknown_083629B7` — GPUHandle::pollGcOffStatistics - GCOFF statistics (new NDA)
+Unknown_083629B7 = 0x083629b7,
+/// `Unknown_F39C1DEF` — GPUHandle::pollDifrLayer1/2/3 - DIFR power-gating residency statistics
+Unknown_F39C1DEF = 0xf39c1def,
+/// `Unknown_A4E81B74` — GPUHandle::pollRppgMs - RPPG residency statistics
+Unknown_A4E81B74 = 0xa4e81b74,
+/// `Unknown_5726C144` — GPUHandle::pollPsiGr/pollPsiMs - PSI residency statistics
+Unknown_5726C144 = 0x5726c144,
+/// `Unknown_7C95F2D7` — GPUHandle::pollDifrLayer1/2/3 - DIFR power-gating support info
+Unknown_7C95F2D7 = 0x7c95f2d7,
+/// `Unknown_0078E2A2` — GPUHandle::queryConnectedDisplay - connected display count
+Unknown_0078E2A2 = 0x0078e2a2,
+/// `Unknown_019185BE` — aggregator sub-call (used by pollCtac @0x14002c990)
+Unknown_019185BE = 0x019185be,
+/// `Unknown_0FE87B7F` — GPUHandle::resetFanCurve - ClientFanPoliciesSetStatus
+Unknown_0FE87B7F = 0x0fe87b7f,
+/// `Unknown_1071E0D3` — DriverInvoker::populateChipsetInfo - chipset id info
+Unknown_1071E0D3 = 0x1071e0d3,
+/// `Unknown_10741A55` — GPUHandle::pollFanArbiter - ClientFanArbiters info/status
+Unknown_10741A55 = 0x10741a55,
+/// PPAB / Dynamic-Boost ENABLE setter (NDA-private, ID 0x1504FC3D).
+/// Raw `u8`/BoolU32 active flag (0=disable, non-zero=enable); NOT a *const
+/// struct setStatus. Proven by decompile: GPUMon.exe thunk 0x140006E60,
+/// caller 0x140030D20 logs `[GPUHandle::setDynamicBoost] active: %d`; the GPUMon
+/// CLI handler (`-db`, `[CmdDispatch::cmdDynamicBoost]`) passes
+/// `active=(int!=0)` and prints `Change dynamic boost controlling state to
+/// [enable|disable] successful`. Matches the "PPAB Enable" checkbox on the
+/// Dynamic-Boost tab of OEM partner tools.
+/// NOTE: an earlier naming pass mislabeled this `Unknown_1504FC3D/setTgpQboost`
+/// and mislabeled 0xB6A3DA5B as `setDynamicBoost` — 0xB6A3DA5B is actually
+/// `[DriverInvoker::populatePowerLimitTable]` (a SBIOS power-limit-table GET).
+NvAPI_GPU_ClientDynamicBoostSetStatus = 0x1504fc3d,
+/// `Unknown_1B778765` — GPUHandle::setThermalSlowdown - change slowdown
+Unknown_1B778765 = 0x1b778765,
+/// `Unknown_2A03BCCF` — GPUHandle::queryPciInfo sub-call - PCI info
+Unknown_2A03BCCF = 0x2a03bccf,
+/// `Unknown_2EB86EE0` — Connector::pollGpuAspm - read register data (ASPM L0s/L1)
+Unknown_2EB86EE0 = 0x2eb86ee0,
+/// `Unknown_2F69F8E5` — GPUHandle::queryTargetTemperature - thermal policy info
+Unknown_2F69F8E5 = 0x2f69f8e5,
+/// `Unknown_31B855CD` — GPUHandle::pollPowerPolicy - power policy status read
+Unknown_31B855CD = 0x31b855cd,
+/// `Unknown_32464C6C` — GPUHandle::queryGPUInfo sub-call - GPU info
+Unknown_32464C6C = 0x32464c6c,
+/// `Unknown_32CA4983` — GPUHandle::setGpcClock - limit perf frequency
+Unknown_32CA4983 = 0x32ca4983,
+/// `Unknown_33C7F5EC` — sub_140001060 init: debug-probe register (stored qword_140F1A7C8) [GPUMon init/teardown].
+/// In gpumoncmd.exe this SAME ID is additionally the per-call ENTER profiling hook (wrapped around every API call).
+Unknown_33C7F5EC = 0x33c7f5ec,
+/// `Unknown_34249506` — GPUHandle::setTgpPercent sub-call - client power policy
+Unknown_34249506 = 0x34249506,
+/// `Unknown_3CC2D181` — GPUHandle::pollFanSpeed - ClientFanCoolersGetStatus
+Unknown_3CC2D181 = 0x3cc2d181,
+/// `Unknown_41B2CA9A` — GPUHandle::pollPsiGr/pollPsiMs - PSI power-saving-idle support info
+Unknown_41B2CA9A = 0x41b2ca9a,
+/// `Unknown_42AFA9CA` — GPUHandle::queryFrameBuffer sub-call - FB/VRAM info
+Unknown_42AFA9CA = 0x42afa9ca,
+/// `Unknown_4324694C` — DriverInvoker::populateNvpcfHandle - get NvPCF platform handle (GPUMon_Requester_)
+Unknown_4324694C = 0x4324694c,
+/// `Unknown_45EFAB64` — Connector::populateAcpiId - display mapping ID for ACPI
+Unknown_45EFAB64 = 0x45efab64,
+/// `Unknown_470D2D63` — GPUHandle::queryFrameBuffer - physical frame buffer size
+Unknown_470D2D63 = 0x470d2d63,
+/// `Unknown_48E0847D` — GPUHandle::setDNotifyLimit - set extern power state (D1-D5 D0-notify)
+Unknown_48E0847D = 0x48e0847d,
+/// `Unknown_48F421C4` — Connector::getSbiosBrightnessInfo - SBIOS brightness info
+Unknown_48F421C4 = 0x48f421c4,
+/// `Unknown_57B5A5DF` — GPUHandle::queryClockDomainIndex - clock domain info (GPC domain)
+Unknown_57B5A5DF = 0x57b5a5df,
+/// `Unknown_57FA8E2C` — GPUHandle::queryFrameBuffer sub-call - frame-buffer/VRAM query
+Unknown_57FA8E2C = 0x57fa8e2c,
+/// `Unknown_594762E4` — sub_140001060 init: debug-probe unregister (stored qword_140F1A7D0) [GPUMon init/teardown].
+/// In gpumoncmd.exe this SAME ID is additionally the per-call EXIT profiling hook (paired with Unknown_33C7F5EC).
+Unknown_594762E4 = 0x594762e4,
+/// `Unknown_595E3EF6` — Connector::doLinkTraining/getCurrentLinkConfig - set/get display link config
+Unknown_595E3EF6 = 0x595e3ef6,
+/// `Unknown_638CD19C` — GPUHandle::queryDrKey - PCIEPowerControl / DR-key
+Unknown_638CD19C = 0x638cd19c,
+/// `Unknown_65CE5BFC` — GPUHandle::pollFanSpeed/setFanSim - ClientFanCoolersGetInfo
+Unknown_65CE5BFC = 0x65ce5bfc,
+/// `Unknown_661AA3AF` — GPUHandle::pollSlowdown - slowdown amount read
+Unknown_661AA3AF = 0x661aa3af,
+/// ClientPowerPoliciesGetInfo — PRIVATE variant (NDA, ID 0x67F31384). Returns a
+/// ~347KB policy-descriptor struct (the TGP policy table). NOT the same as the
+/// public `0x34206D86`. GPUMon `GPUHandle::queryPowerPolicy` (sub_1400304B0)
+/// uses this to fetch the TGP-watts min/default/max range. Buffer = 86784 dwords
+/// (347136 B), version magic 0x0F4BF4; per-policy entry stride 2651 dwords
+/// (10604 B); policy-table selector index at byte offset 0x14 (v7[5] low byte,
+/// default 2 if 0xFF); per-entry min/default/max mW at entry dword +275/+276/+277.
+NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate = 0x67f31384,
+/// `Unknown_69043B70` — DriverInvoker::populateBB2TppLimit / GPUHandle::pollCtac - system battery / CTAC thermal-zone data
+Unknown_69043B70 = 0x69043b70,
+/// `Unknown_6FFA5633` — GPUHandle::queryOverClocking - over-clocking capability info
+Unknown_6FFA5633 = 0x6ffa5633,
+/// `Unknown_73030846` — GPUHandle::setCpuClock - change CPU max frequency limit
+Unknown_73030846 = 0x73030846,
+/// `Unknown_7977A946` — DriverInvoker::populatePowerLimitTable - SBIOS power-limit table
+Unknown_7977A946 = 0x7977a946,
+/// `Unknown_799D6E11` — GPUHandle::queryFrameBuffer sub-call - FB/VRAM info
+Unknown_799D6E11 = 0x799d6e11,
+/// `Unknown_7A2D309E` — DriverInvoker::getBoostClock - get PM1 availability (boost-clock status)
+Unknown_7A2D309E = 0x7a2d309e,
+/// `Unknown_7B30AE0D` — GPUHandle::queryPStateInfo - Perf P-states info
+Unknown_7B30AE0D = 0x7b30ae0d,
+/// `Unknown_7BF85571` — aggregator sub-call (used by pollCtac @0x14002c990)
+Unknown_7BF85571 = 0x7bf85571,
+/// `Unknown_7DBF2D2B` — GPUHandle::queryArchitecture sub-call - system/GPU identity
+Unknown_7DBF2D2B = 0x7dbf2d2b,
+/// TGP-watts power-control GET (NDA, ID 0x8B3E7343). Fills the 10016-byte
+/// read-modify-write buffer used by setTgpWatt (GPUMon sub_1400324A0). Paired
+/// with NvAPI_GPU_ClientTgpWattSetStatus. Struct version magic 0x12720 (v1|10016).
+NvAPI_GPU_ClientTgpWattGetStatus = 0x8b3e7343,
+/// `Unknown_8C45954D` — GPUHandle::getCpuClockRange - read CPU frequency range
+Unknown_8C45954D = 0x8c45954d,
+/// `Unknown_93456591` — GPUHandle::pollWhisperMode - NVPCF status (WM2.0 whisper mode)
+Unknown_93456591 = 0x93456591,
+/// `Unknown_95E71AB6` — GPUHandle::setTempSim/disableTempSim - temperature simulation (VBIOS Secured Overrides)
+Unknown_95E71AB6 = 0x95e71ab6,
+/// `Unknown_9962C97C` — GPUHandle::pollPState - P-state limit status
+Unknown_9962C97C = 0x9962c97c,
+/// `Unknown_99FC9866` — Connector::getPanelBrightnessInfo - panel brightness info
+Unknown_99FC9866 = 0x99fc9866,
+/// `Unknown_A5614A5D` — GPUHandle::queryGPUInfo sub-call - GPU info
+Unknown_A5614A5D = 0xa5614a5d,
+/// `Unknown_ADE08E5F` — sub_140001060 init: resolves a fn ptr (stored qword_140F1A7A8), likely NvAPI_PrivateInit variant [GPUMon init/teardown]
+Unknown_ADE08E5F = 0xade08e5f,
+/// `Unknown_AF97FE75` — GPUHandle::pollTempSim - read temperature-simulation status
+Unknown_AF97FE75 = 0xaf97fe75,
+/// `Unknown_B0031005` — GPUHandle::queryArchitecture sub-call - identity
+Unknown_B0031005 = 0xb0031005,
+/// `Unknown_B4C5D8BA` — DriverInvoker::populateQboostIndex - QBoost controller info
+Unknown_B4C5D8BA = 0xb4c5d8ba,
+/// `Unknown_B6A3DA5B` — GPUHandle::setDynamicBoost - set controller setting
+Unknown_B6A3DA5B = 0xb6a3da5b,
+/// `Unknown_B78734AB` — GPUHandle::pollDynamicBoost - QBoost controller status
+Unknown_B78734AB = 0xb78734ab,
+/// TGP-watts power-control SET (NDA, ID 0xBFF09E59). Applies the 10016-byte
+/// buffer (with the target mW written at dword 553+10*index). GPUMon
+/// `[GPUHandle::setTgpWatt]` writes watts→mW (×1000) and range-checks against
+/// GetInfoPrivate's min/max. 0xFFFFFFFF = reset to rated/default.
+NvAPI_GPU_ClientTgpWattSetStatus = 0xbff09e59,
+/// `Unknown_C4554575` — GPUHandle::setTargetTemperature - set thermal control
+Unknown_C4554575 = 0xc4554575,
+/// `Unknown_C74BFB78` — DriverInvoker::getThermalController/setThermalController - thermal controller enable/disable
+Unknown_C74BFB78 = 0xc74bfb78,
+/// `Unknown_C9F86A33` — GPUHandle::setPState/setRatedTdp - PerfClientLimitsSetStatus
+Unknown_C9F86A33 = 0xc9f86a33,
+/// `Unknown_CF0AB99F` — GPUHandle::queryGPUInfo sub-call - GPU info
+Unknown_CF0AB99F = 0xcf0ab99f,
+/// `Unknown_CF86B990` — GPUHandle::pollFanSpeed/setFanSim - ClientFanCoolersGetControl
+Unknown_CF86B990 = 0xcf86b990,
+/// `Unknown_D2561B69` — GPUHandle::setBb2Active/setWm2Active - enable BB2/WM2
+Unknown_D2561B69 = 0xd2561b69,
+/// `Unknown_D8135264` — GPUHandle::queryArchitecture sub-call - identity
+Unknown_D8135264 = 0xd8135264,
+/// `Unknown_E262027C` — DriverInvoker::setBoostClock - set PM1 availability
+Unknown_E262027C = 0xe262027c,
+/// `Unknown_E415C04E` — DriverInvoker::populateNvpcfMasterInfo/Index - NvPCF master info
+Unknown_E415C04E = 0xe415c04e,
+/// `Unknown_E4427527` — GPUHandle::isPStateLocked sub-call - client limit
+Unknown_E4427527 = 0xe4427527,
+/// `Unknown_E642352B` — GPUHandle::isPStateLocked - PerfClientLimitsGetInfo
+Unknown_E642352B = 0xe642352b,
+/// `Unknown_E64AE812` — GPUHandle::pollRppgMs - RPPG (SRAM low-power) support info
+Unknown_E64AE812 = 0xe64ae812,
+/// `Unknown_EB44E8AA` — GPUHandle::setFanSim - ClientFanCoolersSetControl
+Unknown_EB44E8AA = 0xeb44e8aa,
+/// `Unknown_EFCE7A2F` — GPUHandle::isPStateLocked sub-call - limit status
+Unknown_EFCE7A2F = 0xefce7a2f,
+/// `Unknown_F576F5CF` — Connector::populateDisplayName - parsed EDID / display name
+Unknown_F576F5CF = 0xf576f5cf,
+/// `Unknown_F9E92A44` — GPUHandle::pollPowerState - power supply state (AC) read
+Unknown_F9E92A44 = 0xf9e92a44,
+
+// ---------------------------------------------------------------------------
+// source: gpumon.exe + gpumoncmd.exe — second extraction pass (complete surface)
+//
+// These IDs come from a FULL re-extraction of BOTH GPUMon binaries' nvapi
+// QueryInterface surface (authoritative: xref walk of the cached QI pointer
+// in each binary — GPUMon.exe 124 distinct IDs @ qword_140F1A7B8, GPUMonCmd.exe
+// 100 distinct IDs @ qword_1400AA948; union = 127). The earlier gpumon.exe
+// block above was hand-built from a PARTIAL extraction and missed these; the
+// complete walk plus the previously-unreversed gpumoncmd.exe surfaced 22 IDs
+// absent from this registry. See reverse/full_surface_final.json for the
+// per-binary presence table and reverse/gpumoncmd-nvapi-extract.md for the
+// gpumoncmd-specific pass. Each name below is grounded in the GPUMon
+// `[GPUHandle::method]` / `[DriverInvoker::method]` log string of the thunk's
+// caller (re-verified via IDA MCP this pass), not guessed from the ID.
+
+/// `Unknown_0956AB25` — GPUHandle::pollFanArbiter - ClientFanArbiter GetStatus (fan arbiter status)
+Unknown_0956AB25 = 0x0956ab25,
+/// `Unknown_1B71D425` — GPUHandle::setThermalSlowdown - ClientThermalSlowdownSetStatus (enable/disable 0xFFFF)
+Unknown_1B71D425 = 0x1b71d425,
+/// `Unknown_2B2A2A45` — GPUHandle::resetFanCurve - ClientFanCoolersPolicy SetStatus (apply new fan policy)
+Unknown_2B2A2A45 = 0x2b2a2a45,
+/// `Unknown_2EB3C140` — GPUHandle::queryArchitecture - system/GPU-type query (multi-caller, architecture init)
+Unknown_2EB3C140 = 0x2eb3c140,
+/// `Unknown_31B7A4CD` — GPUHandle::pollPowerPolicy - ClientPowerPoliciesGetStatus (power policy status)
+Unknown_31B7A4CD = 0x31b7a4cd,
+/// `Unknown_3B421EF9` — GPUHandle::pollPcieBandwidth - NVPCF status data (PCIE Rx/Tx bandwidth)
+Unknown_3B421EF9 = 0x3b421ef9,
+/// `Unknown_5D0634EE` — GPUHandle::pollVoltage - ClientVoltRailsGetStatus (voltage rail DATA, magics 68296/68300)
+Unknown_5D0634EE = 0x5d0634ee,
+/// `Unknown_7CAAC987` — GPUHandle::pollDifrLayer1/2/3 - DIFR power-gating support/statistics
+Unknown_7CAAC987 = 0x7caac987,
+/// `Unknown_7DBE90AB` — GPUHandle::queryArchitecture - system/GPU-type query
+Unknown_7DBE90AB = 0x7dbe90ab,
+/// `Unknown_AFF54A75` — GPUHandle::queryArchitecture - arch info query
+Unknown_AFF54A75 = 0xaff54a75,
+/// `Unknown_AFFC2279` — earlier naming map attributed this to `setTgpWatt`, but
+/// that is WRONG: the setTgpWatt SET is 0xBFF09E59 (NvAPI_GPU_ClientTgpWattSetStatus,
+/// verified by direct decompile of sub_1400324A0). This ID is not loaded as an
+/// immediate anywhere in GPUMon.exe's .text; its true role is unconfirmed.
+Unknown_AFFC2279 = 0xaffc2279,
+/// `Unknown_C118ED82` — GPUHandle::pollGc6Statistics - GC6 (link-off) residency statistics
+Unknown_C118ED82 = 0xc118ed82,
+/// `Unknown_C9E9BB33` — GPUHandle::setPState - PerfClientLimitsSetStatus (P-State/frequency lock)
+Unknown_C9E9BB33 = 0xc9e9bb33,
+/// `Unknown_E097144F` — GPUHandle::setTargetTemperature - ClientThermalPoliciesSetStatus (target temp)
+Unknown_E097144F = 0xe097144f,
+/// `Unknown_E63AE22B` — GPUHandle::isPStateLocked - PerfClientLimitsGetInfo (client limit info)
+Unknown_E63AE22B = 0xe63ae22b,
+/// `Unknown_E65C75B2` — GPUHandle::pollRppgMs - RPPG (SRAM low-power) support status
+Unknown_E65C75B2 = 0xe65c75b2,
+/// `Unknown_EFCEDD1F` — GPUHandle::isPStateLocked - PerfClientLimitsGetStatus (client limit status)
+Unknown_EFCEDD1F = 0xefcedd1f,
+/// `Unknown_F9D60904` — GPUHandle::pollPowerState - power supply state (AC/DC) read
+Unknown_F9D60904 = 0xf9d60904,
+
+// --- gpumoncmd.exe-only IDs (NOT present in GPUMon.exe) ---
+/// `Unknown_01510308` — gpumoncmd.exe init stub - private init/enum resolver (cached @ 0x1400AA940)
+Unknown_01510308 = 0x01510308,
+// NOTE: 0x33C7F5EC and 0x594762E4 are already registered above (GPUMon init
+// debug-probe). In gpumoncmd.exe these SAME two IDs are additionally used as
+// per-call ENTER/EXIT profiling hooks wrapping every API call — see the
+// existing entries at Unknown_33C7F5EC / Unknown_594762E4 above.
+
+// --- GPUMon.exe init-stub lifecycle resolvers (resolved at LoadLibrary time,
+// cached in qword_140F1A7A8/A7B0/A7C8/A7D0; not per-frame thunks). Kept as
+// documentation-only records so the IIDs are reserved/known. ---
+/// `Unknown_AD298D3F` — GPUMon.exe init - primary lifecycle resolver (QI at init, cached @ qword_140F1A7A8)
+Unknown_AD298D3F_LifecycleInit = 0xad298d3f,
+/// `Unknown_33C7358C` — GPUMon.exe init - secondary lifecycle resolver (cached @ qword_140F1A7C8)
+Unknown_33C7358C_LifecycleInit = 0x33c7358c,
+/// `Unknown_593E8644` — GPUMon.exe init - secondary lifecycle resolver (cached @ qword_140F1A7D0)
+Unknown_593E8644_LifecycleInit = 0x593e8644,
+
 }
