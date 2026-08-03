@@ -282,19 +282,28 @@ pub mod private {
 
         /// Read the power-mW field for the given policy entry index.
         pub fn power_mw(&self, index: usize) -> Option<u32> {
+            // See set_power_mw: GPUMon indexes from byte 0; subtract the 8-byte
+            // header to land in `payload`.
             let dword = Self::POWER_FIRST_DWORD + Self::POWER_STRIDE_DWORDS * index;
+            let off = dword.checked_mul(4).and_then(|b| b.checked_sub(8))?;
             self.payload
-                .get(dword * 4..dword * 4 + 4)
+                .get(off..off + 4)
                 .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         }
 
         /// Write the power-mW field for the given policy entry index (sets the
         /// mask bit for that entry as well).
         pub fn set_power_mw(&mut self, index: usize, milliwatts: u32) {
+            // GPUMon indexes v14[dword] from byte 0 of the whole struct; our
+            // `payload` starts after the 8-byte (version+mask) header, so
+            // subtract 8 bytes (2 dwords) to land in the right slot.
             let dword = Self::POWER_FIRST_DWORD + Self::POWER_STRIDE_DWORDS * index;
-            if let Some(slot) = self.payload.get_mut(dword * 4..dword * 4 + 4) {
-                slot.copy_from_slice(&milliwatts.to_le_bytes());
-                self.mask |= 1u32 << index;
+            let off = dword.checked_mul(4).and_then(|b| b.checked_sub(8));
+            if let Some(off) = off {
+                if let Some(slot) = self.payload.get_mut(off..off + 4) {
+                    slot.copy_from_slice(&milliwatts.to_le_bytes());
+                    self.mask |= 1u32 << index;
+                }
             }
         }
     }
@@ -345,7 +354,8 @@ pub mod private {
             pub hide_tgp_flag_dword: u32,
             /// Per-policy entry table (10604 B each); raw, parsed by accessors.
             /// Header before this = 52 bytes (dwords 0..12 + the index byte).
-            pub entries: Padding<[u8; 347136 - 52]>,
+            /// Total struct = 347124 B (matches GPUMon's v7[86784] + memset).
+            pub entries: Padding<[u8; 347124 - 52]>,
         }
     }
 
@@ -361,9 +371,13 @@ pub mod private {
             (self.policy_index_byte != 0xFF).then_some(self.policy_index_byte)
         }
 
+        /// Read dword `field` of policy entry `index`. GPUMon indexes these
+        /// relative to the START of the whole struct (v7[N]), so the byte offset
+        /// is (stride*index + field)*4 from byte 0 — but our typed header is the
+        /// first 52 bytes, so subtract 52 to index into the `entries` payload.
         fn entry_dword(&self, index: usize, field: usize) -> Option<u32> {
-            let off = (Self::ENTRY_STRIDE_DWORDS * index + field) * 4;
-            // entries start right after the fixed header above
+            let off_struct = (Self::ENTRY_STRIDE_DWORDS * index + field) * 4;
+            let off = off_struct.checked_sub(52)?;
             self.entries.get(off..off + 4)
                 .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         }
@@ -382,12 +396,14 @@ pub mod private {
         }
     }
 
-    nvversion! { @=NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_V1(1) = 347136 }
+    nvversion! { @=NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_V1(15) = 347124 }
 
     nvapi! {
         /// Undocumented (NDA, ID 0x67F31384). Private ClientPowerPoliciesGetInfo
         /// variant — the TGP-watts min/default/max range + active policy index.
-        /// NOT the public 0x34206D86. Returns a 347136-byte struct.
+        /// NOT the public 0x34206D86. Returns a 347124-byte struct with version
+        /// magic 0x0F4BF4 (version 15) — GPUMon's queryPowerPolicy uses exactly
+        /// this; the version-1 magic I first tried is rejected by the driver.
         pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE) -> NvAPI_Status;
     }
 

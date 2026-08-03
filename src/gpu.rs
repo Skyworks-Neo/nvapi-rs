@@ -992,6 +992,10 @@ impl PhysicalGpu {
     /// Returns the resolved milliwatts actually written.
     pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> crate::NvapiResult<u32> {
         trace!("gpu.set_tgp_watt({} W, idx {})", watts, policy_index);
+        // GPUMon's setTgpWatt runs AFTER queryPowerPolicy (GetInfoPrivate) has
+        // populated the GPUHandle's policy state. Mirror that: call the private
+        // GetInfo first so the driver's power-policy state is primed.
+        let _ = self.tgp_watt_range()?;
         // 10KB — heap-backed to be stack-safe.
         let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
         let ver = <power::private::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
@@ -1000,7 +1004,11 @@ impl PhysicalGpu {
             let status = sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
             crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)?;
         }
-        let milliwatts = watts.saturating_mul(1000);
+        let milliwatts = if watts == 0xFFFFFFFF {
+            0xFFFFFFFF
+        } else {
+            watts.saturating_mul(1000)
+        };
         let data: &mut power::private::NV_GPU_CLIENT_TGP_WATT_STATUS =
             unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
         data.set_power_mw(policy_index, milliwatts);
