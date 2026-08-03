@@ -381,6 +381,119 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE) -> NvAPI_Status;
     }
 
+    // ------------------------------------------------------------------
+    // QBoost controller (NDA, GPUMon `populateQboostIndex` + `setTgpQboost`).
+    //
+    // This is the Dynamic-Boost power slider PAIRED with the PPAB enable
+    // (0x1504FC3D). Two separate structs:
+    //   GET  0xB4C5D8BA (NvAPI_GPU_ClientQboostGetInfo): 6300-byte controller
+    //        table (version 0x1189C = v1|6300), 196 B/controller, ≤32
+    //        controllers. Per entry: enable flag @ byte 28, power mW @ byte 123.
+    //        GPUMon scans for the active controller (enable==1 && power!=0).
+    //   SET  0xB78734AB (NvAPI_GPU_ClientQboostSetStatus): 5696-byte buffer
+    //        (version 0x21640 = v2|5696), 44-dword (176 B)/controller stride.
+    //        Per entry: enable byte @ dword (16+44*N), power mW @ dword (19+44*N).
+    //        watts→mW (×1000); 0xFFFFFFFF = reset.
+    // ------------------------------------------------------------------
+
+    /// Max QBoost controllers the params structs reserve room for.
+    pub const NV_GPU_CLIENT_QBOOST_CONTROLLERS_MAX: usize = 32;
+
+    nvstruct! {
+        /// QBoost controller info table (RE'd from GPUMon; NDA). Opaque except
+        /// for the per-controller enable/power accessors below.
+        pub struct NV_GPU_CLIENT_QBOOST_INFO_V1 {
+            pub version: NvVersion,
+            /// dword 1 (opaque count/flags in GPUMon's read).
+            pub flags: u32,
+            /// 6300 - 8 bytes of controller table (196 B/controller).
+            pub controllers: Padding<[u8; 6300 - 8]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_QBOOST_INFO_V1 {
+        const ENTRY_STRIDE: usize = 196;
+        const ENABLE_OFF: usize = 28;
+        const POWER_OFF: usize = 123;
+
+        fn entry_base(&self, index: usize) -> Option<&[u8]> {
+            let start = index * Self::ENTRY_STRIDE;
+            self.controllers.get(start..start + Self::ENTRY_STRIDE)
+        }
+
+        /// Is controller `index` active (enable flag set)?
+        pub fn is_active(&self, index: usize) -> bool {
+            self.entry_base(index)
+                .map(|e| e.get(Self::ENABLE_OFF).copied().unwrap_or(0) == 1)
+                .unwrap_or(false)
+        }
+
+        /// Controller `index` target power in mW (0 if unset).
+        pub fn power_mw(&self, index: usize) -> Option<u32> {
+            self.entry_base(index).and_then(|e| {
+                e.get(Self::POWER_OFF..Self::POWER_OFF + 4)
+                    .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            })
+        }
+
+        /// First active controller index (enable==1 && power!=0), like GPUMon's
+        /// populateQboostIndex scan. None if none active.
+        pub fn active_index(&self) -> Option<usize> {
+            (0..NV_GPU_CLIENT_QBOOST_CONTROLLERS_MAX).find(|&i| {
+                self.is_active(i) && self.power_mw(i).map_or(false, |p| p != 0)
+            })
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_QBOOST_INFO NV_GPU_CLIENT_QBOOST_INFO_V1(1) = 6300 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xB4C5D8BA). QBoost controller info table —
+        /// enumerates the Dynamic-Boost controllers + which is active (the
+        /// PPAB-paired power-slider target).
+        pub unsafe fn NvAPI_GPU_ClientQboostGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_QBOOST_INFO) -> NvAPI_Status;
+    }
+
+    nvstruct! {
+        /// QBoost controller SET buffer (RE'd from GPUMon; NDA). dword0 =
+        /// version (0x21640), dword1 = mask = (1 << controller_index). Per-entry
+        /// stride 44 dwords (176 B): enable byte @ dword (16+44*N), power mW @
+        /// dword (19+44*N). Bulk is opaque.
+        pub struct NV_GPU_CLIENT_QBOOST_STATUS_V2 {
+            pub version: NvVersion,
+            pub mask: u32,
+            pub payload: Padding<[u8; 5696 - 8]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_QBOOST_STATUS_V2 {
+        const ENTRY_STRIDE_DWORDS: usize = 44;
+        const ENABLE_DWORD: usize = 16;
+        const POWER_DWORD: usize = 19;
+
+        /// Enable controller `index` and set its target power (mW). Sets the
+        /// mask bit for the entry as well.
+        pub fn set_power_mw(&mut self, index: usize, milliwatts: u32) {
+            let enable_off = (Self::ENABLE_DWORD + Self::ENTRY_STRIDE_DWORDS * index) * 4;
+            let power_off = (Self::POWER_DWORD + Self::ENTRY_STRIDE_DWORDS * index) * 4;
+            if let Some(slot) = self.payload.get_mut(enable_off) {
+                *slot = 1;
+            }
+            if let Some(slot) = self.payload.get_mut(power_off..power_off + 4) {
+                slot.copy_from_slice(&milliwatts.to_le_bytes());
+                self.mask |= 1u32 << index;
+            }
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_QBOOST_STATUS NV_GPU_CLIENT_QBOOST_STATUS_V2(2) = 5696 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xB78734AB). QBoost controller SET target power
+        /// — the Dynamic-Boost power slider (paired with PPAB enable 0x1504FC3D).
+        pub unsafe fn NvAPI_GPU_ClientQboostSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *const NV_GPU_CLIENT_QBOOST_STATUS) -> NvAPI_Status;
+    }
+
     nvstruct! {
         pub struct NV_GPU_CLIENT_POWER_TOPOLOGY_INFO_V1 {
             pub version: NvVersion,

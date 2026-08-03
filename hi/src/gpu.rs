@@ -611,6 +611,25 @@ impl Gpu {
         self.gpu.reset_tgp_watt(policy_index).map_err(Into::into)
     }
 
+    /// QBoost / Dynamic-Boost controller info (NDA 0xB4C5D8BA): active
+    /// controller index + current target power. The PPAB-paired power slider.
+    /// `Ok(None)` where the driver doesn't expose QBoost.
+    pub fn qboost_info(&self) -> nvapi::Result<Option<nvapi::QboostInfo>> {
+        self.gpu.qboost_info().map_err(Into::into)
+    }
+
+    /// Set QBoost / Dynamic-Boost controller target power in watts (NDA
+    /// 0xB78734AB, the PPAB-paired power slider). Returns (controller index, mW).
+    pub fn set_qboost_power(
+        &self,
+        watts: u32,
+        controller_index: Option<usize>,
+    ) -> nvapi::Result<(usize, u32)> {
+        self.gpu
+            .set_qboost_power(watts, controller_index)
+            .map_err(Into::into)
+    }
+
     pub fn set_sensor_limits<I: IntoIterator<Item = SensorThrottle>>(
         &self,
         limits: I,
