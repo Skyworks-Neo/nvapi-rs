@@ -1346,11 +1346,22 @@ Unknown_B6A3DA5B = 0xb6a3da5b,
 /// entry dword+19. -1 = reset. This is the Dynamic-Boost power slider paired
 /// with the PPAB enable (0x1504FC3D).
 NvAPI_GPU_ClientQboostSetStatus = 0xb78734ab,
-/// TGP-watts power-control SET (NDA, ID 0xBFF09E59). Applies the 10016-byte
-/// buffer (with the target mW written at dword 553+10*index). GPUMon
-/// `[GPUHandle::setTgpWatt]` writes watts→mW (×1000) and range-checks against
-/// GetInfoPrivate's min/max. 0xFFFFFFFF = reset to rated/default.
-NvAPI_GPU_ClientTgpWattSetStatus = 0xbff09e59,
+/// TGP-watts power-control SET (NDA, ID 0xAFFC2279). Applies the 10016-byte
+/// buffer (target mW at buf+0x8A0+40*idx, byte-verified via WinDbg). GPUMon's
+/// `[GPUHandle::setTgpWatt]` writes watts→mW (×1000), range-checks against
+/// GetInfoPrivate's min/max; 0xFFFFFFFF = reset. NOTE: this is the ID used by
+/// GPUMonCmd.exe (sub_140001AC0 resolves 0xAFFC2279). The sibling GPUMon.exe
+/// uses 0xBFF09E59 at the same thunk — BOTH are the setTgpWatt SET, one per
+/// binary. On RTX 4060 Laptop driver, QI(0xAFFC2279) resolves and
+/// QI(0xBFF09E59) returns NULL, so 0xAFFC2279 is the live ID. (Earlier I
+/// wrongly concluded 0xAFFC2279 was "not the SET" — corrected by live QI probe.)
+NvAPI_GPU_ClientTgpWattSetStatus = 0xaffc2279,
+/// TGP-watts power-control SET, GPUMon.exe variant (NDA, ID 0xBFF09E59). Same
+/// role as NvAPI_GPU_ClientTgpWattSetStatus above; GPUMon.exe's thunk resolves
+/// this ID. Returns NULL from QI on the RTX 4060 Laptop driver (the
+/// GPUMonCmd/GPUMonCmd variant 0xAFFC2279 is the live one there). Kept
+/// registered for completeness.
+NvAPI_GPU_ClientTgpWattSetStatus_GpuMonExe = 0xbff09e59,
 /// `Unknown_C4554575` — GPUHandle::setTargetTemperature - set thermal control
 Unknown_C4554575 = 0xc4554575,
 /// `Unknown_C74BFB78` — DriverInvoker::getThermalController/setThermalController - thermal controller enable/disable
@@ -1419,11 +1430,10 @@ Unknown_7CAAC987 = 0x7caac987,
 Unknown_7DBE90AB = 0x7dbe90ab,
 /// `Unknown_AFF54A75` — GPUHandle::queryArchitecture - arch info query
 Unknown_AFF54A75 = 0xaff54a75,
-/// `Unknown_AFFC2279` — earlier naming map attributed this to `setTgpWatt`, but
-/// that is WRONG: the setTgpWatt SET is 0xBFF09E59 (NvAPI_GPU_ClientTgpWattSetStatus,
-/// verified by direct decompile of sub_1400324A0). This ID is not loaded as an
-/// immediate anywhere in GPUMon.exe's .text; its true role is unconfirmed.
-Unknown_AFFC2279 = 0xaffc2279,
+// NOTE: 0xAFFC2279 is registered above as NvAPI_GPU_ClientTgpWattSetStatus
+// (the setTgpWatt SET, GPUMonCmd variant — live-verified resolvable on RTX 4060
+// Laptop driver, unlike the GPUMon.exe sibling 0xBFF09E59 which QI-returns NULL
+// there). The earlier "Unknown_AFFC2279 / role unconfirmed" entry was removed.
 /// `Unknown_C118ED82` — GPUHandle::pollGc6Statistics - GC6 (link-off) residency statistics
 Unknown_C118ED82 = 0xc118ed82,
 /// `Unknown_C9E9BB33` — GPUHandle::setPState - PerfClientLimitsSetStatus (P-State/frequency lock)

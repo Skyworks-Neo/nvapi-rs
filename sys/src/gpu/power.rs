@@ -275,13 +275,13 @@ pub mod private {
     }
 
     impl NV_GPU_CLIENT_TGP_WATT_STATUS_V1 {
-        /// Per-entry stride in bytes (verified: idx N power @ +0x8A0 + 40*N).
+        /// Per-entry stride in bytes (GPUMonCmd writes v14[553 + 10*idx], i.e.
+        /// 10 dwords = 40 bytes per entry).
         const POWER_STRIDE_BYTES: usize = 40;
-        /// Byte offset WITHIN `payload` of entry 0's power-mW field.
-        /// Live-verified via WinDbg on GPUMon: it writes the power dword at
-        /// buffer+0x8F0 for idx=2; payload starts at buffer+8, so the idx-0
-        /// base in payload = 0x8A0 - 8 = 0x898.
-        const POWER_BASE_PAYLOAD_OFF: usize = 0x898;
+        /// Byte offset WITHIN `payload` of entry 0's power-mW field. GPUMonCmd's
+        /// setTgpWatt writes v14[553 + 10*idx] = buffer byte (553+10*idx)*4.
+        /// payload starts at buffer byte 8, so idx-0 base = 553*4 - 8 = 0x89C.
+        const POWER_BASE_PAYLOAD_OFF: usize = 0x89C;
 
         fn power_off(&self, index: usize) -> Option<usize> {
             Self::POWER_BASE_PAYLOAD_OFF
