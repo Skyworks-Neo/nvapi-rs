@@ -1170,6 +1170,87 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesSetStatus(self.0, &data)) }
     }
 
+    /// Read the current target-temperature wall (mobile "targettemp") for the
+    /// given policy index, in degrees Celsius. Uses the PRIVATE
+    /// ClientThermalPolicies GET-prime (NDA 0xC4554575) — the read half of the
+    /// RMW pair that actually works on mobile GPUs (the documented
+    /// ClientThermalPoliciesGetStatus 0xE9C425A1 returns a transient/no-op value
+    /// on mobile). Returns None if the index is out of range or unsupported.
+    ///
+    /// `policy_index`: on RTX 4060 Laptop the wall ("GPU Target Temperature" in
+    /// nvidia-smi) is **index 2** (reads 87C = nvidia-smi's value). idx 0/1/4
+    /// are other thermal policies, idx 3/5/6/7 are invalid (return Error).
+    pub fn target_temperature(&self, policy_index: usize) -> crate::Result<Option<f32>> {
+        trace!("gpu.target_temperature({})", policy_index);
+        let mut data = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
+        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        data.version = ver;
+        data.mask = 1u32 << policy_index;
+        unsafe {
+            let status = sys::api::NvAPI_GPU_ClientThermalTargetGetStatus(self.0, &mut data);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientThermalTargetGetStatus, status)?;
+        }
+        Ok(data.target_temp_c(policy_index))
+    }
+
+    /// Raw GET-prime of the target-temp control buffer with a caller-supplied
+    /// mask. Returns the full opaque buffer for diagnostics (e.g. locating the
+    /// real target-temp field by scanning for a known Q8 value). Use
+    /// `mask = 0xFFFF` to read all entries.
+    pub fn target_temperature_raw(
+        &self,
+        mask: u32,
+    ) -> crate::Result<thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS> {
+        trace!("gpu.target_temperature_raw(mask=0x{:X})", mask);
+        let mut data = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
+        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        data.version = ver;
+        data.mask = mask;
+        unsafe {
+            let status = sys::api::NvAPI_GPU_ClientThermalTargetGetStatus(self.0, &mut data);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientThermalTargetGetStatus, status)?;
+        }
+        Ok(data)
+    }
+
+    /// Set the target-temperature wall (mobile "targettemp") to `celsius` for the
+    /// given policy index. Uses the PRIVATE ClientThermalPolicies RMW pair (NDA
+    /// GET-prime 0xC4554575 + SET 0xE097144F) — the path GPUMonCmd
+    /// `-targettemp:<C>` uses and that persists on mobile GPUs (nvidia-smi
+    /// confirms). The documented ClientThermalPoliciesSetStatus 0x34C0B13D
+    /// returns OK on mobile but does NOT persist; this private pair does.
+    ///
+    /// `policy_index`: on RTX 4060 Laptop the target-temp ("GPU Target
+    /// Temperature") policy is **index 2** (confirmed via nvidia-smi cross-check;
+    /// idx 2 reads/writes the 87C wall). idx 0/1/4 are other thermal policies
+    /// (slowdown/etc), idx 3/5/6/7 are invalid. Callers should discover the
+    /// right index per-GPU (GPUMon stores it in its GPUHandle at `v9[776]`,
+    /// populated from ClientThermalPoliciesGetInfo 0x0D258BB5).
+    ///
+    /// Mirrors GPUMonCmd sub_140013090: GET-prime to fill the buffer, patch the
+    /// entry's Q8 temp field (celsius*256 at dword 15*idx+7), SET it back.
+    /// Caller is responsible for clamping `celsius` to the VBIOS range (GPUMon
+    /// enforces [min, max] from the GPUHandle; out-of-range values make SET
+    /// return a generic Error).
+    pub fn set_target_temperature(&self, celsius: f32, policy_index: usize) -> crate::NvapiResult<()> {
+        trace!("gpu.set_target_temperature({} C, idx {})", celsius, policy_index);
+        // GET-prime: fill the buffer with current policy state (opaque fields
+        // must be preserved across the RMW — do NOT zero after this).
+        let mut data = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
+        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        data.version = ver;
+        data.mask = 1u32 << policy_index;
+        unsafe {
+            let status = sys::api::NvAPI_GPU_ClientThermalTargetGetStatus(self.0, &mut data);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientThermalTargetGetStatus, status)?;
+        }
+        // Patch the target temp (Q8) for this entry; set_target_temp_c also
+        // sets the mask bit (already set, but harmless).
+        data.set_target_temp_c(policy_index, celsius);
+        // SET: apply the patched buffer.
+        unsafe { nvcall!(NvAPI_GPU_ClientThermalTargetSetStatus(self.0, &data)) }
+    }
+
     pub fn cooler_info(
         &self,
     ) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::CoolerInfo>> {

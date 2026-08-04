@@ -512,6 +512,107 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ThermChannelGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_THERMAL_THERM_CHANNEL_STATUS) -> NvAPI_Status;
     }
 
+    // ------------------------------------------------------------------
+    // Mobile GPU target-temperature wall ("targettemp" / 温度墙) — the PRIVATE
+    // ClientThermalPolicies RMW pair, RE'd from GPUMonCmd.exe.
+    //
+    // GPUMonCmd `-targettemp:<C>` (setTargetTemperature, sub_140013090) does:
+    //   1. memset a stack buffer (984 B effective); dword0 = 0x203D8 (version
+    //      magic: struct version 2, size 984), dword1 = mask = 1 << policy_index.
+    //   2. GET-prime 0xC4554575 fills the buffer with current policy state.
+    //   3. Write target = (int)(celsius * 256.0) at dword (15*policy_index + 7).
+    //   4. SET 0xE097144F applies the patched buffer.
+    //
+    // This is NOT the documented ClientThermalPoliciesSetStatus (0x34C0B13D),
+    // which returns OK on mobile but silently does not persist. The private
+    // pair is what actually writes the wall (nvidia-smi 87->82 confirmed).
+    // Both IDs sit in nvapi64.dll's static table off_1804DD000 and resolve in
+    // nvoc's process (probe-confirmed: SET -> 0x7FFE90A12750 on RTX 4060 Laptop).
+    //
+    // Version magic: GPUMon writes dword0 = 0x203D8 = version 2 | size 984.
+    // GPUMon's stack buffer is _DWORD v30[248] (992 B) but only the first 984 B
+    // (header 8 + memset 0x3D0=976) are used; the magic's size field (984) is
+    // what the driver validates. Each policy entry is 15 dwords (60 B); the
+    // target-temp Q8 field is entry dword 7. The rest of each entry is opaque
+    // (GET-filled) and must be preserved by the RMW.
+    // ------------------------------------------------------------------
+
+    /// Number of target-temp policy entries the 984-byte buffer can hold.
+    /// 984 B = 8 B header + N*(60 B); floor((984-8)/60) = 16, but GPUMon only
+    /// ever uses index 0..3 — keep 16 to cover the full buffer.
+    pub const NV_GPU_CLIENT_THERMAL_TARGET_ENTRIES_MAX: usize = 16;
+
+    nvstruct! {
+        /// Target-temperature control read-modify-write buffer (RE'd from GPUMon;
+        /// NDA). dword0 = version (0x203D8 = v2|984), dword1 = mask = (1<<idx).
+        /// Per-entry target temp (celsius*256) at dword (15*index + 7). The bulk
+        /// of the buffer is opaque — GET fills it, the caller patches one entry's
+        /// temp field, SET applies.
+        pub struct NV_GPU_CLIENT_THERMAL_TARGET_STATUS_V2 {
+            pub version: NvVersion,
+            /// Bitmask selecting which policy entry to read/write (1 << index).
+            pub mask: u32,
+            /// Opaque policy table (raw; GET-filled, preserve on RMW).
+            pub payload: Padding<[u8; 984 - 8]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_THERMAL_TARGET_STATUS_V2 {
+        /// Access the raw opaque payload bytes (for diagnostics/dumps).
+        pub fn payload_bytes(&self) -> &[u8] {
+            &self.payload.data[..]
+        }
+
+        /// Per-entry stride in BYTES = 15 dwords (GPUMonCmd: v30[15*idx + 7]).
+        const ENTRY_STRIDE_BYTES: usize = 15 * 4;
+        /// Byte offset WITHIN `payload` of entry 0's target-temp field.
+        /// Buffer dword (15*idx + 7); payload starts at buffer byte 8, so
+        /// idx-0 base = 7*4 - 8 = 20.
+        const TEMP_BASE_PAYLOAD_OFF: usize = 7 * 4 - 8;
+
+        fn temp_off(&self, index: usize) -> Option<usize> {
+            Self::TEMP_BASE_PAYLOAD_OFF.checked_add(Self::ENTRY_STRIDE_BYTES.checked_mul(index)?)
+        }
+
+        /// Read the target temp for `index`, decoded to degrees Celsius.
+        /// Returns None if the index is out of range.
+        pub fn target_temp_c(&self, index: usize) -> Option<f32> {
+            let off = self.temp_off(index)?;
+            self.payload.get(off..off + 4).map(|b| {
+                let q8 = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                q8 as f32 / 256.0
+            })
+        }
+
+        /// Write the target temp for `index` (encoded celsius*256) and set the
+        /// mask bit for that entry.
+        pub fn set_target_temp_c(&mut self, index: usize, celsius: f32) {
+            if let Some(off) = self.temp_off(index) {
+                if let Some(slot) = self.payload.get_mut(off..off + 4) {
+                    let q8 = (celsius * 256.0) as i32 as u32;
+                    slot.copy_from_slice(&q8.to_le_bytes());
+                    self.mask |= 1u32 << index;
+                }
+            }
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_THERMAL_TARGET_STATUS NV_GPU_CLIENT_THERMAL_TARGET_STATUS_V2(2) = 984 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xC4554575). Fills the target-temp control
+        /// buffer (the GET-prime half of setTargetTemperature). Pair with
+        /// SetStatus for the read-modify-write.
+        pub unsafe fn NvAPI_GPU_ClientThermalTargetGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLIENT_THERMAL_TARGET_STATUS) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xE097144F). Applies the target-temp control
+        /// buffer (the SET half of setTargetTemperature). Caller writes the
+        /// target temp into the active policy entry first (celsius*256).
+        pub unsafe fn NvAPI_GPU_ClientThermalTargetSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *const NV_GPU_CLIENT_THERMAL_TARGET_STATUS) -> NvAPI_Status;
+    }
+
     // GPS (GPU Power Steering) thermal limit (Kepler-era, undocumented)
 
     nvstruct! {

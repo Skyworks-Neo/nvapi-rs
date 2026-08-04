@@ -1362,8 +1362,12 @@ NvAPI_GPU_ClientTgpWattSetStatus = 0xaffc2279,
 /// GPUMonCmd/GPUMonCmd variant 0xAFFC2279 is the live one there). Kept
 /// registered for completeness.
 NvAPI_GPU_ClientTgpWattSetStatus_GpuMonExe = 0xbff09e59,
-/// `Unknown_C4554575` — GPUHandle::setTargetTemperature - set thermal control
-Unknown_C4554575 = 0xc4554575,
+/// `NvAPI_GPU_ClientThermalTargetGetStatus` — GPUHandle::setTargetTemperature
+/// GET-prime (NDA-private, ID 0xC4554575). The read half of the mobile temp-wall
+/// (targettemp) RMW: fills a 992-byte control buffer that the caller patches then
+/// SETs via NvAPI_GPU_ClientThermalTargetSetStatus. RE'd from GPUMonCmd
+/// sub_1400040A0; resolves in nvoc's process (probe-confirmed on RTX 4060 Laptop).
+NvAPI_GPU_ClientThermalTargetGetStatus = 0xc4554575,
 /// `Unknown_C74BFB78` — DriverInvoker::getThermalController/setThermalController - thermal controller enable/disable
 Unknown_C74BFB78 = 0xc74bfb78,
 /// `Unknown_C9F86A33` — GPUHandle::setPState/setRatedTdp - PerfClientLimitsSetStatus
@@ -1438,8 +1442,15 @@ Unknown_AFF54A75 = 0xaff54a75,
 Unknown_C118ED82 = 0xc118ed82,
 /// `Unknown_C9E9BB33` — GPUHandle::setPState - PerfClientLimitsSetStatus (P-State/frequency lock)
 Unknown_C9E9BB33 = 0xc9e9bb33,
-/// `Unknown_E097144F` — GPUHandle::setTargetTemperature - ClientThermalPoliciesSetStatus (target temp)
-Unknown_E097144F = 0xe097144f,
+/// `NvAPI_GPU_ClientThermalTargetSetStatus` — GPUHandle::setTargetTemperature
+/// SET (NDA-private, ID 0xE097144F). The write half of the mobile temp-wall
+/// (targettemp): applies the 992-byte control buffer (target temp = celsius*256
+/// at dword 15*idx+7). RE'd from GPUMonCmd sub_140004170 / sub_140013090.
+/// NOTE: this is NOT the phantom 0xE0765B6F (that ID resolves to NULL in every
+/// process — a prior session's mis-hex-conversion of this very decimal value
+/// 3767997519 caused hours of misdirection). Resolves in nvoc's process
+/// (probe-confirmed: -> 0x7FFE90A12750 on RTX 4060 Laptop, = the rbx windbg saw).
+NvAPI_GPU_ClientThermalTargetSetStatus = 0xe097144f,
 /// `Unknown_E63AE22B` — GPUHandle::isPStateLocked - PerfClientLimitsGetInfo (client limit info)
 Unknown_E63AE22B = 0xe63ae22b,
 /// `Unknown_E65C75B2` — GPUHandle::pollRppgMs - RPPG (SRAM low-power) support status
