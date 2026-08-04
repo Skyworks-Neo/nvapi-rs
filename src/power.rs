@@ -244,7 +244,9 @@ pub type PowerRails = Vec<PowerRailReading>;
 /// ascending bit order by the driver).
 pub fn descriptor_rail_map(info: &PowerMonitorInfo) -> Vec<(u32, u32, u32)> {
     // Ordered set bits of the channel mask — descriptor N corresponds to bit N.
-    let bits: Vec<u32> = (0..32).filter(|i| info.channel_mask & (1 << i) != 0).collect();
+    let bits: Vec<u32> = (0..32)
+        .filter(|i| info.channel_mask & (1 << i) != 0)
+        .collect();
     let desc = info.descriptors.as_slice();
     let desc_words = desc.len() / 4;
     let w = |i: usize| -> u32 {
@@ -297,10 +299,7 @@ pub fn nonzero_offsets(status_bytes: &[u8]) -> Vec<(usize, u32)> {
 /// sub-fields and sentinels ≥ 10_000_000 like accumulators/version magics are
 /// excluded). Channel 0 (total) has no non-baseline offset — its value IS the
 /// +0x44 baseline slot — so fall back to the +0x44 value when present.
-pub fn extract_channel_mw(
-    nz: &[(usize, u32)],
-    baseline: &std::collections::HashSet<usize>,
-) -> u32 {
+pub fn extract_channel_mw(nz: &[(usize, u32)], baseline: &std::collections::HashSet<usize>) -> u32 {
     let mut best: u32 = 0;
     for &(off, v) in nz {
         if baseline.contains(&off) {
@@ -434,7 +433,11 @@ pub fn disambiguate_power_rails(
             .filter(|&i| chans[i].confidence == Confidence::Ambiguous)
             .collect();
         order.sort_by_key(|&i| {
-            let nonbase = chans[i].nz.iter().filter(|(o, _)| !baseline.contains(o)).count();
+            let nonbase = chans[i]
+                .nz
+                .iter()
+                .filter(|(o, _)| !baseline.contains(o))
+                .count();
             (std::cmp::Reverse(nonbase), i)
         });
 
@@ -468,7 +471,11 @@ pub fn disambiguate_power_rails(
                 // sum), not clean ownership — reject.
                 let mut vals: Vec<u32> = vec![v];
                 for &j in &claimants {
-                    if let Some(vj) = chans[j].nz.iter().find(|(oo, _)| *oo == o).map(|(_, vv)| *vv)
+                    if let Some(vj) = chans[j]
+                        .nz
+                        .iter()
+                        .find(|(oo, _)| *oo == o)
+                        .map(|(_, vv)| *vv)
                     {
                         vals.push(vj);
                     }
@@ -561,12 +568,12 @@ pub fn disambiguate_power_rails(
 /// single-rail equivalent → `None` (label by `rail_name` instead).
 pub fn gpu_z_rail_name(rail: u32) -> Option<&'static str> {
     match rail {
-        245 | 223 => Some("Board"),      // InputTotalBoard / InputTotalBoard2
-        246 | 226 => Some("Chip"),       // InputNvvdd / InputNvvdd1 (core in)
-        247 => Some("MVDDC"),            // InputFbvdd (memory in)
-        241 => Some("PWR_SRC"),          // InputPwrSrcPp
-        222 | 255 => Some("PCIe"),       // InputPex12v1 / InputPex12v (slot)
-        1 => Some("Chip-out"),           // OutputNvvdd
+        245 | 223 => Some("Board"), // InputTotalBoard / InputTotalBoard2
+        246 | 226 => Some("Chip"),  // InputNvvdd / InputNvvdd1 (core in)
+        247 => Some("MVDDC"),       // InputFbvdd (memory in)
+        241 => Some("PWR_SRC"),     // InputPwrSrcPp
+        222 | 255 => Some("PCIe"),  // InputPex12v1 / InputPex12v (slot)
+        1 => Some("Chip-out"),      // OutputNvvdd
         _ => None,
     }
 }
@@ -616,13 +623,13 @@ impl Confidence {
 /// are allowed through the gate unchecked. Per-GPU validated on RTX 4060
 /// Laptop; unknown on other SKUs (the soft gate is a no-op there).
 const GPUZ_OFFSET_LABELS: &[(usize, &str)] = &[
-    (0x14, "Chip"),       // GPU Chip Power Draw
-    (0x2C, "MVDDC"),      // MVDDC Power Draw
-    (0xE0, "Chip-out"),   // core sub-channel (≈ GPU Chip output)
-    (0xEC, "Chip-out"),   // core sub-channel (≈ GPU Chip output)
-    (0x98, "PWR_SRC"),    // PWR_SRC Power Draw
-    // +0x08 (Board), +0x44 (16-pin) are baseline/ch0 slots handled elsewhere;
-    // +0x14C ≈ +0x2C duplicate, left ungated (no unique label).
+    (0x14, "Chip"),     // GPU Chip Power Draw
+    (0x2C, "MVDDC"),    // MVDDC Power Draw
+    (0xE0, "Chip-out"), // core sub-channel (≈ GPU Chip output)
+    (0xEC, "Chip-out"), // core sub-channel (≈ GPU Chip output)
+    (0x98, "PWR_SRC"),  // PWR_SRC Power Draw
+                        // +0x08 (Board), +0x44 (16-pin) are baseline/ch0 slots handled elsewhere;
+                        // +0x14C ≈ +0x2C duplicate, left ungated (no unique label).
 ];
 
 /// Look up the GPU-Z rail label for a GetStatus byte offset, or `None` when
@@ -639,9 +646,7 @@ pub fn gpuz_offset_label(offset: usize) -> Option<&'static str> {
 /// offset label (via [`gpu_z_rail_name`]). Rails with no known GPU-Z name
 /// (`None`) are accepted unchecked so the gate doesn't starve unnamed SKUs.
 pub fn rail_matches_label(rail: u32, label: &str) -> bool {
-    gpu_z_rail_name(rail)
-        .map(|r| r == label)
-        .unwrap_or(true)
+    gpu_z_rail_name(rail).map(|r| r == label).unwrap_or(true)
 }
 
 /// Name a `NV_GPU_POWER_CHANNEL_POWER_RAIL` value. Delegates to the
@@ -718,5 +723,3 @@ pub fn power_rail_name_owned(rail: u32) -> String {
         format!("UNNAMED_{}", rail)
     }
 }
-
-

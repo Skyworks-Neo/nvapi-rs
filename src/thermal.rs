@@ -904,7 +904,10 @@ pub struct ThermalChannelStatus {
 impl ThermalChannelStatus {
     /// Temperature at a specific channel index (e.g. `priChIdx[GPU_MAX]`).
     pub fn get(&self, channel: usize) -> Option<f32> {
-        self.temps.iter().find(|(i, _)| *i == channel).map(|(_, t)| *t)
+        self.temps
+            .iter()
+            .find(|(i, _)| *i == channel)
+            .map(|(_, t)| *t)
     }
 }
 
@@ -918,7 +921,10 @@ impl RawConversion for thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS {
             .channel
             .iter()
             .enumerate()
-            .filter_map(|(i, &v)| thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2::decode(v).map(|t| (i, t)))
+            .filter_map(|(i, &v)| {
+                thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2::decode(v)
+                    .map(|t| (i, t))
+            })
             .collect();
         Ok(ThermalChannelStatus {
             channel_mask: self.channel_mask,

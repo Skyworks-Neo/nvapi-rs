@@ -20,20 +20,16 @@ use nvapi::{
     VfpInfo,
 };
 pub use nvapi::{
-    ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies, ClockLockEntry,
-    ClockLockValue, ComputeCapabilities, ConnectedIdsFlags, CoolerControl, CoolerController,
-    CoolerInfo, CoolerPolicy, CoolerSettings, CoolerStatus, CoolerTarget, CoolerType, DisplayId,
-    DriverModel, EccErrors, FanArbiterControl, FanArbiterStatus, FanCoolerId, Foundry, GpuType,
-    Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
-    PciIdentifiers, Percentage, PerformanceDecreaseReason, PerfInfo, PerfLimitId, PerfStatus,
-    PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker, RamType,
-    Range, Rpm, SystemType,
-    EffectiveClocks, ThermalChannelInfo, ThermalChannelStatus, ThermalController,
-    ThermalTarget, UtilizationDomain, Utilizations,
-    AllClocks,
-    PowerMonitor,
-    PowerRails,
-    Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
+    AllClocks, ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies,
+    ClockLockEntry, ClockLockValue, ComputeCapabilities, ConnectedIdsFlags, CoolerControl,
+    CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings, CoolerStatus, CoolerTarget,
+    CoolerType, DisplayId, DriverModel, EccErrors, EffectiveClocks, FanArbiterControl,
+    FanArbiterStatus, FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta,
+    MemoryInfo, Microvolts, MicrovoltsDelta, PState, PciIdentifiers, Percentage, PerfInfo,
+    PerfLimitId, PerfStatus, PerformanceDecreaseReason, PffCurve, PffPoint, PhysicalGpu,
+    PowerMonitor, PowerRails, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType,
+    ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalTarget, UtilizationDomain,
+    Utilizations, Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
 };
 
 pub struct Gpu {
@@ -357,8 +353,8 @@ impl Gpu {
 
         // ThermalTarget per standard channel type.
         let type_target: [ThermalTarget; 5] = [
-            ThermalTarget::Gpu,          // GPU_AVG (core)
-            ThermalTarget::Gpu,          // GPU_MAX (hot spot)
+            ThermalTarget::Gpu, // GPU_AVG (core)
+            ThermalTarget::Gpu, // GPU_MAX (hot spot)
             ThermalTarget::Board,
             ThermalTarget::Memory,
             ThermalTarget::PowerSupply,
@@ -603,7 +599,9 @@ impl Gpu {
     /// Set GPU TGP in watts (the watts-form TGP slider; read-modify-write over
     /// NDA 0x8B3E7343 GET + 0xBFF09E59 SET). Returns the mW actually written.
     pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> nvapi::Result<u32> {
-        self.gpu.set_tgp_watt(watts, policy_index).map_err(Into::into)
+        self.gpu
+            .set_tgp_watt(watts, policy_index)
+            .map_err(Into::into)
     }
 
     /// Reset GPU TGP to rated/default (NDA triplet). Returns the default mW, if known.
@@ -641,7 +639,9 @@ impl Gpu {
     /// Live thermal-channel readings (the STATUS half). `channel_mask` should
     /// come from [`Self::thermal_channel_info`]. Best-effort.
     pub fn thermal_channel_status(&self, channel_mask: u32) -> nvapi::Result<ThermalChannelStatus> {
-        self.gpu.thermal_channel_status(channel_mask).map_err(Into::into)
+        self.gpu
+            .thermal_channel_status(channel_mask)
+            .map_err(Into::into)
     }
 
     pub fn set_cooler_levels<I: IntoIterator<Item = (FanCoolerId, CoolerSettings)>>(

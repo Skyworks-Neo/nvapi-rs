@@ -94,11 +94,14 @@ pub type AllClocks = BTreeMap<ClockDomainId, Kilohertz>;
 /// to `NV_GPU_CLOCK_INFO_V2`'s `EffectiveClocks` conversion, which only reads
 /// the 4 public domains). Returns every present domain keyed by
 /// [`ClockDomainId`].
-pub fn all_clocks_from_raw(
-    raw: &clock::private::NV_GPU_CLOCK_INFO_V2,
-) -> AllClocks {
+pub fn all_clocks_from_raw(raw: &clock::private::NV_GPU_CLOCK_INFO_V2) -> AllClocks {
     ClockDomainId::values()
-        .map(|id| (id, raw.extended_domain[id.raw() as usize].effective_frequency))
+        .map(|id| {
+            (
+                id,
+                raw.extended_domain[id.raw() as usize].effective_frequency,
+            )
+        })
         // Skip Pciegen(31): its effective_frequency holds the current PCIe link
         // generation NUMBER (1..5), not a kHz clock — including it would render
         // a misleading "Pciegen 0.001 MHz" in the All Clocks list. It is read
@@ -923,15 +926,15 @@ mod tests {
         // Populate a handful of domains with plausible fabric-clock kHz. Index
         // by the ClockDomainId discriminant (Gpc=0, Xbar=1, …, Pciegen=31).
         let samples: &[(ClockDomainId, u32)] = &[
-            (ClockDomainId::Gpc, 2_100_000),      // Graphics (0)
-            (ClockDomainId::Xbar, 1_800_000),     // Crossbar (1)
+            (ClockDomainId::Gpc, 2_100_000),  // Graphics (0)
+            (ClockDomainId::Xbar, 1_800_000), // Crossbar (1)
             (ClockDomainId::Sys, 900_000),
             (ClockDomainId::Hub, 600_000),
-            (ClockDomainId::M, 7_500_000),        // Memory (4)
+            (ClockDomainId::M, 7_500_000), // Memory (4)
             (ClockDomainId::Host, 100_000),
             (ClockDomainId::Disp, 67_500),
-            (ClockDomainId::Hotclk, 0),           // zero -> dropped
-            (ClockDomainId::Pciegen, 8_000),      // PCIe gen NUMBER -> filtered out
+            (ClockDomainId::Hotclk, 0),      // zero -> dropped
+            (ClockDomainId::Pciegen, 8_000), // PCIe gen NUMBER -> filtered out
         ];
         for (dom, freq) in samples {
             raw.extended_domain[dom.raw() as usize].effective_frequency = *freq;

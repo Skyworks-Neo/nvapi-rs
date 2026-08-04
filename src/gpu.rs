@@ -434,9 +434,8 @@ impl PhysicalGpu {
         };
         // Same function ID as the V1 GetAllClocks; pass the V2 buffer via a
         // cast pointer (the driver reads the version tag to pick the layout).
-        let status = unsafe {
-            sys::api::NvAPI_GPU_GetAllClocks(self.0, ptr::from_mut(&mut data).cast())
-        };
+        let status =
+            unsafe { sys::api::NvAPI_GPU_GetAllClocks(self.0, ptr::from_mut(&mut data).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_GetAllClocks, status)
             .map_err(Into::into)
             .and_then(|_| {
@@ -458,9 +457,8 @@ impl PhysicalGpu {
             version: NvVersion::new(size_of::<clock::private::NV_GPU_CLOCK_INFO_V2>(), 2),
             ..Default::default()
         };
-        let status = unsafe {
-            sys::api::NvAPI_GPU_GetAllClocks(self.0, ptr::from_mut(&mut data).cast())
-        };
+        let status =
+            unsafe { sys::api::NvAPI_GPU_GetAllClocks(self.0, ptr::from_mut(&mut data).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_GetAllClocks, status)
             .map_err(Into::into)
             .map(|_| crate::clock::all_clocks_from_raw(&data))
@@ -488,10 +486,7 @@ impl PhysicalGpu {
                 let mut info = <$ty>::default();
                 info.version = NvVersion::new(size_of::<$ty>(), $ver);
                 let status = unsafe {
-                    sys::api::NvAPI_GPU_PowerMonitorGetInfo(
-                        self.0,
-                        ptr::from_mut(&mut info).cast(),
-                    )
+                    sys::api::NvAPI_GPU_PowerMonitorGetInfo(self.0, ptr::from_mut(&mut info).cast())
                 };
                 if crate::status_result(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, status).is_ok() {
                     Some(crate::power::PowerMonitorInfo::from(&info))
@@ -503,7 +498,10 @@ impl PhysicalGpu {
         let info = try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4, 4)
             .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V3_3240, 3))
             .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 1))
-            .ok_or(crate::NvapiError::new(sys::Api::NvAPI_GPU_PowerMonitorGetInfo, sys::Status::NotSupported))?;
+            .ok_or(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_PowerMonitorGetInfo,
+                sys::Status::NotSupported,
+            ))?;
 
         // GetStatus v1|392: the driver only fills channels whose bits are set
         // in the INPUT channel_mask at +0x04. Default (zero) fills only ch0;
@@ -514,10 +512,7 @@ impl PhysicalGpu {
         let mask = info.channel_mask;
         status_buf[4..8].copy_from_slice(&mask.to_le_bytes());
         let status = unsafe {
-            sys::api::NvAPI_GPU_PowerMonitorGetStatus(
-                self.0,
-                status_buf.as_mut_ptr().cast(),
-            )
+            sys::api::NvAPI_GPU_PowerMonitorGetStatus(self.0, status_buf.as_mut_ptr().cast())
         };
         // GetStatus is best-effort (may stub on some driver/GPU combos); a
         // non-Ok status still yields descriptors from GetInfo, just no live
@@ -956,23 +951,33 @@ impl PhysicalGpu {
     /// (NDA, ID 0x67F31384). `policy_index` defaults to 2 when the driver
     /// reports none (0xFF), matching GPUMon. Returns `Ok(None)` where the
     /// driver does not expose the private interface.
-    pub fn tgp_watt_range(
-        &self,
-    ) -> crate::NvapiResult<Option<TgpWattRange>> {
+    pub fn tgp_watt_range(&self) -> crate::NvapiResult<Option<TgpWattRange>> {
         trace!("gpu.tgp_watt_range()");
         // 347KB struct — allocate the backing bytes on the heap directly to
         // avoid a stack temporary, then cast in place. version is set via the
         // StructVersion::versioned() layout (dword0).
-        let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE>()];
+        let mut buf: Vec<u8> =
+            vec![
+                0u8;
+                std::mem::size_of::<power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE>()
+            ];
         // stamp the version magic the driver expects (StructVersion for ver 1)
         let ver = <power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
         buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
         let info: &power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE =
             unsafe { &*(buf.as_ptr() as *const _) };
         let status = unsafe {
-            sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(self.0, buf.as_mut_ptr() as *mut _)
+            sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(
+                self.0,
+                buf.as_mut_ptr() as *mut _,
+            )
         };
-        if crate::status_result(sys::Api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate, status).is_err() {
+        if crate::status_result(
+            sys::Api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate,
+            status,
+        )
+        .is_err()
+        {
             return Ok(None);
         }
         let idx = info.policy_index().unwrap_or(2) as usize;
@@ -1017,11 +1022,13 @@ impl PhysicalGpu {
         // GetInfo first so the driver's power-policy state is primed.
         let _ = self.tgp_watt_range()?;
         // 10KB — heap-backed to be stack-safe.
-        let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
+        let mut buf: Vec<u8> =
+            vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
         let ver = <power::private::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
         buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
         unsafe {
-            let status = sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
+            let status =
+                sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
             crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)?;
         }
         let milliwatts = if watts == 0xFFFFFFFF {
@@ -1033,7 +1040,8 @@ impl PhysicalGpu {
             unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
         data.set_power_mw(policy_index, milliwatts);
         unsafe {
-            let status = sys::api::NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
+            let status =
+                sys::api::NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
             crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattSetStatus, status)?;
         }
         Ok(milliwatts)
@@ -1045,11 +1053,13 @@ impl PhysicalGpu {
     pub fn reset_tgp_watt(&self, policy_index: usize) -> crate::NvapiResult<Option<u32>> {
         trace!("gpu.reset_tgp_watt(idx {})", policy_index);
         let default_mw = self.tgp_watt_range()?.and_then(|r| r.default_mw);
-        let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
+        let mut buf: Vec<u8> =
+            vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
         let ver = <power::private::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
         buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
         unsafe {
-            let status = sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
+            let status =
+                sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
             crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)?;
         }
         if let Some(mw) = default_mw {
@@ -1058,7 +1068,8 @@ impl PhysicalGpu {
             data.set_power_mw(policy_index, mw);
         }
         unsafe {
-            let status = sys::api::NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
+            let status =
+                sys::api::NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
             crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattSetStatus, status)?;
         }
         Ok(default_mw)
@@ -1086,9 +1097,8 @@ impl PhysicalGpu {
     /// e.g. 1080Ti channel_mask=0x03, priChIdx GPU_AVG=0/GPU_MAX=1.)
     pub fn thermal_channel_info(
         &self,
-    ) -> crate::Result<
-        <thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO as RawConversion>::Target,
-    > {
+    ) -> crate::Result<<thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO as RawConversion>::Target>
+    {
         trace!("gpu.thermal_channel_info()");
         let data = thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2 {
             version: NvVersion::new(

@@ -284,8 +284,7 @@ pub mod private {
         const POWER_BASE_PAYLOAD_OFF: usize = 0x89C;
 
         fn power_off(&self, index: usize) -> Option<usize> {
-            Self::POWER_BASE_PAYLOAD_OFF
-                .checked_add(Self::POWER_STRIDE_BYTES.checked_mul(index)?)
+            Self::POWER_BASE_PAYLOAD_OFF.checked_add(Self::POWER_STRIDE_BYTES.checked_mul(index)?)
         }
 
         /// Read the power-mW field for the given policy entry index.
@@ -378,7 +377,8 @@ pub mod private {
         fn entry_dword(&self, index: usize, field: usize) -> Option<u32> {
             let off_struct = (Self::ENTRY_STRIDE_DWORDS * index + field) * 4;
             let off = off_struct.checked_sub(52)?;
-            self.entries.get(off..off + 4)
+            self.entries
+                .get(off..off + 4)
                 .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         }
 
@@ -754,7 +754,9 @@ pub mod private {
 
     impl NV_GPU_POWER_MONITOR_GET_INFO_V2 {
         /// Iterate the populated channel info records (bits set in `channel_mask`).
-        pub fn channels(&self) -> impl Iterator<Item = (usize, &NV_GPU_POWER_MONITOR_POWER_CHANNEL_INFO_V2)> {
+        pub fn channels(
+            &self,
+        ) -> impl Iterator<Item = (usize, &NV_GPU_POWER_MONITOR_POWER_CHANNEL_INFO_V2)> {
             (0..NV_GPU_POWER_MONITOR_POWER_CHANNELS_MAX)
                 .filter(move |&i| self.channel_mask & (1u32 << i) != 0)
                 .filter_map(|i| self.channels.get(i).map(|c| (i, c)))
