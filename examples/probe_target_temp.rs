@@ -48,8 +48,15 @@ fn main() {
             }
         }
         match gpu.target_temperature(policy_index) {
-            Ok(Some(c)) => println!("post-SET target temp = {:.2} C  ({})", c,
-                if (c - target).abs() < 1.0 { "PERSISTED ✓" } else { "MISMATCH ✗" }),
+            Ok(Some(c)) => println!(
+                "post-SET target temp = {:.2} C  ({})",
+                c,
+                if (c - target).abs() < 1.0 {
+                    "PERSISTED ✓"
+                } else {
+                    "MISMATCH ✗"
+                }
+            ),
             Ok(None) => println!("post-GET: index out of range"),
             Err(e) => println!("post-GET failed: {:?}", e),
         }

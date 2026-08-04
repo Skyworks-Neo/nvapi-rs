@@ -612,7 +612,9 @@ impl Gpu {
     /// Read the target-temperature wall for one policy slot (private GET-prime
     /// 0xC4554575). `Ok(None)` if the driver doesn't expose that slot.
     pub fn target_temperature(&self, policy_index: usize) -> nvapi::Result<Option<f32>> {
-        self.gpu.target_temperature(policy_index).map_err(Into::into)
+        self.gpu
+            .target_temperature(policy_index)
+            .map_err(Into::into)
     }
 
     /// Scan every target-temp policy slot and return `(policy_index, celsius)`
@@ -628,11 +630,7 @@ impl Gpu {
     /// GET-prime 0xC4554575 + SET 0xE097144F). Persists on mobile GPUs. Caller
     /// picks the slot — only idx 2 is confirmed writable (the wall) on RTX 4060
     /// Laptop; other indices may reject or no-op.
-    pub fn set_target_temperature(
-        &self,
-        celsius: f32,
-        policy_index: usize,
-    ) -> nvapi::Result<()> {
+    pub fn set_target_temperature(&self, celsius: f32, policy_index: usize) -> nvapi::Result<()> {
         self.gpu
             .set_target_temperature(celsius, policy_index)
             .map_err(Into::into)

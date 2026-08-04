@@ -23,7 +23,7 @@ fn main() {
 
     println!("=== ClientThermalPolicies family (nvamsi static table off_1804DD000) ===");
     probe(0x0d258bb5, "GetInfo (doc V3)");
-    probe(0xc4554575, "GET-prime (PRIVATE)");      // targettemp GET-prime
+    probe(0xc4554575, "GET-prime (PRIVATE)"); // targettemp GET-prime
     probe(0xe097144f, "SET (PRIVATE targettemp)"); // <-- the real SET
     probe(0x34c0b13d, "SetStatus (doc V3)");
     probe(0xe9c425a1, "GetStatus (doc V3)");

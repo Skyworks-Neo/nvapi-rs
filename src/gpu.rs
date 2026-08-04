@@ -1201,9 +1201,7 @@ impl PhysicalGpu {
     /// `get-temperature-thresholds --nvapi` and for per-GPU discovery of which
     /// index is the "GPU Target Temperature" wall (on RTX 4060 Laptop that's
     /// idx 2; it reads 87C and matches nvidia-smi's "GPU Target Temperature").
-    pub fn target_temperature_policies(
-        &self,
-    ) -> crate::Result<Vec<(usize, f32)>> {
+    pub fn target_temperature_policies(&self) -> crate::Result<Vec<(usize, f32)>> {
         trace!("gpu.target_temperature_policies()");
         let max = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_ENTRIES_MAX;
         let mut out = Vec::new();
@@ -1258,8 +1256,15 @@ impl PhysicalGpu {
     /// Caller is responsible for clamping `celsius` to the VBIOS range (GPUMon
     /// enforces [min, max] from the GPUHandle; out-of-range values make SET
     /// return a generic Error).
-    pub fn set_target_temperature(&self, celsius: f32, policy_index: usize) -> crate::NvapiResult<()> {
-        trace!("gpu.set_target_temperature({} C, idx {})", celsius, policy_index);
+    pub fn set_target_temperature(
+        &self,
+        celsius: f32,
+        policy_index: usize,
+    ) -> crate::NvapiResult<()> {
+        trace!(
+            "gpu.set_target_temperature({} C, idx {})",
+            celsius, policy_index
+        );
         // GET-prime: fill the buffer with current policy state (opaque fields
         // must be preserved across the RMW — do NOT zero after this).
         let mut data = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
