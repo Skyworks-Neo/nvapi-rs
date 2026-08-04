@@ -609,6 +609,19 @@ impl Gpu {
         self.gpu.reset_tgp_watt(policy_index).map_err(Into::into)
     }
 
+    /// D-Notifier current state + the D1..D5 power-cap table (NDA 0x67F31384,
+    /// the same private ClientPowerPoliciesGetInfo used by `tgp_watt_range`).
+    /// `Ok(None)` where the driver doesn't expose the private interface.
+    pub fn dnotify_info(&self) -> nvapi::Result<Option<nvapi::DNotifierInfo>> {
+        self.gpu.dnotify_info().map_err(Into::into)
+    }
+
+    /// Set the D-Notifier (D0-notify) limit to a driver D-level code
+    /// (-1=D1/Unlimited, 0..3=D2..D5). Raw two-arg setter (NDA 0x48E0847D).
+    pub fn set_dnotify_limit(&self, didx: i32) -> nvapi::Result<()> {
+        self.gpu.set_dnotify_limit(didx).map_err(Into::into)
+    }
+
     /// Read the target-temperature wall for one policy slot (private GET-prime
     /// 0xC4554575). `Ok(None)` if the driver doesn't expose that slot.
     pub fn target_temperature(&self, policy_index: usize) -> nvapi::Result<Option<f32>> {

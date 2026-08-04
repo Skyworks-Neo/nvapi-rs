@@ -680,9 +680,7 @@ pub mod private {
         pub fn target_temp_range(&self, idx: u8) -> Option<(f32, f32, f32)> {
             const STRIDE: usize = 231;
             const MIN_OFF: usize = 232; // default @ +1, max @ +2
-            let base = STRIDE
-                .checked_mul(idx as usize)?
-                .checked_add(MIN_OFF)?;
+            let base = STRIDE.checked_mul(idx as usize)?.checked_add(MIN_OFF)?;
             // Each dword index is relative to the buffer start (incl. version);
             // payload starts right after the version dword (byte 4), so the
             // byte offset into payload = dword_index*4 - 4.

@@ -989,6 +989,82 @@ impl PhysicalGpu {
         }))
     }
 
+    /// D-Notifier (D0-notify / "extern power state") current state + the D1..D5
+    /// power-cap table, from the SAME private ClientPowerPoliciesGetInfo variant
+    /// as [`tgp_watt_range`] (NDA, ID `0x67F31384`). The D-Notifier fields live
+    /// in the TAIL of the 347KB struct (after the TGP policy table). RE'd from
+    /// GPUMon `[GPUHandle::pollDNotifyLimit]`; power values cross-checked live
+    /// on RTX 4060 Laptop (D2=55W, D3=45W, D4=33W, D5=10W, D1=Unlimited).
+    /// Returns `Ok(None)` where the driver doesn't expose the private interface.
+    pub fn dnotify_info(&self) -> crate::NvapiResult<Option<DNotifierInfo>> {
+        trace!("gpu.dnotify_info()");
+        // Same 347KB GetInfo struct as tgp_watt_range; heap-backed.
+        let mut buf: Vec<u8> =
+            vec![
+                0u8;
+                std::mem::size_of::<power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE>()
+            ];
+        let ver = <power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
+        let info: &power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE =
+            unsafe { &*(buf.as_ptr() as *const _) };
+        let status = unsafe {
+            sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(
+                self.0,
+                buf.as_mut_ptr() as *mut _,
+            )
+        };
+        if crate::status_result(
+            sys::Api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate,
+            status,
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
+
+        // Build the full D1..D5 table. D1 (idx -1) is conventionally Unlimited;
+        // D2..D5 read their mW cap from the per-D power table.
+        let mut levels: [DNotifierLevel; 5] = std::array::from_fn(|i| {
+            // i = 0..4 → driver indices -1, 0, 1, 2, 3 (D1..D5).
+            let didx = i as i32 - 1;
+            let mut lvl = DNotifierLevel::from_index(didx).unwrap_or(DNotifierLevel {
+                level: 0,
+                index: didx,
+                power_mw: None,
+            });
+            if didx != -1 {
+                lvl.power_mw = info.dnotify_power_mw(didx);
+            }
+            lvl
+        });
+        // Backfill D1's slot: it has no table value, conventionally Unlimited.
+        levels[0].power_mw = None;
+
+        let active = info
+            .dnotify_active_index()
+            .and_then(DNotifierLevel::from_index);
+
+        Ok(Some(DNotifierInfo { active, levels }))
+    }
+
+    /// Set the D-Notifier (D0-notify) limit to the given D level. `didx` is the
+    /// signed driver level code: `-1`=D1/Unlimited, `0`=D2, `1`=D3, `2`=D4,
+    /// `3`=D5 — exactly the values GPUMon's `setDNotifyLimit` switch maps from
+    /// the D1..D5 CLI args. Raw two-arg NDA setter (NvAPI_GPU_ClientExtern
+    /// PowerState set, ID `0x48E0847D`): `(hPhysicalGPU, level: u32)` — no struct
+    /// buffer. The level is passed as a raw u32 (sign-extended for D1's -1).
+    pub fn set_dnotify_limit(&self, didx: i32) -> crate::NvapiResult<()> {
+        trace!("gpu.set_dnotify_limit({})", didx);
+        // GPUMon's process performs a private lifecycle init at startup before
+        // any power-control setter; mirror that (harmless if already done), the
+        // same guard set_dynamic_boost / set_tgp_watt use.
+        self.private_lifecycle_init()?;
+        // Pass the signed level as a u32 (0xFFFFFFFF for D1's -1, matching
+        // GPUMon's mov v15, -1).
+        unsafe { nvcall!(NvAPI_GPU_ClientExternPowerStateSet(self.0, didx as u32)) }
+    }
+
     /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
     /// read-modify-write the GPUMon `setTgpWatt` does: GET the 10016-byte
     /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
@@ -1229,8 +1305,7 @@ impl PhysicalGpu {
         let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
         info.version = ver;
         unsafe {
-            let status =
-                sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
+            let status = sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
             crate::status_result(
                 sys::Api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo,
                 status,
@@ -1251,8 +1326,7 @@ impl PhysicalGpu {
         let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
         info.version = ver;
         unsafe {
-            let status =
-                sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
+            let status = sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
             crate::status_result(
                 sys::Api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo,
                 status,
@@ -1275,8 +1349,7 @@ impl PhysicalGpu {
         let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
         info.version = ver;
         let info_ok = unsafe {
-            let status =
-                sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
+            let status = sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
             crate::status_result(
                 sys::Api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo,
                 status,
@@ -2369,6 +2442,57 @@ pub struct TgpWattRange {
     pub default_mw: Option<u32>,
     /// Maximum TGP (mW), if the entry exposed it.
     pub max_mw: Option<u32>,
+}
+
+/// One D-Notifier (D0-notify / "extern power state") level: the named D level
+/// (D1..D5) and the power cap it imposes when active. `None` power means
+/// "Unlimited" (only ever true for D1).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DNotifierLevel {
+    /// D level number, 1..5 (D1..D5). Render as `format!("D{}", level)`.
+    pub level: u8,
+    /// The signed level code the driver uses (-1=D1, 0=D2, 1=D3, 2=D4, 3=D5).
+    pub index: i32,
+    /// Power cap in **milliwatts** when this level is active; `None` = Unlimited
+    /// (D1). RE'd from GPUMon's "D{n}({power}mW)" string.
+    pub power_mw: Option<u32>,
+}
+
+impl DNotifierLevel {
+    /// Map a driver D-index code (-1..3) to the canonical D level, or `None`
+    /// for an invalid sentinel.
+    pub fn from_index(index: i32) -> Option<Self> {
+        let (level, unlimited) = match index {
+            -1 => (1u8, true),
+            0 => (2, false),
+            1 => (3, false),
+            2 => (4, false),
+            3 => (5, false),
+            _ => return None,
+        };
+        Some(Self {
+            level,
+            index,
+            power_mw: if unlimited { None } else { Some(0) },
+        })
+    }
+
+    /// Convenience label, "D1".."D5".
+    pub fn label(&self) -> String {
+        format!("D{}", self.level)
+    }
+}
+
+/// D-Notifier current state read from the private ClientPowerPoliciesGetInfo
+/// (`0x67F31384`): the active D level plus the full D1..D5 power-cap table.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default)]
+pub struct DNotifierInfo {
+    /// The currently-active D level (None when the driver reports the N/A sentinel).
+    pub active: Option<DNotifierLevel>,
+    /// The D1..D5 power-cap table (always 5 entries, in D1→D5 order).
+    pub levels: [DNotifierLevel; 5],
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

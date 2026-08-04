@@ -11,10 +11,14 @@
 //!   be 0xFF and acoustics would carry the writable slot.
 //! - VBIOS min/default/max (Q8) for the chosen index.
 
-use nvapi::sys::api::{NvAPI_GPU_ClientThermalPoliciesGetInfo, NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo};
-use nvapi::sys::gpu::thermal::private::{NV_GPU_CLIENT_THERMAL_POLICIES_INFO, NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO};
-use nvapi::sys::nvapi::StructVersion;
 use nvapi::PhysicalGpu;
+use nvapi::sys::api::{
+    NvAPI_GPU_ClientThermalPoliciesGetInfo, NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo,
+};
+use nvapi::sys::gpu::thermal::private::{
+    NV_GPU_CLIENT_THERMAL_POLICIES_INFO, NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO,
+};
+use nvapi::sys::nvapi::StructVersion;
 
 fn main() {
     nvapi::initialize().expect("NvAPI_Initialize failed");
@@ -22,8 +26,7 @@ fn main() {
     let gpu = gpus.into_iter().next().expect("no GPU");
 
     let mut info = NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
-    info.version =
-        <NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as StructVersion>::NVAPI_VERSION;
+    info.version = <NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as StructVersion>::NVAPI_VERSION;
 
     // Debug: struct size + computed magic (GPUMon uses 0x33D58 = v3 | 15704).
     println!(
@@ -39,8 +42,7 @@ fn main() {
     // isolate whether the -9 is handle-related or specific to the private ID.
     let mut doc = NV_GPU_CLIENT_THERMAL_POLICIES_INFO::default();
     doc.version = <NV_GPU_CLIENT_THERMAL_POLICIES_INFO as StructVersion>::NVAPI_VERSION;
-    let doc_status =
-        unsafe { NvAPI_GPU_ClientThermalPoliciesGetInfo(*gpu.handle(), &mut doc) };
+    let doc_status = unsafe { NvAPI_GPU_ClientThermalPoliciesGetInfo(*gpu.handle(), &mut doc) };
     println!(
         "documented GetInfo (0x0D258BB5) status = {} (0 = OK), count = {}",
         doc_status, doc.count
@@ -57,10 +59,7 @@ fn main() {
         gps, acoustic
     );
     let chosen = info.target_temp_policy_index();
-    println!(
-        "GPUMon-style chosen target-temp index = {:?}",
-        chosen
-    );
+    println!("GPUMon-style chosen target-temp index = {:?}", chosen);
 
     if let Some(idx) = chosen {
         match info.target_temp_range(idx) {
@@ -108,7 +107,14 @@ fn main() {
             } else {
                 String::new()
             };
-            println!("  dword[{:4}] (byte {:5}): 0x{:08X} ({}){}", i + 1, off + 4, v, v, q8tag);
+            println!(
+                "  dword[{:4}] (byte {:5}): 0x{:08X} ({}){}",
+                i + 1,
+                off + 4,
+                v,
+                v,
+                q8tag
+            );
             shown += 1;
             if shown >= 80 {
                 println!("  ... (truncated)");

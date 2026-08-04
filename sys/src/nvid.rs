@@ -1266,8 +1266,14 @@ Unknown_4324694C = 0x4324694c,
 Unknown_45EFAB64 = 0x45efab64,
 /// `Unknown_470D2D63` — GPUHandle::queryFrameBuffer - physical frame buffer size
 Unknown_470D2D63 = 0x470d2d63,
-/// `Unknown_48E0847D` — GPUHandle::setDNotifyLimit - set extern power state (D1-D5 D0-notify)
-Unknown_48E0847D = 0x48e0847d,
+/// D-Notifier (D0-notify / "extern power state") SETTER (NDA-private,
+/// ID 0x48E0847D). Raw two-arg call `(hPhysicalGPU, level: u32)` — NO struct
+/// buffer. RE'd from GPUMon `[GPUHandle::setDNotifyLimit]` (GPUMonCmd thunk
+/// sub_140001780, `nvapi_QueryInterface(1222673533)`); its caller's switch maps
+/// CLI `-dnotifier:<1..5>` to the signed level code `-1,0,1,2,3` (D1=Unlimited,
+/// D2..D5). The matching GET is `NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate`
+/// (0x67F31384), which exposes the active D level + per-D mW cap table.
+NvAPI_GPU_ClientExternPowerStateSet = 0x48e0847d,
 /// `Unknown_48F421C4` — Connector::getSbiosBrightnessInfo - SBIOS brightness info
 Unknown_48F421C4 = 0x48f421c4,
 /// `Unknown_57B5A5DF` — GPUHandle::queryClockDomainIndex - clock domain info (GPC domain)

@@ -394,6 +394,84 @@ pub mod private {
         pub fn max_mw(&self, index: usize) -> Option<u32> {
             self.entry_dword(index, Self::MAX_DWORD)
         }
+
+        // ------------------------------------------------------------------
+        // D-Notifier (D0-notify / "extern power state") fields.
+        //
+        // RE'd from GPUMon.exe / GPUMonCmd.exe `[GPUHandle::pollDNotifyLimit]`
+        // (GPUMon.exe sub_140028300, GPUMonCmd sub_140025750) — the GUI build
+        // reveals the semantics the CLI build hides: it builds the string
+        // "D{n}({power}mW)" (e.g. "D3(45000mW)"), so the dword at
+        // `3*Didx + 85682` is the **power limit in mW** for that D level, NOT a
+        // display label. Cross-checked against live RTX 4060 Laptop readings:
+        //   D1 (-1) = Unlimited   D2 (0) = 55000   D3 (1) = 45000
+        //   D4 (2) = 33000         D5 (3) = 10000  (all mW).
+        //
+        // These fields live in the TAIL of the same 347124-byte struct, AFTER
+        // the 32-entry TGP policy table (entry stride 2651 dwords ⇒ entry 32
+        // starts at dword 32*2651 = 84832, well before 85679). They are NOT part
+        // of any per-policy entry, so they are read by ABSOLUTE dword offset,
+        // not via `entry_dword()`.
+        //
+        // Absolute offsets (struct dword 0 = version):
+        //   active D-index ........ dword 85692 (byte 0x53AF0); -1 = Unlimited
+        //   per-D power table ..... dword (85682 + 3*Didx), stride 3; the first
+        //                          dword of each triple is the mW limit for
+        //                          Didx 0..3 (D2..D5). The other two dwords are
+        //                          opaque (GPUMon never reads them). D1 (Didx -1)
+        //                          is "Unlimited" — GPUMon does NOT consult the
+        //                          table for it, so the base is 85682, NOT 85679.
+        //                          (An earlier pass reserved a D1 slot at 85679
+        //                          and read every value one level too low.)
+        // ------------------------------------------------------------------
+        const DNOTIFY_ACTIVE_INDEX_DWORD: usize = 85692;
+        const DNOTIFY_POWER_TABLE_BASE_DWORD: usize = 85682;
+        const DNOTIFY_POWER_TABLE_STRIDE: usize = 3;
+
+        /// Read an arbitrary dword at an ABSOLUTE offset (dword index from the
+        /// start of the whole struct, header included). Used for the D-Notifier
+        /// tail fields that are not part of any TGP policy entry. Bounds-checked
+        /// against the full struct size.
+        fn absolute_dword(&self, dword_index: usize) -> Option<u32> {
+            // The typed header occupies the first 52 bytes (13 dwords); the rest
+            // lives in the `entries` payload. Map an absolute dword into the
+            // payload and read it.
+            let byte_off = dword_index.checked_mul(4)?;
+            let payload_off = byte_off.checked_sub(52)?;
+            self.entries
+                .get(payload_off..payload_off.checked_add(4)?)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        }
+
+        /// The currently-active D-Notifier (D0-notify) level index as a signed
+        /// code: `-1` = D1 / Unlimited, `0..=3` = D2..D5. Returns `None` if the
+        /// driver reported the sentinel `4` (invalid / N/A) or the field was out
+        /// of bounds. See `DNotifierLevel::from_index` to map this to a level.
+        pub fn dnotify_active_index(&self) -> Option<i32> {
+            let raw = self.absolute_dword(Self::DNOTIFY_ACTIVE_INDEX_DWORD)? as i32;
+            // 4 is GPUMon's "N/A" sentinel (it prints "N/A" and stores -1); -1
+            // is the legitimate "D1 - Unlimited" code. Anything else in 0..=3 is
+            // a real D2..D5 level.
+            if raw == 4 { None } else { Some(raw) }
+        }
+
+        /// The power limit in mW for the given D-Notifier level index, as read
+        /// from the per-D power table. `didx` follows the same signed code as
+        /// [`dnotify_active_index`] (`-1`=D1, `0..=3`=D2..D5). D1 (-1) is
+        /// "Unlimited" — its table slot is read but the value is conventionally
+        /// unused; callers should treat D1 as unbounded regardless. Returns
+        /// `None` if the offset is out of bounds.
+        pub fn dnotify_power_mw(&self, didx: i32) -> Option<u32> {
+            // D1 (didx -1) is Unlimited — no table entry. GPUMon never reads the
+            // table for it; returning None here keeps callers from touching the
+            // pre-base dword 85679.
+            if didx < 0 {
+                return None;
+            }
+            let dword = Self::DNOTIFY_POWER_TABLE_BASE_DWORD
+                .checked_add((didx as usize).checked_mul(Self::DNOTIFY_POWER_TABLE_STRIDE)?)?;
+            self.absolute_dword(dword)
+        }
     }
 
     nvversion! { @=NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_V1(15) = 347124 }
@@ -405,6 +483,19 @@ pub mod private {
         /// magic 0x0F4BF4 (version 15) — GPUMon's queryPowerPolicy uses exactly
         /// this; the version-1 magic I first tried is rejected by the driver.
         pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA-private, ID 0x48E0847D). D-Notifier (D0-notify)
+        /// "extern power state" SETTER — the write half of GPUMon's
+        /// `[GPUHandle::setDNotifyLimit]` (thunk sub_140001780 in GPUMonCmd.exe).
+        /// Raw two-arg call: `(hPhysicalGPU, level: u32)` — NO struct buffer,
+        /// unlike the TGP-watts SetStatus path. `level` is the signed D-level
+        /// code (0xFFFFFFFF = D1/Unlimited, 0..3 = D2..D5), passed as a raw u32.
+        /// The matching GET is `NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate`
+        /// (0x67F31384) above, which exposes both the active D level and the
+        /// per-D power-cap table.
+        pub unsafe fn NvAPI_GPU_ClientExternPowerStateSet(hPhysicalGPU: NvPhysicalGpuHandle, level: u32) -> NvAPI_Status;
     }
 
     nvstruct! {
