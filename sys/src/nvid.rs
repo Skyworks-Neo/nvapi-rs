@@ -1311,8 +1311,16 @@ Unknown_7977A946 = 0x7977a946,
 Unknown_799D6E11 = 0x799d6e11,
 /// `Unknown_7A2D309E` — DriverInvoker::getBoostClock - get PM1 availability (boost-clock status)
 Unknown_7A2D309E = 0x7a2d309e,
-/// `Unknown_7B30AE0D` — GPUHandle::queryPStateInfo - Perf P-states info
-Unknown_7B30AE0D = 0x7b30ae0d,
+/// Perf P-states info table (NDA-private, ID 0x7B30AE0D). RE'd from GPUMon
+/// `[GPUHandle::queryPStateInfo]` (thunk sub_140003A20). Returns a 275152-byte
+/// struct (magic 0x432D0 = version 4 | size); the source of GPUMon's
+/// `-pstate` GET "Level[N] P*.Max/P*.Min" table. Layout (byte offsets from the
+/// version dword): valid-pstate bitmask @ 0x88 (dword 34); version @ 0x8C
+/// (dword 35 low byte); a slot table (one pstate_idx per present pstate) base
+/// 0x2114, stride 0x2090; and a freq table indexed BY pstate number with
+/// min_kHz @ 0x22C8 / max_kHz @ 0x22F0, stride 0x9C. See
+/// NV_GPU_PERF_PSTATES_INFO_PRIVATE accessors for the decoded view.
+NvAPI_GPU_PerfPstatesGetInfoPrivate = 0x7b30ae0d,
 /// `Unknown_7BF85571` — aggregator sub-call (used by pollCtac @0x14002c990)
 Unknown_7BF85571 = 0x7bf85571,
 /// `Unknown_7DBF2D2B` — GPUHandle::queryArchitecture sub-call - system/GPU identity
@@ -1327,8 +1335,16 @@ Unknown_8C45954D = 0x8c45954d,
 Unknown_93456591 = 0x93456591,
 /// `Unknown_95E71AB6` — GPUHandle::setTempSim/disableTempSim - temperature simulation (VBIOS Secured Overrides)
 Unknown_95E71AB6 = 0x95e71ab6,
-/// `Unknown_9962C97C` — GPUHandle::pollPState - P-state limit status
-Unknown_9962C97C = 0x9962c97c,
+/// P-State limit status (NDA-private, ID 0x9962C97C). RE'd from GPUMon's
+/// `[GPUHandle::pollPState]` "get p state limit" branch. Returns the list of
+/// P-States currently locked by `NvAPI_GPU_PerfClientLimitsSetStatus`
+/// (0x39442CFB). 164-byte struct `{version: 0x10088, count:u32, entries[]}`
+/// where each entry is 2 bytes `{type:u8, pstate:u8}`; type==0x1A marks a
+/// locked pstate (GPUMon renders the locked set as "P0.P3.P5"). Distinct from
+/// the current-pstate query (GetCurrentPstate 0x927DA4F6) and from the full
+/// PerfClientLimits status (0xE440B867, 780B) — this is the lightweight
+/// "which pstates are locked" view.
+NvAPI_GPU_ClientPStateLimitStatus = 0x9962c97c,
 /// `Unknown_99FC9866` — Connector::getPanelBrightnessInfo - panel brightness info
 Unknown_99FC9866 = 0x99fc9866,
 /// `Unknown_A5614A5D` — GPUHandle::queryGPUInfo sub-call - GPU info
@@ -1451,7 +1467,15 @@ Unknown_AFF54A75 = 0xaff54a75,
 // there). The earlier "Unknown_AFFC2279 / role unconfirmed" entry was removed.
 /// `Unknown_C118ED82` — GPUHandle::pollGc6Statistics - GC6 (link-off) residency statistics
 Unknown_C118ED82 = 0xc118ed82,
-/// `Unknown_C9E9BB33` — GPUHandle::setPState - PerfClientLimitsSetStatus (P-State/frequency lock)
+/// Rated-TDP control (NDA-private, ID 0xC9E9BB33). RE'd from GPUMon's
+/// `[GPUHandle::setRatedTdp]`/`[GPUHandle::clearRatedTdp]` (cmdPState index==0
+/// path + the setPState preamble). NOT a P-State lock (that's
+/// `NvAPI_GPU_PerfClientLimitsSetStatus` 0x39442CFB) despite an earlier naming
+/// pass mislabeling it. 12-byte struct `{version: 0x1000C, dword1: 1, mode}`:
+///   - mode=3 → ENABLE rated-TDP control (the "P0.TDP" level, GPUMon -pstate:0)
+///   - mode=0 → DISABLE/clear (setPState calls this first to reset before
+///     applying a new P-State/frequency lock via 0x39442CFB).
+/// "Rated TDP" = the GPU's nominal/default power baseline.
 Unknown_C9E9BB33 = 0xc9e9bb33,
 /// `NvAPI_GPU_ClientThermalTargetSetStatus` — GPUHandle::setTargetTemperature
 /// SET (NDA-private, ID 0xE097144F). The write half of the mobile temp-wall

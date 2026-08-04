@@ -1065,6 +1065,76 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientExternPowerStateSet(self.0, didx as u32)) }
     }
 
+    /// P-State level table (present pstates + per-pstate min/max clock in kHz
+    /// for the given clock-domain) from the private PerfPstatesGetInfo
+    /// (`0x7B30AE0D`). The source of GPUMon's `-pstate` GET listing. `domain`
+    /// selects the clock dimension (0=GPC/core by default; GPUMon resolves the
+    /// GPC index via 0x57B5A5DF). Returns `Ok(None)` where the driver doesn't
+    /// expose the private interface.
+    pub fn pstate_levels_domain(
+        &self,
+        domain: usize,
+    ) -> crate::NvapiResult<Option<PStateLevelsInfo>> {
+        trace!("gpu.pstate_levels_domain({})", domain);
+        // 275KB — heap-backed to be stack-safe, same pattern as tgp_watt_range.
+        let mut buf: Vec<u8> =
+            vec![0u8; std::mem::size_of::<clock::private::NV_GPU_PERF_PSTATES_INFO_PRIVATE>()];
+        let ver = <clock::private::NV_GPU_PERF_PSTATES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
+        let info: &clock::private::NV_GPU_PERF_PSTATES_INFO_PRIVATE =
+            unsafe { &*(buf.as_ptr() as *const _) };
+        let status = unsafe {
+            sys::api::NvAPI_GPU_PerfPstatesGetInfoPrivate(self.0, buf.as_mut_ptr() as *mut _)
+        };
+        if crate::status_result(
+            sys::Api::NvAPI_GPU_PerfPstatesGetInfoPrivate,
+            status,
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
+        let pstates = info
+            .pstate_entries_domain(domain)
+            .into_iter()
+            .map(|e| PStateClockRange {
+                pstate: e.pstate,
+                min_khz: e.min_khz,
+                max_khz: e.max_khz,
+            })
+            .collect();
+        Ok(Some(PStateLevelsInfo { pstates }))
+    }
+
+    /// P-State level table for the default (GPC/core) clock-domain. Convenience
+    /// for [`pstate_levels_domain`](Self::pstate_levels_domain)(0).
+    pub fn pstate_levels(&self) -> crate::NvapiResult<Option<PStateLevelsInfo>> {
+        self.pstate_levels_domain(0)
+    }
+
+    /// The set of P-State numbers currently locked (via PerfClientLimitsSetStatus
+    /// 0x39442CFB), from the private ClientPStateLimitStatus (NDA 0x9962C97C).
+    /// Empty when nothing is locked (default/cleared state). Returns `Ok(None)`
+    /// where the driver doesn't expose the private interface.
+    pub fn pstate_lock_status(&self) -> crate::NvapiResult<Option<Vec<u8>>> {
+        trace!("gpu.pstate_lock_status()");
+        // 164-byte struct — heap-backed. The driver's version magic 0x10088
+        // reports size 136 (v1); write it raw since it doesn't match the
+        // 164-byte buffer GPUMon allocates.
+        let mut buf: Vec<u8> =
+            vec![0u8; std::mem::size_of::<clock::private::NV_GPU_CLIENT_PSTATE_LIMIT_STATUS>()];
+        buf[..4].copy_from_slice(&0x10088u32.to_ne_bytes());
+        let status: &clock::private::NV_GPU_CLIENT_PSTATE_LIMIT_STATUS =
+            unsafe { &*(buf.as_ptr() as *const _) };
+        let res = unsafe {
+            sys::api::NvAPI_GPU_ClientPStateLimitStatus(self.0, buf.as_mut_ptr() as *mut _)
+        };
+        if crate::status_result(sys::Api::NvAPI_GPU_ClientPStateLimitStatus, res).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(status.locked_pstates()))
+    }
+
     /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
     /// read-modify-write the GPUMon `setTgpWatt` does: GET the 10016-byte
     /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
@@ -2493,6 +2563,28 @@ pub struct DNotifierInfo {
     pub active: Option<DNotifierLevel>,
     /// The D1..D5 power-cap table (always 5 entries, in D1→D5 order).
     pub levels: [DNotifierLevel; 5],
+}
+
+/// One P-State entry from the private PerfPstatesGetInfo table (`0x7B30AE0D`):
+/// the pstate number and its min/max core clock in kHz. RE'd from GPUMon's
+/// `queryPStateInfo` (the source of `-pstate` GET).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PStateClockRange {
+    /// P-State number, 0..31 (e.g. 0 for P0).
+    pub pstate: u8,
+    /// Min core clock (kHz), if the driver exposed it.
+    pub min_khz: Option<u32>,
+    /// Max core clock (kHz), if the driver exposed it.
+    pub max_khz: Option<u32>,
+}
+
+/// P-State level table from the private PerfPstatesGetInfo (`0x7B30AE0D`).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default)]
+pub struct PStateLevelsInfo {
+    /// Present P-States in ascending order, each with min/max core clock (kHz).
+    pub pstates: Vec<PStateClockRange>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

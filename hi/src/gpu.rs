@@ -622,6 +622,28 @@ impl Gpu {
         self.gpu.set_dnotify_limit(didx).map_err(Into::into)
     }
 
+    /// P-State level table (present pstates + per-pstate min/max clock in kHz
+    /// for the given clock-domain) from the private PerfPstatesGetInfo (NDA
+    /// 0x7B30AE0D). Source of GPUMon's `-pstate` GET listing. `domain` selects
+    /// the clock dimension (0=GPC/core by default). `Ok(None)` if not exposed.
+    pub fn pstate_levels_domain(
+        &self,
+        domain: usize,
+    ) -> nvapi::Result<Option<nvapi::PStateLevelsInfo>> {
+        self.gpu.pstate_levels_domain(domain).map_err(Into::into)
+    }
+
+    /// P-State level table for the default (GPC/core) clock-domain.
+    pub fn pstate_levels(&self) -> nvapi::Result<Option<nvapi::PStateLevelsInfo>> {
+        self.gpu.pstate_levels().map_err(Into::into)
+    }
+
+    /// The set of P-State numbers currently locked (NDA 0x9962C97C). Empty when
+    /// nothing is locked. `Ok(None)` if the driver doesn't expose it.
+    pub fn pstate_lock_status(&self) -> nvapi::Result<Option<Vec<u8>>> {
+        self.gpu.pstate_lock_status().map_err(Into::into)
+    }
+
     /// Read the target-temperature wall for one policy slot (private GET-prime
     /// 0xC4554575). `Ok(None)` if the driver doesn't expose that slot.
     pub fn target_temperature(&self, policy_index: usize) -> nvapi::Result<Option<f32>> {
