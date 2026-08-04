@@ -1198,7 +1198,7 @@ impl PhysicalGpu {
     /// masks like 0xFFFF are rejected by the driver, so we probe one at a time).
     /// Each entry is `(policy_index, target_temp_celsius)`; `Ok(vec)` is empty
     /// when no policies are exposed (desktop GPUs typically). Used for
-    /// `get-temperature-thresholds --nvapi` and for per-GPU discovery of which
+    /// `get-temp-thresholds --nvapi` and for per-GPU discovery of which
     /// index is the "GPU Target Temperature" wall (on RTX 4060 Laptop that's
     /// idx 2; it reads 87C and matches nvidia-smi's "GPU Target Temperature").
     pub fn target_temperature_policies(&self) -> crate::Result<Vec<(usize, f32)>> {

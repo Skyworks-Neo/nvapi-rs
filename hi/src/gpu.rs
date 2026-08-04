@@ -618,7 +618,7 @@ impl Gpu {
     }
 
     /// Scan every target-temp policy slot and return `(policy_index, celsius)`
-    /// for each the driver exposes. Drives `get-temperature-thresholds --nvapi`
+    /// for each the driver exposes. Drives `get-temp-thresholds --nvapi`
     /// and per-GPU discovery of the "GPU Target Temperature" wall index (idx 2
     /// on RTX 4060 Laptop — matches nvidia-smi's value and NVML's GpsCurr
     /// channel).
