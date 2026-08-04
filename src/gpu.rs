@@ -1193,6 +1193,32 @@ impl PhysicalGpu {
         Ok(data.target_temp_c(policy_index))
     }
 
+    /// Scan every target-temp policy slot (idx 0..ENTRIES_MAX) and return the
+    /// ones the driver actually exposes (single-bit GET per index — multi-bit
+    /// masks like 0xFFFF are rejected by the driver, so we probe one at a time).
+    /// Each entry is `(policy_index, target_temp_celsius)`; `Ok(vec)` is empty
+    /// when no policies are exposed (desktop GPUs typically). Used for
+    /// `get-temperature-thresholds --nvapi` and for per-GPU discovery of which
+    /// index is the "GPU Target Temperature" wall (on RTX 4060 Laptop that's
+    /// idx 2; it reads 87C and matches nvidia-smi's "GPU Target Temperature").
+    pub fn target_temperature_policies(
+        &self,
+    ) -> crate::Result<Vec<(usize, f32)>> {
+        trace!("gpu.target_temperature_policies()");
+        let max = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_ENTRIES_MAX;
+        let mut out = Vec::new();
+        for idx in 0..max {
+            // A single-bit mask is mandatory; 1<<idx for idx >= 32 would wrap,
+            // but ENTRIES_MAX (16) is well below 32, so this is safe.
+            match self.target_temperature(idx) {
+                Ok(Some(c)) => out.push((idx, c)),
+                Ok(None) => {} // index out of range inside the buffer (shouldn't happen)
+                Err(_) => {}   // driver doesn't expose this policy slot — skip
+            }
+        }
+        Ok(out)
+    }
+
     /// Raw GET-prime of the target-temp control buffer with a caller-supplied
     /// mask. Returns the full opaque buffer for diagnostics (e.g. locating the
     /// real target-temp field by scanning for a known Q8 value). Use

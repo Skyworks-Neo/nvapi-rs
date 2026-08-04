@@ -609,6 +609,35 @@ impl Gpu {
         self.gpu.reset_tgp_watt(policy_index).map_err(Into::into)
     }
 
+    /// Read the target-temperature wall for one policy slot (private GET-prime
+    /// 0xC4554575). `Ok(None)` if the driver doesn't expose that slot.
+    pub fn target_temperature(&self, policy_index: usize) -> nvapi::Result<Option<f32>> {
+        self.gpu.target_temperature(policy_index).map_err(Into::into)
+    }
+
+    /// Scan every target-temp policy slot and return `(policy_index, celsius)`
+    /// for each the driver exposes. Drives `get-temperature-thresholds --nvapi`
+    /// and per-GPU discovery of the "GPU Target Temperature" wall index (idx 2
+    /// on RTX 4060 Laptop — matches nvidia-smi's value and NVML's GpsCurr
+    /// channel).
+    pub fn target_temperature_policies(&self) -> nvapi::Result<Vec<(usize, f32)>> {
+        self.gpu.target_temperature_policies().map_err(Into::into)
+    }
+
+    /// Set the target-temperature wall for one policy slot (private RMW:
+    /// GET-prime 0xC4554575 + SET 0xE097144F). Persists on mobile GPUs. Caller
+    /// picks the slot — only idx 2 is confirmed writable (the wall) on RTX 4060
+    /// Laptop; other indices may reject or no-op.
+    pub fn set_target_temperature(
+        &self,
+        celsius: f32,
+        policy_index: usize,
+    ) -> nvapi::Result<()> {
+        self.gpu
+            .set_target_temperature(celsius, policy_index)
+            .map_err(Into::into)
+    }
+
     pub fn set_sensor_limits<I: IntoIterator<Item = SensorThrottle>>(
         &self,
         limits: I,
