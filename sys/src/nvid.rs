@@ -1331,7 +1331,10 @@ Unknown_B0031005 = 0xb0031005,
 /// QBoost controller GET info (NDA, ID 0xB4C5D8BA). Returns a 6300-byte
 /// controller table (version 0x1189C = v1|6300), 196 bytes/controller, up to
 /// 32 controllers. GPUMon `[DriverInvoker::populateQboostIndex]` scans it to
-/// find the active controller (the PPAB/Dynamic-Boost power-slider target).
+/// find the active controller. ID kept for QI record only — NOT wrapped: the
+/// QBoost controller turned out NOT to be the PPAB-paired power slider (wrong
+/// path), so the nvoc surface was removed. The real mobile TGP path is the
+/// TGP-watt triplet (0x8B3E7343 / 0xAFFC2279) wrapped as set-tgp-watt.
 NvAPI_GPU_ClientQboostGetInfo = 0xb4c5d8ba,
 /// SBIOS power-limit-table GET (NDA, ID 0xB6A3DA5B). Earlier naming map
 /// mislabeled this `setDynamicBoost`/`set controller setting` — WRONG. Its
@@ -1339,12 +1342,9 @@ NvAPI_GPU_ClientQboostGetInfo = 0xb4c5d8ba,
 /// buffer); not a QBoost setter.
 Unknown_B6A3DA5B = 0xb6a3da5b,
 /// QBoost controller SET target power (NDA, ID 0xB78734AB). Earlier naming map
-/// mislabeled this `pollDynamicBoost` (a READ) — WRONG. Its caller is
-/// `[GPUHandle::setTgpQboost] Start with target power: %d`: writes watts→mW
-/// (×1000) into a 5696-byte buffer (version 0x21640 = v2|5696), 44-dword
-/// (176B) per-controller stride, enable byte at entry dword+16, power mW at
-/// entry dword+19. -1 = reset. This is the Dynamic-Boost power slider paired
-/// with the PPAB enable (0x1504FC3D).
+/// mislabeled this `pollDynamicBoost` (a READ) — WRONG. ID kept for QI record
+/// only — NOT wrapped (the QBoost controller was the wrong PPAB-paired-slider
+/// hypothesis; see NvAPI_GPU_ClientQboostGetInfo above).
 NvAPI_GPU_ClientQboostSetStatus = 0xb78734ab,
 /// TGP-watts power-control SET (NDA, ID 0xAFFC2279). Applies the 10016-byte
 /// buffer (target mW at buf+0x8A0+40*idx, byte-verified via WinDbg). GPUMon's

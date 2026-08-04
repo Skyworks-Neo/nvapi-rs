@@ -1064,69 +1064,6 @@ impl PhysicalGpu {
         Ok(default_mw)
     }
 
-    /// QBoost / Dynamic-Boost controller info (NDA 0xB4C5D8BA): the active
-    /// controller index + its current target power in mW. This is the
-    /// power-slider paired with the PPAB enable ([`set_dynamic_boost`]).
-    /// Returns `Ok(None)` where the driver doesn't expose QBoost.
-    pub fn qboost_info(&self) -> crate::NvapiResult<Option<QboostInfo>> {
-        trace!("gpu.qboost_info()");
-        let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_QBOOST_INFO>()];
-        let ver = <power::private::NV_GPU_CLIENT_QBOOST_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
-        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
-        let status = unsafe {
-            sys::api::NvAPI_GPU_ClientQboostGetInfo(self.0, buf.as_mut_ptr() as *mut _)
-        };
-        if crate::status_result(sys::Api::NvAPI_GPU_ClientQboostGetInfo, status).is_err() {
-            return Ok(None);
-        }
-        let info: &power::private::NV_GPU_CLIENT_QBOOST_INFO =
-            unsafe { &*(buf.as_ptr() as *const _) };
-        Ok(info.active_index().map(|idx| QboostInfo {
-            controller_index: idx,
-            power_mw: info.power_mw(idx),
-        }))
-    }
-
-    /// Set the QBoost / Dynamic-Boost controller target power in **watts**
-    /// (NDA 0xB78734AB, the PPAB-paired power slider). Builds the 5696-byte SET
-    /// buffer with watts→mW (×1000) written into the active controller entry.
-    /// `controller_index` selects the entry; if None, queries it via
-    /// [`qboost_info`]. Returns `(index, mW_written)`.
-    pub fn set_qboost_power(
-        &self,
-        watts: u32,
-        controller_index: Option<usize>,
-    ) -> crate::NvapiResult<(usize, u32)> {
-        trace!("gpu.set_qboost_power({} W, idx {:?})", watts, controller_index);
-        let idx = match controller_index {
-            Some(i) => i,
-            None => self
-                .qboost_info()?
-                .ok_or(crate::NvapiError::new(
-                    sys::Api::NvAPI_GPU_ClientQboostGetInfo,
-                    sys::Status::NotSupported,
-                ))?
-                .controller_index,
-        };
-        let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_QBOOST_STATUS>()];
-        let ver = <power::private::NV_GPU_CLIENT_QBOOST_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
-        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
-        let data: &mut power::private::NV_GPU_CLIENT_QBOOST_STATUS =
-            unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
-        let milliwatts = if watts == 0xFFFFFFFF {
-            // reset sentinel (GPUMon writes -1 into the power dword).
-            0xFFFFFFFF
-        } else {
-            watts.saturating_mul(1000)
-        };
-        data.set_power_mw(idx, milliwatts);
-        unsafe {
-            let status = sys::api::NvAPI_GPU_ClientQboostSetStatus(self.0, buf.as_ptr() as *const _);
-            crate::status_result(sys::Api::NvAPI_GPU_ClientQboostSetStatus, status)?;
-        }
-        Ok((idx, milliwatts))
-    }
-
     pub fn thermal_settings(
         &self,
         index: Option<u32>,
@@ -2204,18 +2141,6 @@ pub struct TgpWattRange {
     pub default_mw: Option<u32>,
     /// Maximum TGP (mW), if the entry exposed it.
     pub max_mw: Option<u32>,
-}
-
-/// QBoost / Dynamic-Boost controller info (NDA 0xB4C5D8BA): active controller
-/// index + its current target power in **milliwatts**. This is the power slider
-/// paired with the PPAB enable.
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, Default)]
-pub struct QboostInfo {
-    /// Active QBoost controller index.
-    pub controller_index: usize,
-    /// Current target power (mW), if reported.
-    pub power_mw: Option<u32>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
