@@ -626,6 +626,33 @@ impl Gpu {
         self.gpu.target_temperature_policies().map_err(Into::into)
     }
 
+    /// Every target-temp policy slot with live current temp + VBIOS
+    /// min/default/max range. Drives `get-temp-thresholds --nvapi`.
+    pub fn target_temperature_policies_with_info(
+        &self,
+    ) -> nvapi::Result<Vec<nvapi::TargetTempPolicyEntry>> {
+        self.gpu
+            .target_temperature_policies_with_info()
+            .map_err(Into::into)
+    }
+
+    /// Authoritative per-GPU target-temp policy index (private GetInfo
+    /// 0x2F69F8E5): GPS index, else acoustics (desktop fallback), else None.
+    /// Replaces hardcoding idx 2.
+    pub fn target_temp_policy_index(&self) -> nvapi::Result<Option<usize>> {
+        self.gpu.target_temp_policy_index().map_err(Into::into)
+    }
+
+    /// VBIOS min/default/max target temp (celsius) for one policy slot.
+    pub fn target_temperature_info(
+        &self,
+        policy_index: usize,
+    ) -> nvapi::Result<Option<(f32, f32, f32)>> {
+        self.gpu
+            .target_temperature_info(policy_index)
+            .map_err(Into::into)
+    }
+
     /// Set the target-temperature wall for one policy slot (private RMW:
     /// GET-prime 0xC4554575 + SET 0xE097144F). Persists on mobile GPUs. Caller
     /// picks the slot — only idx 2 is confirmed writable (the wall) on RTX 4060

@@ -1217,6 +1217,95 @@ impl PhysicalGpu {
         Ok(out)
     }
 
+    /// Query the private ClientThermalPolicies GetInfo (0x2F69F8E5) once and
+    /// return the policy index GPUMon itself uses for target-temp control:
+    /// GPS index if the VBIOS exposes one, else the acoustics index (desktop
+    /// fallback = NVML AcousticCurr), else None. This is the authoritative
+    /// per-GPU discovery that replaces hardcoding idx 2. RE'd from GPUMonCmd
+    /// GPUHandle::queryTargetTemperature (sub_14002C410).
+    pub fn target_temp_policy_index(&self) -> crate::Result<Option<usize>> {
+        trace!("gpu.target_temp_policy_index()");
+        let mut info = thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
+        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        info.version = ver;
+        unsafe {
+            let status =
+                sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
+            crate::status_result(
+                sys::Api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo,
+                status,
+            )?;
+        }
+        Ok(info.target_temp_policy_index().map(|b| b as usize))
+    }
+
+    /// VBIOS min/default/max target temp (celsius) for one policy slot, from
+    /// the private GetInfo. Mirrors dword[231*idx + 232/233/234] (Q8 /256).
+    /// `Ok(None)` if GetInfo fails or the index is out of the table.
+    pub fn target_temperature_info(
+        &self,
+        policy_index: usize,
+    ) -> crate::Result<Option<(f32, f32, f32)>> {
+        trace!("gpu.target_temperature_info({})", policy_index);
+        let mut info = thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
+        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        info.version = ver;
+        unsafe {
+            let status =
+                sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
+            crate::status_result(
+                sys::Api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo,
+                status,
+            )?;
+        }
+        Ok(info.target_temp_range(policy_index as u8))
+    }
+
+    /// Combined view of every target-temp policy slot the driver exposes:
+    /// each entry carries its live current temp (GET-prime) and, when GetInfo
+    /// has it, the VBIOS min/default/max range. Drives
+    /// `get-temp-thresholds --nvapi`. Performs one GetInfo call + one GET per
+    /// exposed slot.
+    pub fn target_temperature_policies_with_info(
+        &self,
+    ) -> crate::Result<Vec<TargetTempPolicyEntry>> {
+        trace!("gpu.target_temperature_policies_with_info()");
+        // One GetInfo call covers all slots' ranges.
+        let mut info = thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
+        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        info.version = ver;
+        let info_ok = unsafe {
+            let status =
+                sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
+            crate::status_result(
+                sys::Api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo,
+                status,
+            )
+            .is_ok()
+        };
+        let max = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_ENTRIES_MAX;
+        let mut out = Vec::new();
+        for idx in 0..max {
+            let current = match self.target_temperature(idx) {
+                Ok(Some(c)) => c,
+                _ => continue, // driver doesn't expose this slot
+            };
+            let range = if info_ok {
+                info.target_temp_range(idx as u8)
+            } else {
+                None
+            };
+            out.push(TargetTempPolicyEntry {
+                policy_index: idx,
+                current,
+                min: range.map(|(mn, _def, _mx)| mn),
+                default: range.map(|(_mn, def, _mx)| def),
+                max: range.map(|(_mn, _def, mx)| mx),
+            });
+        }
+        Ok(out)
+    }
+
     /// Raw GET-prime of the target-temp control buffer with a caller-supplied
     /// mask. Returns the full opaque buffer for diagnostics (e.g. locating the
     /// real target-temp field by scanning for a known Q8 value). Use
@@ -2250,8 +2339,25 @@ impl RawConversion for sys::gpu::NV_GPU_COMPUTE_CAPS_INFO_V1 {
 }
 
 /// TGP-watts range + active policy index (from the private
-/// ClientPowerPoliciesGetInfo variant, NDA 0x67F31384). All power values are in
-/// **milliwatts**.
+/// One target-temperature (温度墙) policy slot: live current temp plus the
+/// VBIOS min/default/max range from the private ClientThermalPolicies GetInfo
+/// (0x2F69F8E5). `current` is always present; the range fields are None when
+/// GetInfo didn't cover this slot. All values are celsius.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default)]
+pub struct TargetTempPolicyEntry {
+    pub policy_index: usize,
+    /// Live current target temp (private GET-prime 0xC4554575).
+    pub current: f32,
+    /// VBIOS minimum (the writable floor; idx 2 = 75C on RTX 4060 Laptop).
+    pub min: Option<f32>,
+    /// VBIOS rated/default target temp.
+    pub default: Option<f32>,
+    /// VBIOS maximum (the writable ceiling; idx 2 = 87C).
+    pub max: Option<f32>,
+}
+
+/// TGP-watts range (NDA 0x67F31384). All values are in **milliwatts**.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Default)]
 pub struct TgpWattRange {

@@ -89,4 +89,31 @@ fn main() {
         }
         Err(e) => println!("scan failed: {:?}", e),
     }
+
+    // Dump every non-zero dword (index : value) so the full struct contents are
+    // visible for RE. Q8 temperatures show up as celsius*256.
+    println!("\n=== full non-zero dword dump (idx : value / Q8 temp) ===");
+    let bytes = info.payload_bytes();
+    let mut shown = 0;
+    for i in (0..bytes.len() / 4).step_by(1) {
+        let off = i * 4;
+        if off + 4 > bytes.len() {
+            break;
+        }
+        let v = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+        if v != 0 {
+            let q8 = v as i32 as f32 / 256.0;
+            let q8tag = if q8 > 30.0 && q8 < 200.0 {
+                format!("  (Q8 {:.1} C?)", q8)
+            } else {
+                String::new()
+            };
+            println!("  dword[{:4}] (byte {:5}): 0x{:08X} ({}){}", i + 1, off + 4, v, v, q8tag);
+            shown += 1;
+            if shown >= 80 {
+                println!("  ... (truncated)");
+                break;
+            }
+        }
+    }
 }
