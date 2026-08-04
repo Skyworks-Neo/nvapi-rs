@@ -1236,8 +1236,13 @@ Unknown_1B778765 = 0x1b778765,
 Unknown_2A03BCCF = 0x2a03bccf,
 /// `Unknown_2EB86EE0` — Connector::pollGpuAspm - read register data (ASPM L0s/L1)
 Unknown_2EB86EE0 = 0x2eb86ee0,
-/// `Unknown_2F69F8E5` — GPUHandle::queryTargetTemperature - thermal policy info
-Unknown_2F69F8E5 = 0x2f69f8e5,
+/// `NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo` — GPUHandle::queryTargetTemperature
+/// - thermal policy info. PRIVATE sibling of the documented
+/// ClientThermalPoliciesGetInfo (0x0D258BB5); GPUMon resolves THIS one
+/// (0x2F69F8E5) with version magic 0x33D38 (~15.7 KB). Returns the packed
+/// target-temp policy index (GPS lobte, acoustics byte1 fallback) + VBIOS
+/// min/default/max range. Renamed from Unknown_2F69F8E5.
+NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo = 0x2f69f8e5,
 /// `Unknown_31B855CD` — GPUHandle::pollPowerPolicy - power policy status read
 Unknown_31B855CD = 0x31b855cd,
 /// `Unknown_32464C6C` — GPUHandle::queryGPUInfo sub-call - GPU info

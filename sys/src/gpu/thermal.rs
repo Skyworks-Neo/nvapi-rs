@@ -613,6 +613,105 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClientThermalTargetSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *const NV_GPU_CLIENT_THERMAL_TARGET_STATUS) -> NvAPI_Status;
     }
 
+    // ---- Private ClientThermalPolicies GetInfo (ID 0x2F69F8E5) -------------
+    // RE'd from GPUMonCmd sub_14002C410 (GPUHandle::queryTargetTemperature).
+    // This is the PRIVATE sibling of the documented ClientThermalPoliciesGetInfo
+    // (0x0D258BB5) — same family split as the target-temp GET/SET pair. GPUMon
+    // resolves 0x2F69F8E5 (not 0x0D258BB5) and passes version magic 0x33D58
+    // (= v3 | size 15704). The documented path is a different, smaller struct.
+    //
+    // Layout (from queryTargetTemperature, little-endian dword indexing):
+    //   dword[0]      = version magic 0x33D58
+    //   dword[2]      = packed policy indices: LOBYTE = GPS (target-temp) idx,
+    //                   BYTE1 = acoustics idx; 0xFF = invalid. If GPS invalid but
+    //                   acoustics valid, the driver wants acoustics (desktop case
+    //                   — there the writable slot is AcousticCurr, not GpsCurr).
+    //   For the chosen index `idx`, min/default/max (Q8 celsius, /256) at:
+    //   dword[231*idx + 232 / 233 / 234]. Entry stride 231 dwords (924 B).
+    //   (Live-verified RTX 4060 Laptop: GPS idx 2, range [75, 87], default 87.)
+
+    /// Total size of the private thermal-policy GetInfo buffer (version magic
+    /// 0x33D58 = v3 | 15704, from GPUMonCmd sub_14002C410 v9[0]=212312).
+    pub const NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_SIZE: usize = 15704;
+
+    nvstruct! {
+        /// Raw private ClientThermalPolicies GetInfo buffer (ID 0x2F69F8E5,
+        /// magic 0x33D58). Kept as opaque bytes — only the fields RE'd from
+        /// GPUMon's queryTargetTemperature are decoded by the accessors below.
+        pub struct NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_V3 {
+            pub version: NvVersion,
+            pub payload: Padding<[u8; NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_SIZE - 4]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_V3 {
+        /// Packed dword[2]: LOBYTE = GPS (target-temp) index, BYTE1 = acoustics
+        /// index. 0xFF = not exposed by the VBIOS.
+        fn packed_indices(&self) -> u32 {
+            // dword[2] = bytes 8..12 of the buffer (dword0=version @0..4,
+            // dword1 @4..8, dword2 @8..12). Payload starts after the version
+            // dword (byte 4), so dword2 is payload bytes 4..8.
+            u32::from_le_bytes(self.payload.data[4..8].try_into().unwrap())
+        }
+
+        /// The GPS (target-temp) policy index, or None if the VBIOS doesn't
+        /// expose one (0xFF) — caller should then try acoustics.
+        pub fn gps_policy_index(&self) -> Option<u8> {
+            let b = self.packed_indices() as u8;
+            (b != 0xFF).then_some(b)
+        }
+
+        /// The acoustics policy index (the desktop fallback), or None (0xFF).
+        pub fn acoustics_policy_index(&self) -> Option<u8> {
+            let b = (self.packed_indices() >> 8) as u8;
+            (b != 0xFF).then_some(b)
+        }
+
+        /// The policy index GPUMon itself chooses for target-temp control:
+        /// GPS index if exposed, else acoustics (desktop), else None. This is
+        /// the per-GPU discovery value that replaces hardcoding idx 2.
+        pub fn target_temp_policy_index(&self) -> Option<u8> {
+            self.gps_policy_index()
+                .or_else(|| self.acoustics_policy_index())
+        }
+
+        /// min/default/max target temp (celsius) for entry `idx`, Q8-decoded
+        /// (/256). Mirrors dword[231*idx + 232/233/234]. None if out of range.
+        pub fn target_temp_range(&self, idx: u8) -> Option<(f32, f32, f32)> {
+            const STRIDE: usize = 231;
+            const MIN_OFF: usize = 232; // default @ +1, max @ +2
+            let base = STRIDE
+                .checked_mul(idx as usize)?
+                .checked_add(MIN_OFF)?;
+            // Each dword index is relative to the buffer start (incl. version);
+            // payload starts right after the version dword (byte 4), so the
+            // byte offset into payload = dword_index*4 - 4.
+            let read = |dword_index: usize| -> Option<f32> {
+                let byte_off = dword_index.checked_mul(4)?.checked_sub(4)?;
+                let end = byte_off.checked_add(4)?;
+                let bytes = self.payload.data.get(byte_off..end)?;
+                let v = u32::from_le_bytes(bytes.try_into().ok()?) as i32 as f32;
+                Some(v / 256.0)
+            };
+            Some((read(base)?, read(base + 1)?, read(base + 2)?))
+        }
+
+        pub fn payload_bytes(&self) -> &[u8] {
+            &self.payload.data[..]
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_V3(3) = 15704 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0x2F69F8E5). PRIVATE ClientThermalPolicies
+        /// GetInfo — returns the ~15.7 KB policy table GPUMon's
+        /// queryTargetTemperature reads to find the target-temp policy index
+        /// (GPS lobte, acoustics fallback) and its VBIOS min/default/max range.
+        /// NOT the documented 0x0D258BB5 (different, smaller struct).
+        pub unsafe fn NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO) -> NvAPI_Status;
+    }
+
     // GPS (GPU Power Steering) thermal limit (Kepler-era, undocumented)
 
     nvstruct! {
