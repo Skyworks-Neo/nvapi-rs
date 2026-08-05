@@ -732,7 +732,12 @@ impl ClockLockValue {
             clock::private::ClockLockMode::ManualFrequency => {
                 Some(ClockLockValue::Frequency(Kilohertz(raw.value)))
             }
-            _ => return Err(sys::ArgumentRangeError),
+            // PstateSelect (mode 1) is a P-State pin, not a freq/voltage lock;
+            // it's not a VFP lock value, so report None (no lock to reset here).
+            clock::private::ClockLockMode::PstateSelect => None,
+            // ClockLockMode is #[non_exhaustive]; any future mode isn't a
+            // freq/voltage VFP lock either, so treat it as "no lock to reset".
+            _ => None,
         })
     }
 }
