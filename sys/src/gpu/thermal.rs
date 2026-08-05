@@ -514,9 +514,9 @@ pub mod private {
 
     // ------------------------------------------------------------------
     // Mobile GPU target-temperature wall ("targettemp" / 温度墙) — the PRIVATE
-    // ClientThermalPolicies RMW pair, RE'd from GPUMonCmd.exe.
+    // ClientThermalPolicies RMW pair, RE'd from the ref-tool CLI.
     //
-    // GPUMonCmd `-targettemp:<C>` (setTargetTemperature, sub_140013090) does:
+    // the ref-tool CLI `-targettemp:<C>` (setTargetTemperature, sub_140013090) does:
     //   1. memset a stack buffer (984 B effective); dword0 = 0x203D8 (version
     //      magic: struct version 2, size 984), dword1 = mask = 1 << policy_index.
     //   2. GET-prime 0xC4554575 fills the buffer with current policy state.
@@ -529,8 +529,8 @@ pub mod private {
     // Both IDs sit in nvapi64.dll's static table off_1804DD000 and resolve in
     // nvoc's process (probe-confirmed: SET -> 0x7FFE90A12750 on RTX 4060 Laptop).
     //
-    // Version magic: GPUMon writes dword0 = 0x203D8 = version 2 | size 984.
-    // GPUMon's stack buffer is _DWORD v30[248] (992 B) but only the first 984 B
+    // Version magic: the ref tool writes dword0 = 0x203D8 = version 2 | size 984.
+    // the ref tool's stack buffer is _DWORD v30[248] (992 B) but only the first 984 B
     // (header 8 + memset 0x3D0=976) are used; the magic's size field (984) is
     // what the driver validates. Each policy entry is 15 dwords (60 B); the
     // target-temp Q8 field is entry dword 7. The rest of each entry is opaque
@@ -538,12 +538,12 @@ pub mod private {
     // ------------------------------------------------------------------
 
     /// Number of target-temp policy entries the 984-byte buffer can hold.
-    /// 984 B = 8 B header + N*(60 B); floor((984-8)/60) = 16, but GPUMon only
+    /// 984 B = 8 B header + N*(60 B); floor((984-8)/60) = 16, but the ref tool only
     /// ever uses index 0..3 — keep 16 to cover the full buffer.
     pub const NV_GPU_CLIENT_THERMAL_TARGET_ENTRIES_MAX: usize = 16;
 
     nvstruct! {
-        /// Target-temperature control read-modify-write buffer (RE'd from GPUMon;
+        /// Target-temperature control read-modify-write buffer (RE'd from the ref tool;
         /// NDA). dword0 = version (0x203D8 = v2|984), dword1 = mask = (1<<idx).
         /// Per-entry target temp (celsius*256) at dword (15*index + 7). The bulk
         /// of the buffer is opaque — GET fills it, the caller patches one entry's
@@ -563,7 +563,7 @@ pub mod private {
             &self.payload.data[..]
         }
 
-        /// Per-entry stride in BYTES = 15 dwords (GPUMonCmd: v30[15*idx + 7]).
+        /// Per-entry stride in BYTES = 15 dwords (the ref-tool CLI: v30[15*idx + 7]).
         const ENTRY_STRIDE_BYTES: usize = 15 * 4;
         /// Byte offset WITHIN `payload` of entry 0's target-temp field.
         /// Buffer dword (15*idx + 7); payload starts at buffer byte 8, so
@@ -614,9 +614,9 @@ pub mod private {
     }
 
     // ---- Private ClientThermalPolicies GetInfo (ID 0x2F69F8E5) -------------
-    // RE'd from GPUMonCmd sub_14002C410 (GPUHandle::queryTargetTemperature).
+    // RE'd from the ref-tool CLI sub_14002C410 (GPUHandle::queryTargetTemperature).
     // This is the PRIVATE sibling of the documented ClientThermalPoliciesGetInfo
-    // (0x0D258BB5) — same family split as the target-temp GET/SET pair. GPUMon
+    // (0x0D258BB5) — same family split as the target-temp GET/SET pair. the ref tool
     // resolves 0x2F69F8E5 (not 0x0D258BB5) and passes version magic 0x33D58
     // (= v3 | size 15704). The documented path is a different, smaller struct.
     //
@@ -631,13 +631,13 @@ pub mod private {
     //   (Live-verified RTX 4060 Laptop: GPS idx 2, range [75, 87], default 87.)
 
     /// Total size of the private thermal-policy GetInfo buffer (version magic
-    /// 0x33D58 = v3 | 15704, from GPUMonCmd sub_14002C410 v9[0]=212312).
+    /// 0x33D58 = v3 | 15704, from the ref-tool CLI sub_14002C410 v9[0]=212312).
     pub const NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_SIZE: usize = 15704;
 
     nvstruct! {
         /// Raw private ClientThermalPolicies GetInfo buffer (ID 0x2F69F8E5,
         /// magic 0x33D58). Kept as opaque bytes — only the fields RE'd from
-        /// GPUMon's queryTargetTemperature are decoded by the accessors below.
+        /// the ref tool's queryTargetTemperature are decoded by the accessors below.
         pub struct NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_V3 {
             pub version: NvVersion,
             pub payload: Padding<[u8; NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_SIZE - 4]>,
@@ -667,7 +667,7 @@ pub mod private {
             (b != 0xFF).then_some(b)
         }
 
-        /// The policy index GPUMon itself chooses for target-temp control:
+        /// The policy index the ref tool itself chooses for target-temp control:
         /// GPS index if exposed, else acoustics (desktop), else None. This is
         /// the per-GPU discovery value that replaces hardcoding idx 2.
         pub fn target_temp_policy_index(&self) -> Option<u8> {
@@ -703,7 +703,7 @@ pub mod private {
 
     nvapi! {
         /// Undocumented (NDA, ID 0x2F69F8E5). PRIVATE ClientThermalPolicies
-        /// GetInfo — returns the ~15.7 KB policy table GPUMon's
+        /// GetInfo — returns the ~15.7 KB policy table the ref tool's
         /// queryTargetTemperature reads to find the target-temp policy index
         /// (GPS lobte, acoustics fallback) and its VBIOS min/default/max range.
         /// NOT the documented 0x0D258BB5 (different, smaller struct).

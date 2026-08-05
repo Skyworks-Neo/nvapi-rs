@@ -1,5 +1,5 @@
 //! Probe the PRIVATE ClientThermalPolicies GetInfo (ID 0x2F69F8E5) to confirm
-//! the per-GPU target-temp policy index discovery, RE'd from GPUMonCmd
+//! the per-GPU target-temp policy index discovery, RE'd from the ref-tool CLI
 //! `GPUHandle::queryTargetTemperature` (sub_14002C410).
 //!
 //! Run: `cargo run --release -p nvapi --example probe_thermal_policies_getinfo`
@@ -28,7 +28,7 @@ fn main() {
     let mut info = NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
     info.version = <NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as StructVersion>::NVAPI_VERSION;
 
-    // Debug: struct size + computed magic (GPUMon uses 0x33D58 = v3 | 15704).
+    // Debug: struct size + computed magic (the ref tool uses 0x33D58 = v3 | 15704).
     println!(
         "rust struct size = {} bytes, version magic = 0x{:X}",
         std::mem::size_of_val(&info),
@@ -59,7 +59,7 @@ fn main() {
         gps, acoustic
     );
     let chosen = info.target_temp_policy_index();
-    println!("GPUMon-style chosen target-temp index = {:?}", chosen);
+    println!("the ref tool-style chosen target-temp index = {:?}", chosen);
 
     if let Some(idx) = chosen {
         match info.target_temp_range(idx) {

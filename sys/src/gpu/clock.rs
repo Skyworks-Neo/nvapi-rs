@@ -373,7 +373,7 @@ pub mod private {
         pub enum NV_GPU_CLOCK_LOCK_MODE / ClockLockMode {
             NVAPI_GPU_CLOCK_LOCK_NONE / None = 0,
             /// Select a P-State (entry value = pstate number). RE'd from
-            /// GPUMon setPState: entries with id 4/5 (Unknown_4/5) use mode 1
+            /// the ref tool setPState: entries with id 4/5 (Unknown_4/5) use mode 1
             /// to pin the active pstate.
             NVAPI_GPU_CLOCK_LOCK_PSTATE_SELECT / PstateSelect = 1,
             NVAPI_GPU_CLOCK_LOCK_MANUAL_FREQUENCY / ManualFrequency = 2,
@@ -445,9 +445,9 @@ pub mod private {
 
     // ------------------------------------------------------------------
     // PerfPstatesGetInfoPrivate (NDA, ID 0x7B30AE0D) — the P-State level
-    // table behind GPUMon's `-pstate` GET ("Level[N] P*.Max/P*.Min").
+    // table behind the ref tool's `-pstate` GET ("Level[N] P*.Max/P*.Min").
     //
-    // RE'd from GPUMon `[GPUHandle::queryPStateInfo]` (thunk sub_140003A20).
+    // RE'd from the ref tool `[GPUHandle::queryPStateInfo]` (thunk sub_140003A20).
     // Returns a 275152-byte struct with version magic 0x432D0 (v4 | size).
     // Decoded layout (byte offsets from the version dword at byte 0):
     //   valid-pstate bitmask ... dword 34 (byte 0x88), bit i set ⇔ P{i} exists
@@ -468,7 +468,7 @@ pub mod private {
     pub const NV_GPU_PERF_PSTATES_MAX: usize = 32;
 
     nvstruct! {
-        /// Perf P-states info (RE'd from GPUMon; NDA). Opaque except for the
+        /// Perf P-states info (RE'd from the ref tool; NDA). Opaque except for the
         /// bitmask/version header and the decoded accessors below.
         pub struct NV_GPU_PERF_PSTATES_INFO_PRIVATE_V4 {
             pub version: NvVersion,
@@ -476,11 +476,11 @@ pub mod private {
             pub hdr: Padding<[u32; 33]>,
             /// Byte 0x88 (dword 34) = bitmask of present pstates (bit i ⇔ P{i}).
             pub pstate_mask: u32,
-            /// Byte 0x8C (dword 35) low byte = table version (logged by GPUMon).
+            /// Byte 0x8C (dword 35) low byte = table version (logged by the ref tool).
             pub table_version: u8,
             pub rsvd0: Padding<[u8; 3]>,
             /// Bytes 0x90..(then the slot + freq tables). Header above = 144 B.
-            /// Total struct = 275152 B (GPUMon's memset clears 0x432CC bytes from
+            /// Total struct = 275152 B (the ref tool's memset clears 0x432CC bytes from
             /// v19[1], i.e. struct = 4 + 0x432CC = 0x432D0 = 275152; the version
             /// magic with_struct(4) yields exactly 0x432D0).
             pub payload: Padding<[u8; 275152 - 144]>,
@@ -488,14 +488,14 @@ pub mod private {
     }
 
     impl NV_GPU_PERF_PSTATES_INFO_PRIVATE_V4 {
-        // Freq table layout (RE'd from GPUMon queryPStateInfo loop):
+        // Freq table layout (RE'd from the ref tool queryPStateInfo loop):
         //   max_kHz byte offset = 0x22F0 + slot*0x2090 + domain*0x9C
         //   min_kHz byte offset = 0x22C8 + slot*0x2090 + domain*0x9C
         // where:
         //   - `slot` = the k-th set bit in `pstate_mask` (one slot per present
         //     pstate, in ascending bit order). NOT the pstate NUMBER — each slot
         //     is 0x2090 (8336) bytes apart.
-        //   - `domain` = clock-domain index (0=GPC/core typically; GPUMon
+        //   - `domain` = clock-domain index (0=GPC/core typically; the ref tool
         //     resolves it via the separate 0x57B5A5DF queryClockDomainInfo). Each
         //     domain is 0x9C (156) bytes apart — so the 4-dimensional view a
         //     P-State exposes (core max/min, memory, ...) is just domain 0..N.
@@ -521,7 +521,7 @@ pub mod private {
                 .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         }
 
-        /// Table version byte (GPUMon logs this as "P state version: 0x%X").
+        /// Table version byte (the ref tool logs this as "P state version: 0x%X").
         pub fn table_version(&self) -> u8 {
             self.table_version
         }
@@ -545,15 +545,15 @@ pub mod private {
         /// The decoded P-State entries: one per set bitmask bit, each carrying
         /// its REAL pstate number (read from the slot table) plus min/max clock
         /// in kHz for the given clock-domain. `domain` selects which dimension
-        /// (0=GPC/core by default; GPUMon resolves it via 0x57B5A5DF).
-        /// Mirrors GPUMon's queryPStateInfo loop.
+        /// (0=GPC/core by default; the ref tool resolves it via 0x57B5A5DF).
+        /// Mirrors the ref tool's queryPStateInfo loop.
         pub fn pstate_entries_domain(&self, domain: usize) -> Vec<PStateEntryRaw> {
             let mut out = Vec::new();
             for bit in 0u32..32 {
                 if (self.pstate_mask >> bit) & 1 == 0 {
                     continue;
                 }
-                // Slot index = number of set bits already emitted (GPUMon's v10
+                // Slot index = number of set bits already emitted (the ref tool's v10
                 // counter, one slot per set bit, in ascending bit order).
                 let slot = out.len();
                 let pstate = self
@@ -589,24 +589,24 @@ pub mod private {
     nvapi! {
         /// Undocumented (NDA, ID 0x7B30AE0D). Private PerfPstatesGetInfo — the
         /// P-State level table (present pstates + per-pstate min/max core clock
-        /// in kHz). Source of GPUMon's `-pstate` GET listing. Returns a
+        /// in kHz). Source of the ref tool's `-pstate` GET listing. Returns a
         /// 275152-byte struct with version magic 0x432D0 (version 4).
         pub unsafe fn NvAPI_GPU_PerfPstatesGetInfoPrivate(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_PERF_PSTATES_INFO_PRIVATE) -> NvAPI_Status;
     }
 
     // ------------------------------------------------------------------
     // ClientPStateLimitStatus (NDA, ID 0x9962C97C) — the "which P-States are
-    // currently locked" view. RE'd from GPUMon's `[GPUHandle::pollPState]`
-    // "get p state limit" branch (thunk sub_140003D60). GPUMon allocates a
+    // currently locked" view. RE'd from the ref tool's `[GPUHandle::pollPState]`
+    // "get p state limit" branch (thunk sub_140003D60). the ref tool allocates a
     // 164-byte buffer but the driver's version magic 0x10088 reports size 136
     // (v1) — the tail is padding. Entries start at byte 8, each 2 bytes
     // {type:u8, pstate:u8}; type == 0x1A marks a pstate locked by
-    // PerfClientLimitsSetStatus (0x39442CFB). GPUMon renders the locked set as
+    // PerfClientLimitsSetStatus (0x39442CFB). the ref tool renders the locked set as
     // "P0.P3.P5".
     // ------------------------------------------------------------------
 
     nvstruct! {
-        /// P-State limit-status (RE'd from GPUMon; NDA). Opaque except for the
+        /// P-State limit-status (RE'd from the ref tool; NDA). Opaque except for the
         /// count + entry table decoded by the accessor below.
         pub struct NV_GPU_CLIENT_PSTATE_LIMIT_STATUS_V1 {
             pub version: NvVersion,
@@ -620,7 +620,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_PSTATE_LIMIT_STATUS_V1 {
         /// The set of P-State numbers currently locked, in entry order. Each
-        /// entry is `{type:u8, pstate:u8}`; GPUMon's pollPState only renders
+        /// entry is `{type:u8, pstate:u8}`; the ref tool's pollPState only renders
         /// type==0x1A, but on current drivers the locked entries carry other
         /// type codes (e.g. 0x7B/0x7E for a P0 max/min lock) — so we treat
         /// EVERY entry as a locked pstate (count is authoritative). Empty when
@@ -642,7 +642,7 @@ pub mod private {
     }
 
     // ------------------------------------------------------------------
-    // Rated-TDP control (NDA, ID 0xC9E9BB33). RE'd from GPUMon's
+    // Rated-TDP control (NDA, ID 0xC9E9BB33). RE'd from the ref tool's
     // `[GPUHandle::clearRatedTdp]`/`[GPUHandle::setRatedTdp]` (the setPState
     // preamble + cmdPState index==0 path). 12-byte struct
     // {version: 0x1000C, dword1: 1, mode}: mode=0 clear, mode=3 enable rated
@@ -662,7 +662,7 @@ pub mod private {
 
     nvapi! {
         /// Undocumented (NDA, ID 0xC9E9BB33). Rated-TDP control. 12-byte struct,
-        /// version magic 0x1000C (v1). GPUMon calls this (mode 0) before every
+        /// version magic 0x1000C (v1). the ref tool calls this (mode 0) before every
         /// P-State/frequency lock via 0x39442CFB.
         pub unsafe fn NvAPI_GPU_ClientRatedTdpControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_RATED_TDP_CONTROL) -> NvAPI_Status;
     }

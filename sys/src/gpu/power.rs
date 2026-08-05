@@ -225,9 +225,9 @@ pub mod private {
         /// Undocumented (NDA-private, ID 0x1504FC3D). PPAB / Dynamic-Boost
         /// controller enable. `active` = 0 disables, non-zero enables. This is a
         /// GLOBAL single-argument by-value setter (NOT a per-GPU `*const` struct
-        /// setStatus): GPUMon's thunk calls the resolved fn as `fn(active)` with
+        /// setStatus): the ref tool's thunk calls the resolved fn as `fn(active)` with
         /// NO hPhysicalGPU arg (targets the implicitly-selected GPU). Reversed
-        /// from GPUMon.exe/GPUMonCmd.exe (`[GPUHandle::setDynamicBoost] active:
+        /// from the ref-tool GUI/the ref-tool CLI (`[GPUHandle::setDynamicBoost] active:
         /// %d`, CLI `-db`). Matches the "PPAB Enable" checkbox on the
         /// Dynamic-Boost tab of OEM partner tools.
         pub unsafe fn NvAPI_GPU_ClientDynamicBoostSetStatus(active: BoolU32) -> NvAPI_Status;
@@ -235,16 +235,16 @@ pub mod private {
 
     nvapi! {
         /// Undocumented (NDA-private, ID 0xAD298D3F). Private lifecycle/controller
-        /// init. GPUMon's init stub calls `fn(arg)` with arg=1 BEFORE any
+        /// init. the ref tool's init stub calls `fn(arg)` with arg=1 BEFORE any
         /// Dynamic-Boost / QBoost power setter; without it those setters return
         /// NVAPI_API_NOT_INITIALIZED. GLOBAL single u32 by-value arg.
         pub unsafe fn NvAPI_GPU_PrivateLifecycleInit(arg: BoolU32) -> NvAPI_Status;
     }
 
     // ------------------------------------------------------------------
-    // TGP-watts power control (NDA-private triplet, GPUMon `setTgpWatt`).
+    // TGP-watts power control (NDA-private triplet, the ref tool `setTgpWatt`).
     //
-    // RE'd from GPUMon.exe sub_1400324A0 ([GPUHandle::setTgpWatt]):
+    // RE'd from the ref-tool GUI sub_1400324A0 ([GPUHandle::setTgpWatt]):
     //   GET  0x8B3E7343 (NvAPI_GPU_ClientTgpWattGetStatus)
     //   SET  0xBFF09E59 (NvAPI_GPU_ClientTgpWattSetStatus)
     // both take a 10016-byte read-modify-write buffer (version magic 0x12720 =
@@ -262,7 +262,7 @@ pub mod private {
     pub const NV_GPU_CLIENT_TGP_WATT_ENTRIES_MAX: usize = 32;
 
     nvstruct! {
-        /// TGP-watts control read-modify-write buffer (RE'd from GPUMon; NDA).
+        /// TGP-watts control read-modify-write buffer (RE'd from the ref tool; NDA).
         /// dword0 = version (0x12720), dword1 = mask = (1 << policy_index);
         /// per-entry power-mW at dword (553 + 10*index). The bulk of the buffer
         /// is opaque — GET fills it, the caller patches one entry, SET applies.
@@ -275,10 +275,10 @@ pub mod private {
     }
 
     impl NV_GPU_CLIENT_TGP_WATT_STATUS_V1 {
-        /// Per-entry stride in bytes (GPUMonCmd writes v14[553 + 10*idx], i.e.
+        /// Per-entry stride in bytes (the ref-tool CLI writes v14[553 + 10*idx], i.e.
         /// 10 dwords = 40 bytes per entry).
         const POWER_STRIDE_BYTES: usize = 40;
-        /// Byte offset WITHIN `payload` of entry 0's power-mW field. GPUMonCmd's
+        /// Byte offset WITHIN `payload` of entry 0's power-mW field. the ref-tool CLI's
         /// setTgpWatt writes v14[553 + 10*idx] = buffer byte (553+10*idx)*4.
         /// payload starts at buffer byte 8, so idx-0 base = 553*4 - 8 = 0x89C.
         const POWER_BASE_PAYLOAD_OFF: usize = 0x89C;
@@ -326,7 +326,7 @@ pub mod private {
     // ClientPowerPoliciesGetInfoPrivate (NDA, ID 0x67F31384) — the TGP-watts
     // RANGE source. NOT the public 0x34206D86. Returns a 347136-byte struct
     // (86784 dwords), version magic 0x0F4BF4, per-policy entry stride 10604 B
-    // (2651 dwords). Only the fields GPUMon reads are decoded here:
+    // (2651 dwords). Only the fields the ref tool reads are decoded here:
     //   - policy-table selector index: byte offset 0x14 (dword5 low byte; 0xFF
     //     ⇒ default to index 2).
     //   - per-entry min/default/max mW: entry dword +275 / +276 / +277.
@@ -334,7 +334,7 @@ pub mod private {
     // ------------------------------------------------------------------
 
     nvstruct! {
-        /// TGP-watts policy/range descriptor (RE'd from GPUMon; NDA). Opaque
+        /// TGP-watts policy/range descriptor (RE'd from the ref tool; NDA). Opaque
         /// except for the decoded accessors below.
         pub struct NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_V1 {
             pub version: NvVersion,
@@ -349,11 +349,11 @@ pub mod private {
             pub rsvd0: Padding<[u8; 3]>,
             /// dword 6..11 (opaque).
             pub hdr3: Padding<[u32; 6]>,
-            /// dword 12 (GPUMon reads it into a "hide TGP" sibling field).
+            /// dword 12 (the ref tool reads it into a "hide TGP" sibling field).
             pub hide_tgp_flag_dword: u32,
             /// Per-policy entry table (10604 B each); raw, parsed by accessors.
             /// Header before this = 52 bytes (dwords 0..12 + the index byte).
-            /// Total struct = 347124 B (matches GPUMon's v7[86784] + memset).
+            /// Total struct = 347124 B (matches the ref tool's v7[86784] + memset).
             pub entries: Padding<[u8; 347124 - 52]>,
         }
     }
@@ -370,7 +370,7 @@ pub mod private {
             (self.policy_index_byte != 0xFF).then_some(self.policy_index_byte)
         }
 
-        /// Read dword `field` of policy entry `index`. GPUMon indexes these
+        /// Read dword `field` of policy entry `index`. the ref tool indexes these
         /// relative to the START of the whole struct (v7[N]), so the byte offset
         /// is (stride*index + field)*4 from byte 0 — but our typed header is the
         /// first 52 bytes, so subtract 52 to index into the `entries` payload.
@@ -398,8 +398,8 @@ pub mod private {
         // ------------------------------------------------------------------
         // D-Notifier (D0-notify / "extern power state") fields.
         //
-        // RE'd from GPUMon.exe / GPUMonCmd.exe `[GPUHandle::pollDNotifyLimit]`
-        // (GPUMon.exe sub_140028300, GPUMonCmd sub_140025750) — the GUI build
+        // RE'd from the ref-tool GUI / the ref-tool CLI `[GPUHandle::pollDNotifyLimit]`
+        // (the ref-tool GUI sub_140028300, the ref-tool CLI sub_140025750) — the GUI build
         // reveals the semantics the CLI build hides: it builds the string
         // "D{n}({power}mW)" (e.g. "D3(45000mW)"), so the dword at
         // `3*Didx + 85682` is the **power limit in mW** for that D level, NOT a
@@ -418,8 +418,8 @@ pub mod private {
         //   per-D power table ..... dword (85682 + 3*Didx), stride 3; the first
         //                          dword of each triple is the mW limit for
         //                          Didx 0..3 (D2..D5). The other two dwords are
-        //                          opaque (GPUMon never reads them). D1 (Didx -1)
-        //                          is "Unlimited" — GPUMon does NOT consult the
+        //                          opaque (the ref tool never reads them). D1 (Didx -1)
+        //                          is "Unlimited" — the ref tool does NOT consult the
         //                          table for it, so the base is 85682, NOT 85679.
         //                          (An earlier pass reserved a D1 slot at 85679
         //                          and read every value one level too low.)
@@ -449,7 +449,7 @@ pub mod private {
         /// of bounds. See `DNotifierLevel::from_index` to map this to a level.
         pub fn dnotify_active_index(&self) -> Option<i32> {
             let raw = self.absolute_dword(Self::DNOTIFY_ACTIVE_INDEX_DWORD)? as i32;
-            // 4 is GPUMon's "N/A" sentinel (it prints "N/A" and stores -1); -1
+            // 4 is the ref tool's "N/A" sentinel (it prints "N/A" and stores -1); -1
             // is the legitimate "D1 - Unlimited" code. Anything else in 0..=3 is
             // a real D2..D5 level.
             if raw == 4 { None } else { Some(raw) }
@@ -462,7 +462,7 @@ pub mod private {
         /// unused; callers should treat D1 as unbounded regardless. Returns
         /// `None` if the offset is out of bounds.
         pub fn dnotify_power_mw(&self, didx: i32) -> Option<u32> {
-            // D1 (didx -1) is Unlimited — no table entry. GPUMon never reads the
+            // D1 (didx -1) is Unlimited — no table entry. the ref tool never reads the
             // table for it; returning None here keeps callers from touching the
             // pre-base dword 85679.
             if didx < 0 {
@@ -480,15 +480,15 @@ pub mod private {
         /// Undocumented (NDA, ID 0x67F31384). Private ClientPowerPoliciesGetInfo
         /// variant — the TGP-watts min/default/max range + active policy index.
         /// NOT the public 0x34206D86. Returns a 347124-byte struct with version
-        /// magic 0x0F4BF4 (version 15) — GPUMon's queryPowerPolicy uses exactly
+        /// magic 0x0F4BF4 (version 15) — the ref tool's queryPowerPolicy uses exactly
         /// this; the version-1 magic I first tried is rejected by the driver.
         pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE) -> NvAPI_Status;
     }
 
     nvapi! {
         /// Undocumented (NDA-private, ID 0x48E0847D). D-Notifier (D0-notify)
-        /// "extern power state" SETTER — the write half of GPUMon's
-        /// `[GPUHandle::setDNotifyLimit]` (thunk sub_140001780 in GPUMonCmd.exe).
+        /// "extern power state" SETTER — the write half of the ref tool's
+        /// `[GPUHandle::setDNotifyLimit]` (thunk sub_140001780 in the ref-tool CLI).
         /// Raw two-arg call: `(hPhysicalGPU, level: u32)` — NO struct buffer,
         /// unlike the TGP-watts SetStatus path. `level` is the signed D-level
         /// code (0xFFFFFFFF = D1/Unlimited, 0..3 = D2..D5), passed as a raw u32.

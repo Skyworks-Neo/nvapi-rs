@@ -1171,19 +1171,19 @@ NvAPI_GPU_PowerMonitorGetStatus = 0xf40238ef,
 /// documentation-only record so the IID is reserved/known.
 Unknown_D7C61344_InternalUnload = 0xd7c61344,
 
-// source: gpumon.exe (NVIDIA OEM partner tool, reverse/GPUMon/GPUMon.exe)
+// source: gpumon.exe (NVIDIA OEM partner tool, reverse/the ref tool/the ref-tool GUI)
 //
-// These IDs were discovered by extracting GPUMon.exe's complete
+// These IDs were discovered by extracting the ref-tool GUI's complete
 // `nvapi_QueryInterface` surface (128 call sites on the cached
 // qword_140F1A7B8 pointer; see reverse/gpumon-raw-id-table.md) and naming
 // each via its caller's labeled `GPUHandle::*` / `DriverInvoker::*` /
-// `Connector::*` method (GPUMon embeds the method name in its own
+// `Connector::*` method (the ref tool embeds the method name in its own
 // `[Class::method] NvAPI fail to ...` log strings). They are NDA /
 // undocumented IDs NOT present in NVIDIA's public interface table.
 //
 // Names use the `Unknown_<HEX>` convention (we do NOT assert a public
 // NvAPI_* name unless independently confirmed); the doc comment records
-// the GPUMon method + role as the evidence trail. id_hex values are
+// the the ref tool method + role as the evidence trail. id_hex values are
 // re-verified from fresh decompiles (the phase-1 extraction misread a
 // few probe-wrapper literals). See reverse/gpumon-id-catalog-for-review.md
 // for the prioritized wrap list.
@@ -1220,8 +1220,8 @@ Unknown_1071E0D3 = 0x1071e0d3,
 Unknown_10741A55 = 0x10741a55,
 /// PPAB / Dynamic-Boost ENABLE setter (NDA-private, ID 0x1504FC3D).
 /// Raw `u8`/BoolU32 active flag (0=disable, non-zero=enable); NOT a *const
-/// struct setStatus. Proven by decompile: GPUMon.exe thunk 0x140006E60,
-/// caller 0x140030D20 logs `[GPUHandle::setDynamicBoost] active: %d`; the GPUMon
+/// struct setStatus. Proven by decompile: the ref-tool GUI thunk 0x140006E60,
+/// caller 0x140030D20 logs `[GPUHandle::setDynamicBoost] active: %d`; the the ref tool
 /// CLI handler (`-db`, `[CmdDispatch::cmdDynamicBoost]`) passes
 /// `active=(int!=0)` and prints `Change dynamic boost controlling state to
 /// [enable|disable] successful`. Matches the "PPAB Enable" checkbox on the
@@ -1238,7 +1238,7 @@ Unknown_2A03BCCF = 0x2a03bccf,
 Unknown_2EB86EE0 = 0x2eb86ee0,
 /// `NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo` — GPUHandle::queryTargetTemperature
 /// - thermal policy info. PRIVATE sibling of the documented
-/// ClientThermalPoliciesGetInfo (0x0D258BB5); GPUMon resolves THIS one
+/// ClientThermalPoliciesGetInfo (0x0D258BB5); the ref tool resolves THIS one
 /// (0x2F69F8E5) with version magic 0x33D38 (~15.7 KB). Returns the packed
 /// target-temp policy index (GPS lobte, acoustics byte1 fallback) + VBIOS
 /// min/default/max range. Renamed from Unknown_2F69F8E5.
@@ -1249,7 +1249,7 @@ Unknown_31B855CD = 0x31b855cd,
 Unknown_32464C6C = 0x32464c6c,
 /// `Unknown_32CA4983` — GPUHandle::setGpcClock - limit perf frequency
 Unknown_32CA4983 = 0x32ca4983,
-/// `Unknown_33C7F5EC` — sub_140001060 init: debug-probe register (stored qword_140F1A7C8) [GPUMon init/teardown].
+/// `Unknown_33C7F5EC` — sub_140001060 init: debug-probe register (stored qword_140F1A7C8) [the ref tool init/teardown].
 /// In gpumoncmd.exe this SAME ID is additionally the per-call ENTER profiling hook (wrapped around every API call).
 Unknown_33C7F5EC = 0x33c7f5ec,
 /// `Unknown_34249506` — GPUHandle::setTgpPercent sub-call - client power policy
@@ -1260,7 +1260,7 @@ Unknown_3CC2D181 = 0x3cc2d181,
 Unknown_41B2CA9A = 0x41b2ca9a,
 /// `Unknown_42AFA9CA` — GPUHandle::queryFrameBuffer sub-call - FB/VRAM info
 Unknown_42AFA9CA = 0x42afa9ca,
-/// `Unknown_4324694C` — DriverInvoker::populateNvpcfHandle - get NvPCF platform handle (GPUMon_Requester_)
+/// `Unknown_4324694C` — DriverInvoker::populateNvpcfHandle - get NvPCF platform handle (the ref tool_Requester_)
 Unknown_4324694C = 0x4324694c,
 /// `Unknown_45EFAB64` — Connector::populateAcpiId - display mapping ID for ACPI
 Unknown_45EFAB64 = 0x45efab64,
@@ -1268,7 +1268,7 @@ Unknown_45EFAB64 = 0x45efab64,
 Unknown_470D2D63 = 0x470d2d63,
 /// D-Notifier (D0-notify / "extern power state") SETTER (NDA-private,
 /// ID 0x48E0847D). Raw two-arg call `(hPhysicalGPU, level: u32)` — NO struct
-/// buffer. RE'd from GPUMon `[GPUHandle::setDNotifyLimit]` (GPUMonCmd thunk
+/// buffer. RE'd from the ref tool `[GPUHandle::setDNotifyLimit]` (the ref-tool CLI thunk
 /// sub_140001780, `nvapi_QueryInterface(1222673533)`); its caller's switch maps
 /// CLI `-dnotifier:<1..5>` to the signed level code `-1,0,1,2,3` (D1=Unlimited,
 /// D2..D5). The matching GET is `NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate`
@@ -1280,7 +1280,7 @@ Unknown_48F421C4 = 0x48f421c4,
 Unknown_57B5A5DF = 0x57b5a5df,
 /// `Unknown_57FA8E2C` — GPUHandle::queryFrameBuffer sub-call - frame-buffer/VRAM query
 Unknown_57FA8E2C = 0x57fa8e2c,
-/// `Unknown_594762E4` — sub_140001060 init: debug-probe unregister (stored qword_140F1A7D0) [GPUMon init/teardown].
+/// `Unknown_594762E4` — sub_140001060 init: debug-probe unregister (stored qword_140F1A7D0) [the ref tool init/teardown].
 /// In gpumoncmd.exe this SAME ID is additionally the per-call EXIT profiling hook (paired with Unknown_33C7F5EC).
 Unknown_594762E4 = 0x594762e4,
 /// `Unknown_595E3EF6` — Connector::doLinkTraining/getCurrentLinkConfig - set/get display link config
@@ -1293,7 +1293,7 @@ Unknown_65CE5BFC = 0x65ce5bfc,
 Unknown_661AA3AF = 0x661aa3af,
 /// ClientPowerPoliciesGetInfo — PRIVATE variant (NDA, ID 0x67F31384). Returns a
 /// ~347KB policy-descriptor struct (the TGP policy table). NOT the same as the
-/// public `0x34206D86`. GPUMon `GPUHandle::queryPowerPolicy` (sub_1400304B0)
+/// public `0x34206D86`. the ref tool `GPUHandle::queryPowerPolicy` (sub_1400304B0)
 /// uses this to fetch the TGP-watts min/default/max range. Buffer = 86784 dwords
 /// (347136 B), version magic 0x0F4BF4; per-policy entry stride 2651 dwords
 /// (10604 B); policy-table selector index at byte offset 0x14 (v7[5] low byte,
@@ -1311,9 +1311,9 @@ Unknown_7977A946 = 0x7977a946,
 Unknown_799D6E11 = 0x799d6e11,
 /// `Unknown_7A2D309E` — DriverInvoker::getBoostClock - get PM1 availability (boost-clock status)
 Unknown_7A2D309E = 0x7a2d309e,
-/// Perf P-states info table (NDA-private, ID 0x7B30AE0D). RE'd from GPUMon
+/// Perf P-states info table (NDA-private, ID 0x7B30AE0D). RE'd from the ref tool
 /// `[GPUHandle::queryPStateInfo]` (thunk sub_140003A20). Returns a 275152-byte
-/// struct (magic 0x432D0 = version 4 | size); the source of GPUMon's
+/// struct (magic 0x432D0 = version 4 | size); the source of the ref tool's
 /// `-pstate` GET "Level[N] P*.Max/P*.Min" table. Layout (byte offsets from the
 /// version dword): valid-pstate bitmask @ 0x88 (dword 34); version @ 0x8C
 /// (dword 35 low byte); a slot table (one pstate_idx per present pstate) base
@@ -1326,7 +1326,7 @@ Unknown_7BF85571 = 0x7bf85571,
 /// `Unknown_7DBF2D2B` — GPUHandle::queryArchitecture sub-call - system/GPU identity
 Unknown_7DBF2D2B = 0x7dbf2d2b,
 /// TGP-watts power-control GET (NDA, ID 0x8B3E7343). Fills the 10016-byte
-/// read-modify-write buffer used by setTgpWatt (GPUMon sub_1400324A0). Paired
+/// read-modify-write buffer used by setTgpWatt (the ref tool sub_1400324A0). Paired
 /// with NvAPI_GPU_ClientTgpWattSetStatus. Struct version magic 0x12720 (v1|10016).
 NvAPI_GPU_ClientTgpWattGetStatus = 0x8b3e7343,
 /// `Unknown_8C45954D` — GPUHandle::getCpuClockRange - read CPU frequency range
@@ -1335,12 +1335,12 @@ Unknown_8C45954D = 0x8c45954d,
 Unknown_93456591 = 0x93456591,
 /// `Unknown_95E71AB6` — GPUHandle::setTempSim/disableTempSim - temperature simulation (VBIOS Secured Overrides)
 Unknown_95E71AB6 = 0x95e71ab6,
-/// P-State limit status (NDA-private, ID 0x9962C97C). RE'd from GPUMon's
+/// P-State limit status (NDA-private, ID 0x9962C97C). RE'd from the ref tool's
 /// `[GPUHandle::pollPState]` "get p state limit" branch. Returns the list of
 /// P-States currently locked by `NvAPI_GPU_PerfClientLimitsSetStatus`
 /// (0x39442CFB). 164-byte struct `{version: 0x10088, count:u32, entries[]}`
 /// where each entry is 2 bytes `{type:u8, pstate:u8}`; type==0x1A marks a
-/// locked pstate (GPUMon renders the locked set as "P0.P3.P5"). Distinct from
+/// locked pstate (the ref tool renders the locked set as "P0.P3.P5"). Distinct from
 /// the current-pstate query (GetCurrentPstate 0x927DA4F6) and from the full
 /// PerfClientLimits status (0xE440B867, 780B) — this is the lightweight
 /// "which pstates are locked" view.
@@ -1349,7 +1349,7 @@ NvAPI_GPU_ClientPStateLimitStatus = 0x9962c97c,
 Unknown_99FC9866 = 0x99fc9866,
 /// `Unknown_A5614A5D` — GPUHandle::queryGPUInfo sub-call - GPU info
 Unknown_A5614A5D = 0xa5614a5d,
-/// `Unknown_ADE08E5F` — sub_140001060 init: resolves a fn ptr (stored qword_140F1A7A8), likely NvAPI_PrivateInit variant [GPUMon init/teardown]
+/// `Unknown_ADE08E5F` — sub_140001060 init: resolves a fn ptr (stored qword_140F1A7A8), likely NvAPI_PrivateInit variant [the ref tool init/teardown]
 Unknown_ADE08E5F = 0xade08e5f,
 /// `Unknown_AF97FE75` — GPUHandle::pollTempSim - read temperature-simulation status
 Unknown_AF97FE75 = 0xaf97fe75,
@@ -1357,7 +1357,7 @@ Unknown_AF97FE75 = 0xaf97fe75,
 Unknown_B0031005 = 0xb0031005,
 /// QBoost controller GET info (NDA, ID 0xB4C5D8BA). Returns a 6300-byte
 /// controller table (version 0x1189C = v1|6300), 196 bytes/controller, up to
-/// 32 controllers. GPUMon `[DriverInvoker::populateQboostIndex]` scans it to
+/// 32 controllers. the ref tool `[DriverInvoker::populateQboostIndex]` scans it to
 /// find the active controller. ID kept for QI record only — NOT wrapped: the
 /// QBoost controller turned out NOT to be the PPAB-paired power slider (wrong
 /// path), so the nvoc surface was removed. The real mobile TGP path is the
@@ -1374,25 +1374,25 @@ Unknown_B6A3DA5B = 0xb6a3da5b,
 /// hypothesis; see NvAPI_GPU_ClientQboostGetInfo above).
 NvAPI_GPU_ClientQboostSetStatus = 0xb78734ab,
 /// TGP-watts power-control SET (NDA, ID 0xAFFC2279). Applies the 10016-byte
-/// buffer (target mW at buf+0x8A0+40*idx, byte-verified via WinDbg). GPUMon's
+/// buffer (target mW at buf+0x8A0+40*idx, byte-verified via WinDbg). the ref tool's
 /// `[GPUHandle::setTgpWatt]` writes watts→mW (×1000), range-checks against
 /// GetInfoPrivate's min/max; 0xFFFFFFFF = reset. NOTE: this is the ID used by
-/// GPUMonCmd.exe (sub_140001AC0 resolves 0xAFFC2279). The sibling GPUMon.exe
+/// the ref-tool CLI (sub_140001AC0 resolves 0xAFFC2279). The sibling the ref-tool GUI
 /// uses 0xBFF09E59 at the same thunk — BOTH are the setTgpWatt SET, one per
 /// binary. On RTX 4060 Laptop driver, QI(0xAFFC2279) resolves and
 /// QI(0xBFF09E59) returns NULL, so 0xAFFC2279 is the live ID. (Earlier I
 /// wrongly concluded 0xAFFC2279 was "not the SET" — corrected by live QI probe.)
 NvAPI_GPU_ClientTgpWattSetStatus = 0xaffc2279,
-/// TGP-watts power-control SET, GPUMon.exe variant (NDA, ID 0xBFF09E59). Same
-/// role as NvAPI_GPU_ClientTgpWattSetStatus above; GPUMon.exe's thunk resolves
+/// TGP-watts power-control SET, the ref-tool GUI variant (NDA, ID 0xBFF09E59). Same
+/// role as NvAPI_GPU_ClientTgpWattSetStatus above; the ref-tool GUI's thunk resolves
 /// this ID. Returns NULL from QI on the RTX 4060 Laptop driver (the
-/// GPUMonCmd/GPUMonCmd variant 0xAFFC2279 is the live one there). Kept
+/// the ref-tool CLI/the ref-tool CLI variant 0xAFFC2279 is the live one there). Kept
 /// registered for completeness.
 NvAPI_GPU_ClientTgpWattSetStatus_GpuMonExe = 0xbff09e59,
 /// `NvAPI_GPU_ClientThermalTargetGetStatus` — GPUHandle::setTargetTemperature
 /// GET-prime (NDA-private, ID 0xC4554575). The read half of the mobile temp-wall
 /// (targettemp) RMW: fills a 992-byte control buffer that the caller patches then
-/// SETs via NvAPI_GPU_ClientThermalTargetSetStatus. RE'd from GPUMonCmd
+/// SETs via NvAPI_GPU_ClientThermalTargetSetStatus. RE'd from the ref-tool CLI
 /// sub_1400040A0; resolves in nvoc's process (probe-confirmed on RTX 4060 Laptop).
 NvAPI_GPU_ClientThermalTargetGetStatus = 0xc4554575,
 /// `Unknown_C74BFB78` — DriverInvoker::getThermalController/setThermalController - thermal controller enable/disable
@@ -1429,15 +1429,15 @@ Unknown_F9E92A44 = 0xf9e92a44,
 // ---------------------------------------------------------------------------
 // source: gpumon.exe + gpumoncmd.exe — second extraction pass (complete surface)
 //
-// These IDs come from a FULL re-extraction of BOTH GPUMon binaries' nvapi
+// These IDs come from a FULL re-extraction of BOTH the ref tool binaries' nvapi
 // QueryInterface surface (authoritative: xref walk of the cached QI pointer
-// in each binary — GPUMon.exe 124 distinct IDs @ qword_140F1A7B8, GPUMonCmd.exe
+// in each binary — the ref-tool GUI 124 distinct IDs @ qword_140F1A7B8, the ref-tool CLI
 // 100 distinct IDs @ qword_1400AA948; union = 127). The earlier gpumon.exe
 // block above was hand-built from a PARTIAL extraction and missed these; the
 // complete walk plus the previously-unreversed gpumoncmd.exe surfaced 22 IDs
 // absent from this registry. See reverse/full_surface_final.json for the
 // per-binary presence table and reverse/gpumoncmd-nvapi-extract.md for the
-// gpumoncmd-specific pass. Each name below is grounded in the GPUMon
+// gpumoncmd-specific pass. Each name below is grounded in the the ref tool
 // `[GPUHandle::method]` / `[DriverInvoker::method]` log string of the thunk's
 // caller (re-verified via IDA MCP this pass), not guessed from the ID.
 
@@ -1462,17 +1462,17 @@ Unknown_7DBE90AB = 0x7dbe90ab,
 /// `Unknown_AFF54A75` — GPUHandle::queryArchitecture - arch info query
 Unknown_AFF54A75 = 0xaff54a75,
 // NOTE: 0xAFFC2279 is registered above as NvAPI_GPU_ClientTgpWattSetStatus
-// (the setTgpWatt SET, GPUMonCmd variant — live-verified resolvable on RTX 4060
-// Laptop driver, unlike the GPUMon.exe sibling 0xBFF09E59 which QI-returns NULL
+// (the setTgpWatt SET, the ref-tool CLI variant — live-verified resolvable on RTX 4060
+// Laptop driver, unlike the the ref-tool GUI sibling 0xBFF09E59 which QI-returns NULL
 // there). The earlier "Unknown_AFFC2279 / role unconfirmed" entry was removed.
 /// `Unknown_C118ED82` — GPUHandle::pollGc6Statistics - GC6 (link-off) residency statistics
 Unknown_C118ED82 = 0xc118ed82,
-/// Rated-TDP control (NDA-private, ID 0xC9E9BB33). RE'd from GPUMon's
+/// Rated-TDP control (NDA-private, ID 0xC9E9BB33). RE'd from the ref tool's
 /// `[GPUHandle::setRatedTdp]`/`[GPUHandle::clearRatedTdp]` (cmdPState index==0
 /// path + the setPState preamble). NOT a P-State lock (that's
 /// `NvAPI_GPU_PerfClientLimitsSetStatus` 0x39442CFB) despite an earlier naming
 /// pass mislabeling it. 12-byte struct `{version: 0x1000C, dword1: 1, mode}`:
-///   - mode=3 → ENABLE rated-TDP control (the "P0.TDP" level, GPUMon -pstate:0)
+///   - mode=3 → ENABLE rated-TDP control (the "P0.TDP" level, the ref tool -pstate:0)
 ///   - mode=0 → DISABLE/clear (setPState calls this first to reset before
 ///     applying a new P-State/frequency lock via 0x39442CFB).
 /// "Rated TDP" = the GPU's nominal/default power baseline.
@@ -1480,7 +1480,7 @@ NvAPI_GPU_ClientRatedTdpControl = 0xc9e9bb33,
 /// `NvAPI_GPU_ClientThermalTargetSetStatus` — GPUHandle::setTargetTemperature
 /// SET (NDA-private, ID 0xE097144F). The write half of the mobile temp-wall
 /// (targettemp): applies the 992-byte control buffer (target temp = celsius*256
-/// at dword 15*idx+7). RE'd from GPUMonCmd sub_140004170 / sub_140013090.
+/// at dword 15*idx+7). RE'd from the ref-tool CLI sub_140004170 / sub_140013090.
 /// NOTE: this is NOT the phantom 0xE0765B6F (that ID resolves to NULL in every
 /// process — a prior session's mis-hex-conversion of this very decimal value
 /// 3767997519 caused hours of misdirection). Resolves in nvoc's process
@@ -1495,26 +1495,26 @@ Unknown_EFCEDD1F = 0xefcedd1f,
 /// `Unknown_F9D60904` — GPUHandle::pollPowerState - power supply state (AC/DC) read
 Unknown_F9D60904 = 0xf9d60904,
 
-// --- gpumoncmd.exe-only IDs (NOT present in GPUMon.exe) ---
+// --- gpumoncmd.exe-only IDs (NOT present in the ref-tool GUI) ---
 /// `Unknown_01510308` — gpumoncmd.exe init stub - private init/enum resolver (cached @ 0x1400AA940)
 Unknown_01510308 = 0x01510308,
-// NOTE: 0x33C7F5EC and 0x594762E4 are already registered above (GPUMon init
+// NOTE: 0x33C7F5EC and 0x594762E4 are already registered above (the ref tool init
 // debug-probe). In gpumoncmd.exe these SAME two IDs are additionally used as
 // per-call ENTER/EXIT profiling hooks wrapping every API call — see the
 // existing entries at Unknown_33C7F5EC / Unknown_594762E4 above.
 
-// --- GPUMon.exe init-stub lifecycle resolvers (resolved at LoadLibrary time,
+// --- the ref-tool GUI init-stub lifecycle resolvers (resolved at LoadLibrary time,
 // cached in qword_140F1A7A8/A7B0/A7C8/A7D0; not per-frame thunks). Kept as
 // documentation-only records so the IIDs are reserved/known. ---
-/// Private NVAPI lifecycle/controller init (NDA, ID 0xAD298D3F). GPUMon's
+/// Private NVAPI lifecycle/controller init (NDA, ID 0xAD298D3F). the ref tool's
 /// init stub (sub_140001060) resolves this and calls it as `fn(arg)` with
 /// arg=1 (the "controller/client register" path) BEFORE any power-control
 /// setter. Without it, the Dynamic-Boost / QBoost setters return
 /// NVAPI_API_NOT_INITIALIZED. Single u32 by-value arg (NOT a per-GPU call).
 NvAPI_GPU_PrivateLifecycleInit = 0xad298d3f,
-/// `Unknown_33C7358C` — GPUMon.exe init - secondary lifecycle resolver (cached @ qword_140F1A7C8)
+/// `Unknown_33C7358C` — the ref-tool GUI init - secondary lifecycle resolver (cached @ qword_140F1A7C8)
 Unknown_33C7358C_LifecycleInit = 0x33c7358c,
-/// `Unknown_593E8644` — GPUMon.exe init - secondary lifecycle resolver (cached @ qword_140F1A7D0)
+/// `Unknown_593E8644` — the ref-tool GUI init - secondary lifecycle resolver (cached @ qword_140F1A7D0)
 Unknown_593E8644_LifecycleInit = 0x593e8644,
 
 }

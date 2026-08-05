@@ -625,7 +625,7 @@ impl Gpu {
 
     /// P-State level table (present pstates + per-pstate min/max clock in kHz
     /// for the given clock-domain) from the private PerfPstatesGetInfo (NDA
-    /// 0x7B30AE0D). Source of GPUMon's `-pstate` GET listing. `domain` selects
+    /// 0x7B30AE0D). Source of the ref tool's `-pstate` GET listing. `domain` selects
     /// the clock dimension (0=GPC/core by default). `Ok(None)` if not exposed.
     pub fn pstate_levels_domain(
         &self,
@@ -645,7 +645,7 @@ impl Gpu {
         self.gpu.pstate_lock_status().map_err(Into::into)
     }
 
-    /// Set the native NVAPI P-State lock (NDA 0x39442CFB, the GPUMon
+    /// Set the native NVAPI P-State lock (NDA 0x39442CFB, the the ref tool
     /// `-pstate:<index>` SETTER). See [`nvapi::PStateNativeLock`].
     pub fn set_pstate_native(&self, lock: nvapi::PStateNativeLock) -> nvapi::Result<()> {
         self.gpu.set_pstate_native(lock).map_err(Into::into)

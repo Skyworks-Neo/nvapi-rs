@@ -929,8 +929,8 @@ impl PhysicalGpu {
     /// power coordination between dGPU and CPU). `active = true` enables the
     /// controller (the "PPAB Enable" checkbox in OEM partner tools), `false`
     /// disables it. NDA-private ID 0x1504FC3D; GLOBAL single-arg boolean setter
-    /// (no per-GPU handle — targets the implicitly-selected GPU, like GPUMon).
-    /// Calls the private lifecycle init (0xAD298D3F) first, exactly as GPUMon's
+    /// (no per-GPU handle — targets the implicitly-selected GPU, like the ref tool).
+    /// Calls the private lifecycle init (0xAD298D3F) first, exactly as the ref tool's
     /// init stub does — without it the driver returns API_NOT_INITIALIZED.
     pub fn set_dynamic_boost(&self, active: bool) -> crate::NvapiResult<()> {
         trace!("gpu.set_dynamic_boost({})", active);
@@ -938,7 +938,7 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientDynamicBoostSetStatus(active.into())) }
     }
 
-    /// Private NVAPI lifecycle/controller init (NDA 0xAD298D3F). GPUMon calls
+    /// Private NVAPI lifecycle/controller init (NDA 0xAD298D3F). the ref tool calls
     /// this with arg=1 at init, before any Dynamic-Boost/QBoost power setter.
     /// Required to avoid NVAPI_API_NOT_INITIALIZED from those setters.
     pub fn private_lifecycle_init(&self) -> crate::NvapiResult<()> {
@@ -949,7 +949,7 @@ impl PhysicalGpu {
     /// TGP-watts power range (min/default/max in **milliwatts**) + the active
     /// policy-table index, from the private ClientPowerPoliciesGetInfo variant
     /// (NDA, ID 0x67F31384). `policy_index` defaults to 2 when the driver
-    /// reports none (0xFF), matching GPUMon. Returns `Ok(None)` where the
+    /// reports none (0xFF), matching the ref tool. Returns `Ok(None)` where the
     /// driver does not expose the private interface.
     pub fn tgp_watt_range(&self) -> crate::NvapiResult<Option<TgpWattRange>> {
         trace!("gpu.tgp_watt_range()");
@@ -993,7 +993,7 @@ impl PhysicalGpu {
     /// power-cap table, from the SAME private ClientPowerPoliciesGetInfo variant
     /// as [`tgp_watt_range`] (NDA, ID `0x67F31384`). The D-Notifier fields live
     /// in the TAIL of the 347KB struct (after the TGP policy table). RE'd from
-    /// GPUMon `[GPUHandle::pollDNotifyLimit]`; power values cross-checked live
+    /// the ref tool `[GPUHandle::pollDNotifyLimit]`; power values cross-checked live
     /// on RTX 4060 Laptop (D2=55W, D3=45W, D4=33W, D5=10W, D1=Unlimited).
     /// Returns `Ok(None)` where the driver doesn't expose the private interface.
     pub fn dnotify_info(&self) -> crate::NvapiResult<Option<DNotifierInfo>> {
@@ -1050,25 +1050,25 @@ impl PhysicalGpu {
 
     /// Set the D-Notifier (D0-notify) limit to the given D level. `didx` is the
     /// signed driver level code: `-1`=D1/Unlimited, `0`=D2, `1`=D3, `2`=D4,
-    /// `3`=D5 — exactly the values GPUMon's `setDNotifyLimit` switch maps from
+    /// `3`=D5 — exactly the values the ref tool's `setDNotifyLimit` switch maps from
     /// the D1..D5 CLI args. Raw two-arg NDA setter (NvAPI_GPU_ClientExtern
     /// PowerState set, ID `0x48E0847D`): `(hPhysicalGPU, level: u32)` — no struct
     /// buffer. The level is passed as a raw u32 (sign-extended for D1's -1).
     pub fn set_dnotify_limit(&self, didx: i32) -> crate::NvapiResult<()> {
         trace!("gpu.set_dnotify_limit({})", didx);
-        // GPUMon's process performs a private lifecycle init at startup before
+        // the ref tool's process performs a private lifecycle init at startup before
         // any power-control setter; mirror that (harmless if already done), the
         // same guard set_dynamic_boost / set_tgp_watt use.
         self.private_lifecycle_init()?;
         // Pass the signed level as a u32 (0xFFFFFFFF for D1's -1, matching
-        // GPUMon's mov v15, -1).
+        // the ref tool's mov v15, -1).
         unsafe { nvcall!(NvAPI_GPU_ClientExternPowerStateSet(self.0, didx as u32)) }
     }
 
     /// P-State level table (present pstates + per-pstate min/max clock in kHz
     /// for the given clock-domain) from the private PerfPstatesGetInfo
-    /// (`0x7B30AE0D`). The source of GPUMon's `-pstate` GET listing. `domain`
-    /// selects the clock dimension (0=GPC/core by default; GPUMon resolves the
+    /// (`0x7B30AE0D`). The source of the ref tool's `-pstate` GET listing. `domain`
+    /// selects the clock dimension (0=GPC/core by default; the ref tool resolves the
     /// GPC index via 0x57B5A5DF). Returns `Ok(None)` where the driver doesn't
     /// expose the private interface.
     pub fn pstate_levels_domain(
@@ -1120,7 +1120,7 @@ impl PhysicalGpu {
         trace!("gpu.pstate_lock_status()");
         // 164-byte struct — heap-backed. The driver's version magic 0x10088
         // reports size 136 (v1); write it raw since it doesn't match the
-        // 164-byte buffer GPUMon allocates.
+        // 164-byte buffer the ref tool allocates.
         let mut buf: Vec<u8> =
             vec![0u8; std::mem::size_of::<clock::private::NV_GPU_CLIENT_PSTATE_LIMIT_STATUS>()];
         buf[..4].copy_from_slice(&0x10088u32.to_ne_bytes());
@@ -1135,8 +1135,8 @@ impl PhysicalGpu {
         Ok(Some(status.locked_pstates()))
     }
 
-    /// Set the native NVAPI P-State lock (the GPUMon `-pstate:<index>` SETTER,
-    /// PerfClientLimitsSetStatus NDA 0x39442CFB). RE'd byte-exact from GPUMon's
+    /// Set the native NVAPI P-State lock (the the ref tool `-pstate:<index>` SETTER,
+    /// PerfClientLimitsSetStatus NDA 0x39442CFB). RE'd byte-exact from the ref tool's
     /// `[GPUHandle::setPState]`:
     ///
     /// - `PStateNativeLock::Reset` → 4 entries clearing limit IDs 0,1,4,5
@@ -1148,7 +1148,7 @@ impl PhysicalGpu {
     ///   id 5/4 mode 1 (PstateSelect) value=pstate.
     ///
     /// Calls the private lifecycle init + clearRatedTdp (0xC9E9BB33 mode 0)
-    /// first, exactly as GPUMon's setPState does. `freq_khz` is in kHz
+    /// first, exactly as the ref tool's setPState does. `freq_khz` is in kHz
     /// (MHz × 1000). Returns Ok if the lock applied.
     pub fn set_pstate_native(&self, lock: PStateNativeLock) -> crate::NvapiResult<()> {
         trace!("gpu.set_pstate_native({:?})", lock);
@@ -1205,7 +1205,7 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_PerfClientLimitsSetStatus(self.0, buf.as_ptr() as *const _)) }
     }
 
-    /// Clear the rated-TDP control (NDA 0xC9E9BB33, mode 0). GPUMon's setPState
+    /// Clear the rated-TDP control (NDA 0xC9E9BB33, mode 0). the ref tool's setPState
     /// calls this before applying a new P-State/frequency lock. "Rated TDP" =
     /// the nominal default power baseline.
     fn clear_rated_tdp(&self) -> crate::NvapiResult<()> {
@@ -1219,13 +1219,13 @@ impl PhysicalGpu {
     }
 
     /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
-    /// read-modify-write the GPUMon `setTgpWatt` does: GET the 10016-byte
+    /// read-modify-write the the ref tool `setTgpWatt` does: GET the 10016-byte
     /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
     /// field to `watts × 1000` mW, SET it back (NDA 0xBFF09E59). `policy_index`
     /// selects the entry (the mask bit); use the index from [`tgp_watt_range`].
     /// Returns the resolved milliwatts actually written.
     /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
-    /// read-modify-write the GPUMon `setTgpWatt` does: GET the 10016-byte
+    /// read-modify-write the the ref tool `setTgpWatt` does: GET the 10016-byte
     /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
     /// field to `watts × 1000` mW, SET it back (NDA 0xBFF09E59). `policy_index`
     /// selects the entry (the mask bit); use the index from [`tgp_watt_range`].
@@ -1234,19 +1234,19 @@ impl PhysicalGpu {
     /// **Driver-gate caveat (RTX 4060 Laptop, driver r576):** the SET entry
     /// point 0xBFF09E59 is NOT resolvable from nvoc's process —
     /// `nvapi_QueryInterface(0xBFF09E59)` returns NULL (QI for the paired GET
-    /// 0x8B3E7343 succeeds). GPUMon's process resolves it, so GPUMon's
-    /// `-gpupwr:<watts>` works; something in GPUMon's full driver-invoker setup
+    /// 0x8B3E7343 succeeds). the ref tool's process resolves it, so the ref tool's
+    /// `-gpupwr:<watts>` works; something in the ref tool's full driver-invoker setup
     /// (NvPCF/QBoost-controller init, or even WinRing0) registers the entry
     /// point. The call here therefore returns `NoImplementation` on this driver
     /// until that registration path is reproduced. The buffer layout, magic,
-    /// mask, and power-field offset are all byte-verified against GPUMon via
+    /// mask, and power-field offset are all byte-verified against the ref tool via
     /// WinDbg (handle 0x100, magic 0x12720, mask 1<<idx, mW @ buf+0x8A0+40*idx).
     pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> crate::NvapiResult<u32> {
         trace!("gpu.set_tgp_watt({} W, idx {})", watts, policy_index);
-        // GPUMon's init stub calls the private lifecycle init 0xAD298D3F(1) at
+        // the ref tool's init stub calls the private lifecycle init 0xAD298D3F(1) at
         // process startup before ANY power-control NVAPI call. Mirror that.
         self.private_lifecycle_init()?;
-        // GPUMon's setTgpWatt runs AFTER queryPowerPolicy (GetInfoPrivate) has
+        // the ref tool's setTgpWatt runs AFTER queryPowerPolicy (GetInfoPrivate) has
         // populated the GPUHandle's policy state. Mirror that: call the private
         // GetInfo first so the driver's power-policy state is primed.
         let _ = self.tgp_watt_range()?;
@@ -1447,10 +1447,10 @@ impl PhysicalGpu {
     }
 
     /// Query the private ClientThermalPolicies GetInfo (0x2F69F8E5) once and
-    /// return the policy index GPUMon itself uses for target-temp control:
+    /// return the policy index the ref tool itself uses for target-temp control:
     /// GPS index if the VBIOS exposes one, else the acoustics index (desktop
     /// fallback = NVML AcousticCurr), else None. This is the authoritative
-    /// per-GPU discovery that replaces hardcoding idx 2. RE'd from GPUMonCmd
+    /// per-GPU discovery that replaces hardcoding idx 2. RE'd from the ref-tool CLI
     /// GPUHandle::queryTargetTemperature (sub_14002C410).
     pub fn target_temp_policy_index(&self) -> crate::Result<Option<usize>> {
         trace!("gpu.target_temp_policy_index()");
@@ -1554,7 +1554,7 @@ impl PhysicalGpu {
 
     /// Set the target-temperature wall (mobile "targettemp") to `celsius` for the
     /// given policy index. Uses the PRIVATE ClientThermalPolicies RMW pair (NDA
-    /// GET-prime 0xC4554575 + SET 0xE097144F) — the path GPUMonCmd
+    /// GET-prime 0xC4554575 + SET 0xE097144F) — the path the ref-tool CLI
     /// `-targettemp:<C>` uses and that persists on mobile GPUs (nvidia-smi
     /// confirms). The documented ClientThermalPoliciesSetStatus 0x34C0B13D
     /// returns OK on mobile but does NOT persist; this private pair does.
@@ -1563,12 +1563,12 @@ impl PhysicalGpu {
     /// Temperature") policy is **index 2** (confirmed via nvidia-smi cross-check;
     /// idx 2 reads/writes the 87C wall). idx 0/1/4 are other thermal policies
     /// (slowdown/etc), idx 3/5/6/7 are invalid. Callers should discover the
-    /// right index per-GPU (GPUMon stores it in its GPUHandle at `v9[776]`,
+    /// right index per-GPU (the ref tool stores it in its GPUHandle at `v9[776]`,
     /// populated from ClientThermalPoliciesGetInfo 0x0D258BB5).
     ///
-    /// Mirrors GPUMonCmd sub_140013090: GET-prime to fill the buffer, patch the
+    /// Mirrors the ref-tool CLI sub_140013090: GET-prime to fill the buffer, patch the
     /// entry's Q8 temp field (celsius*256 at dword 15*idx+7), SET it back.
-    /// Caller is responsible for clamping `celsius` to the VBIOS range (GPUMon
+    /// Caller is responsible for clamping `celsius` to the VBIOS range (the ref tool
     /// enforces [min, max] from the GPUHandle; out-of-range values make SET
     /// return a generic Error).
     pub fn set_target_temperature(
@@ -2608,7 +2608,7 @@ pub struct DNotifierLevel {
     /// The signed level code the driver uses (-1=D1, 0=D2, 1=D3, 2=D4, 3=D5).
     pub index: i32,
     /// Power cap in **milliwatts** when this level is active; `None` = Unlimited
-    /// (D1). RE'd from GPUMon's "D{n}({power}mW)" string.
+    /// (D1). RE'd from the ref tool's "D{n}({power}mW)" string.
     pub power_mw: Option<u32>,
 }
 
@@ -2649,7 +2649,7 @@ pub struct DNotifierInfo {
 }
 
 /// One P-State entry from the private PerfPstatesGetInfo table (`0x7B30AE0D`):
-/// the pstate number and its min/max core clock in kHz. RE'd from GPUMon's
+/// the pstate number and its min/max core clock in kHz. RE'd from the ref tool's
 /// `queryPStateInfo` (the source of `-pstate` GET).
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2670,19 +2670,19 @@ pub struct PStateLevelsInfo {
     pub pstates: Vec<PStateClockRange>,
 }
 
-/// Native NVAPI P-State lock request (the GPUMon `-pstate:<index>` SETTER,
-/// PerfClientLimitsSetStatus 0x39442CFB). RE'd from GPUMon's setPState.
+/// Native NVAPI P-State lock request (the the ref tool `-pstate:<index>` SETTER,
+/// PerfClientLimitsSetStatus 0x39442CFB). RE'd from the ref tool's setPState.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PStateNativeLock {
-    /// Reset all P-State locks to default (GPUMon `-pstate:-1`).
+    /// Reset all P-State locks to default (the ref tool `-pstate:-1`).
     Reset,
     /// Pin the active P-State to `pstate` without locking a frequency
-    /// (GPUMon setPState with freq=-1).
+    /// (the ref tool setPState with freq=-1).
     PstateOnly {
         pstate: u8,
     },
     /// Pin the active P-State AND lock its frequency to `freq_khz`
-    /// (GPUMon setPState with both pstate and freq). `freq_khz` is MHz × 1000.
+    /// (the ref tool setPState with both pstate and freq). `freq_khz` is MHz × 1000.
     PstateAndFreq {
         pstate: u8,
         freq_khz: u32,
