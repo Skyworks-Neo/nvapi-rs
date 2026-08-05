@@ -89,9 +89,19 @@ fn main() {
     std::thread::sleep(std::time::Duration::from_secs(idle_secs));
     try_read("post-second-idle", gpu);
 
+    println!("\n== step 7b: CONTROL — read AGAIN with no force_gc6_exit in between ==");
+    println!("  (if this 2nd read is OK, then a plain failed GET woke the GPU and");
+    println!("   force_gc6_exit is NOT special — any RM call would do. If still -220,");
+    println!("   only force_gc6_exit wakes it.)");
+    try_read("second-read-no-wake", gpu);
+
     println!("\n== step 8: force_gc6_exit + immediate read, no idle gap ==");
     let _ = gpu.force_gc6_exit();
     try_read("force_exit-then-read", gpu);
 
-    println!("\nDone. If step3 was ERR but step5 OK, force_gc6_exit wakes an idle dGPU.");
+    println!("\nDone. Verdict rules:");
+    println!("  - step3 ERR + step5 OK          => force_gc6_exit wakes (prima facie)");
+    println!("  - step7b ERR (2nd read still -220) => confirms plain GET does NOT wake");
+    println!("  => together: force_gc6_exit is the SPECIFIC wake, not any RM call.");
 }
+
