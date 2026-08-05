@@ -1,50 +1,52 @@
-//! Controlled long-lived probe: does force_gc6_exit independently wake an
-//! idle/GCOFF dGPU, WITHOUT relying on dashboard polling keep-alive?
+//! Controlled probe: independently verify BOTH GC6 wake interfaces can wake an
+//! idle/GCOFF'd dGPU, each tested in its own clean idle->wake cycle so neither
+//! benefits from the other's prior wake.
 //!
 //! Run: `cargo run --release -p nvapi --example probe_gc6_idle_wake -- <secs>`
 //!
-//! Background: GUI fails NVAPI ops with -220 after idle because the dGPU enters
-//! GCOFF. Dashboard high-frequency polling (0.3s) suppresses GCOFF as a
-//! "symptom-fix" (keeps the driver too busy to power down). This probe tests
-//! whether force_gc6_exit / gc6_force_wake can wake the GPU on demand after it
-//! has naturally powered down — the "root-cause fix" that would not need
-//! continuous polling.
+//! Two wake interfaces (both confirmed QI-resolved on the 610 driver):
+//!   force_gc6_exit  (0x55590CB2) — fn(hGpu), escape 0x10000FC, no struct
+//!   gc6_force_wake  (0xD387D414 cmd=2) — fn(hGpu,*12B magic 0x1000C), escape 0x70000ED
 //!
-//! Protocol (single process, no background polling — lets the GPU idle freely):
-//!   1. initialize + enumerate (GPU likely awake right after enumerate).
-//!   2. sleep <secs> with NO nvapi/nvml calls → let the dGPU enter GCOFF.
-//!   3. probe a read op (pstates) — expect -220 if GCOFF took hold.
-//!   4. call force_gc6_exit.
-//!   5. immediately re-probe the read op — does it now succeed? (wake verdict)
-//!   6. call gc6_force_wake (cmd=2), re-probe.
-//!   7. optional: sleep again + re-probe to see if the wake persisted.
+//! Each wake interface is tested in isolation:
+//!   idle -> read (confirm -220, i.e. truly GCOFF) -> wake -> read (verdict)
+//! Plus a CONTROL cycle that does read->read (no wake) to prove plain GETs don't wake.
 //!
-//! Interpretation:
-//!   - If step 3 fails (-220) but step 5 succeeds → force_gc6_exit DOES wake.
-//!   - If step 5 still fails → force_gc6_exit alone is insufficient; you need
-//!     either polling keep-alive or a different mechanism.
+//! Verdict per interface:
+//!   read-after-idle = -220 AND read-after-wake = OK  => independently wakes.
+//!   read-after-wake = -220                            => does NOT independently wake.
 
 use nvapi::PhysicalGpu;
 use std::env;
+use std::time::Duration;
 
-fn try_read(label: &str, gpu: &PhysicalGpu) {
+fn idle_then(secs: u64, label: &str) {
+    println!("\n  [idle {}s — no nvapi/nvml calls, let GCOFF take hold]", secs);
+    std::thread::sleep(Duration::from_secs(secs));
+    println!("  --- {} ---", label);
+}
+
+fn read(gpu: &PhysicalGpu, label: &str) -> bool {
     match gpu.pstates() {
-        Ok(_) => println!("  [{}] pstates() -> OK (GPU powered)", label),
-        Err(e) => println!("  [{}] pstates() -> ERR {:?} (GPU not powered?)", label, e),
+        Ok(_) => {
+            println!("    [{}] pstates() -> OK (powered)", label);
+            true
+        }
+        Err(e) => {
+            println!("    [{}] pstates() -> ERR {:?} (not powered)", label, e);
+            false
+        }
     }
 }
 
 fn main() {
-    let idle_secs: u64 = env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
+    let secs: u64 = env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(20);
 
     println!("== initialize ==");
     match nvapi::initialize() {
         Ok(_) => {}
         Err(e) => {
-            println!("  initialize failed: {:?} (GPU already hard-GCOFF)", e);
+            println!("  initialize failed: {:?} (GPU hard-GCOFF at init)", e);
             return;
         }
     }
@@ -55,53 +57,47 @@ fn main() {
     }
     let gpu = &gpus[0];
     println!("  GPU[0] enumerated");
+    read(gpu, "post-enumerate");
 
-    println!("\n== step 1: read right after enumerate (should be powered) ==");
-    try_read("post-enumerate", gpu);
+    // ---------- CYCLE 1: CONTROL (plain GET does not wake) ----------
+    println!("\n=== CYCLE 1: CONTROL — plain GET after idle (proves GET alone doesn't wake) ===");
+    idle_then(secs, "1st read after idle");
+    let _ = read(gpu, "control-1st");
+    println!("  (2nd read immediately, no wake in between:)");
+    let _ = read(gpu, "control-2nd");
 
-    println!(
-        "\n== step 2: sleeping {}s with NO nvapi/nvml calls (let GCOFF take hold) ==",
-        idle_secs
-    );
-    std::thread::sleep(std::time::Duration::from_secs(idle_secs));
-
-    println!("\n== step 3: read after idle (expect -220 if GCOFF'd) ==");
-    try_read("post-idle", gpu);
-
-    println!("\n== step 4: force_gc6_exit (0x55590CB2) ==");
+    // ---------- CYCLE 2: force_gc6_exit ----------
+    println!("\n=== CYCLE 2: force_gc6_exit (0x55590CB2) — independent wake test ===");
+    idle_then(secs, "read after idle (expect -220)");
+    let before = read(gpu, "pre-force_gc6_exit");
     match gpu.force_gc6_exit() {
-        Ok(_) => println!("  ok"),
-        Err(e) => println!("  ERR {:?}", e),
+        Ok(_) => println!("    force_gc6_exit -> ok"),
+        Err(e) => println!("    force_gc6_exit -> ERR {:?}", e),
     }
+    let after = read(gpu, "post-force_gc6_exit");
+    verdict("force_gc6_exit", before, after);
 
-    println!("\n== step 5: read immediately after force_gc6_exit (WAKE VERDICT) ==");
-    try_read("post-force_gc6_exit", gpu);
-
-    println!("\n== step 6: gc6_force_wake (0xD387D414 cmd=2) ==");
+    // ---------- CYCLE 3: gc6_force_wake ----------
+    println!("\n=== CYCLE 3: gc6_force_wake (0xD387D414 cmd=2) — independent wake test ===");
+    idle_then(secs, "read after idle (expect -220)");
+    let before = read(gpu, "pre-gc6_force_wake");
     match gpu.gc6_force_wake() {
-        Ok(s) => println!("  ok, state={}", s),
-        Err(e) => println!("  ERR {:?}", e),
+        Ok(s) => println!("    gc6_force_wake -> ok, state={}", s),
+        Err(e) => println!("    gc6_force_wake -> ERR {:?}", e),
     }
-    println!("\n== step 6b: read after gc6_force_wake ==");
-    try_read("post-gc6_force_wake", gpu);
+    let after = read(gpu, "post-gc6_force_wake");
+    verdict("gc6_force_wake", before, after);
 
-    println!("\n== step 7: sleep {}s again, then read (did wake persist?) ==", idle_secs);
-    std::thread::sleep(std::time::Duration::from_secs(idle_secs));
-    try_read("post-second-idle", gpu);
-
-    println!("\n== step 7b: CONTROL — read AGAIN with no force_gc6_exit in between ==");
-    println!("  (if this 2nd read is OK, then a plain failed GET woke the GPU and");
-    println!("   force_gc6_exit is NOT special — any RM call would do. If still -220,");
-    println!("   only force_gc6_exit wakes it.)");
-    try_read("second-read-no-wake", gpu);
-
-    println!("\n== step 8: force_gc6_exit + immediate read, no idle gap ==");
-    let _ = gpu.force_gc6_exit();
-    try_read("force_exit-then-read", gpu);
-
-    println!("\nDone. Verdict rules:");
-    println!("  - step3 ERR + step5 OK          => force_gc6_exit wakes (prima facie)");
-    println!("  - step7b ERR (2nd read still -220) => confirms plain GET does NOT wake");
-    println!("  => together: force_gc6_exit is the SPECIFIC wake, not any RM call.");
+    println!("\nDone.");
 }
 
+fn verdict(name: &str, before: bool, after: bool) {
+    println!("  VERDICT {}: before_wake={}, after_wake={}", name, before, after);
+    if !before && after {
+        println!("    => {} INDEPENDENTLY wakes a GCOFF'd dGPU.", name);
+    } else if !after {
+        println!("    => {} does NOT independently wake.", name);
+    } else {
+        println!("    => inconclusive (GPU was already powered before wake — idle too short?).");
+    }
+}
