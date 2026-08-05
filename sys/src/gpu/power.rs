@@ -498,6 +498,68 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClientExternPowerStateSet(hPhysicalGPU: NvPhysicalGpuHandle, level: u32) -> NvAPI_Status;
     }
 
+    // ------------------------------------------------------------------
+    // GC6 / RTD3 force-wake control (NDA). On 610-series mobile drivers the
+    // dGPU enters GC6 (link-off) / GCOFF aggressively when idle, which makes
+    // overclock operations fail with NVAPI_GPU_NOT_POWERED (-220) or makes
+    // NvAPI_Initialize itself return NvidiaDeviceNotFound. These two IDs are
+    // the RM-level force-wake path the kernel driver honors — confirmed live
+    // (both resolve non-NULL via QueryInterface on the 610 driver) and RE'd
+    // from nvapi64_impl.dll. Neither has a per-call GCOFF guard; the only gate
+    // is the one-shot nvapi-init flag, so they CAN wake a powered-down dGPU.
+    //
+    // Sources / addresses (nvapi64_impl.dll):
+    //   ForceGC6Exit: handler sub_180187930, RM escape 0x10000FC
+    //   GC6Control:   handler sub_180187CA0, RM escape 0x70000ED
+    // ------------------------------------------------------------------
+
+    /// `cmd` enum for [`NV_GPU_GC6_CONTROL_V1`] — the action the GC6Control
+    /// escape commands the RM driver to take.
+    pub const NV_GPU_GC6_CONTROL_CMD_QUERY: u32 = 0; // read current state into `result`
+    pub const NV_GPU_GC6_CONTROL_CMD_SLEEP: u32 = 1; // force GC6 entry (idle the dGPU)
+    pub const NV_GPU_GC6_CONTROL_CMD_WAKE: u32 = 2;  // force GC6 exit (wake the dGPU)
+
+    /// `result` enum for [`NV_GPU_GC6_CONTROL_V1`] — decoded GC6 power state
+    /// (populated when `cmd == NV_GPU_GC6_CONTROL_CMD_QUERY`).
+    pub const NV_GPU_GC6_STATE_OK: u32 = 0;       // command succeeded / no state to report
+    pub const NV_GPU_GC6_STATE_GC6_IDLE: u32 = 2; // dGPU is in GC6 (link-off / idle)
+    pub const NV_GPU_GC6_STATE_D0_ACTIVE: u32 = 3; // dGPU is in D0 (active / powered on)
+    pub const NV_GPU_GC6_STATE_UNKNOWN: u32 = 4;
+
+    nvstruct! {
+        /// 12-byte GC6 control struct (version magic `0x1000C`, same v1/12-byte
+        /// family as `NV_GPU_RATED_TDP_CONTROL`). Layout: `[0..3]=version`,
+        /// `[4]=cmd` (one of `NV_GPU_GC6_CONTROL_CMD_*`), `[8]=result`
+        /// (one of `NV_GPU_GC6_STATE_*`, filled by the driver).
+        pub struct NV_GPU_GC6_CONTROL_V1 {
+            pub version: NvVersion,
+            /// Action: QUERY(0) / SLEEP(1) / WAKE(2). Anything else → -5 InvalidArgument.
+            pub cmd: u32,
+            /// Result-out: driver writes the GC6 state here (OK / GC6_IDLE / D0_ACTIVE).
+            pub result: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_GC6_CONTROL NV_GPU_GC6_CONTROL_V1(1) = 12 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xD387D414). GC6 control — query current GC6
+        /// power state (cmd=0), force GC6 entry/sleep (cmd=1), or force GC6
+        /// exit/wake (cmd=2). 12-byte struct, version magic 0x1000C. RM escape
+        /// 0x70000ED. The wake path (cmd=2) is one of the two force-wake routes
+        /// that reach the kernel driver without a per-call GCOFF guard.
+        pub unsafe fn NvAPI_GPU_GC6Control(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_GC6_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0x55590CB2). Force GC6 exit — a single-purpose
+        /// "wake the dGPU now" escape. Takes ONLY the GPU handle (no struct, no
+        /// version magic); the escape ID itself (0x10000FC) is the command.
+        /// Purpose-built counterpart to the GC6Control cmd=2 path but simpler.
+        /// Returns -104 (NoImplementation) on SKUs without GC6 support.
+        pub unsafe fn NvAPI_GPU_ForceGC6Exit(hPhysicalGPU: NvPhysicalGpuHandle) -> NvAPI_Status;
+    }
+
     nvstruct! {
         pub struct NV_GPU_CLIENT_POWER_TOPOLOGY_INFO_V1 {
             pub version: NvVersion,

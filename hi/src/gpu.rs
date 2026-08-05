@@ -651,6 +651,27 @@ impl Gpu {
         self.gpu.set_pstate_native(lock).map_err(Into::into)
     }
 
+    /// Force the dGPU out of GC6 / GCOFF — the one-shot wake (NDA 0x55590CB2).
+    /// Recommended first call before any overclock op on 610 mobile drivers
+    /// where the dGPU aggressively enters GC6 and makes ops fail with -220.
+    pub fn force_gc6_exit(&self) -> nvapi::Result<()> {
+        self.gpu.force_gc6_exit().map_err(Into::into)
+    }
+
+    /// Query the dGPU GC6 power state (NDA 0xD387D414, cmd=0). Returns the
+    /// driver state: 3 = D0/active (awake), 2 = GC6/idle (powered down),
+    /// 0 = OK/no report. Use after [`force_gc6_exit`] to confirm the wake.
+    pub fn gc6_query_state(&self) -> nvapi::Result<u32> {
+        self.gpu.gc6_query_state().map_err(Into::into)
+    }
+
+    /// Force the dGPU awake via the GC6Control cmd=2 path (NDA 0xD387D414).
+    /// Returns the post-wake state. Prefer [`Gpu::force_gc6_exit`] for a simpler
+    /// wake; this is the struct-based superset (also supports query/sleep).
+    pub fn gc6_force_wake(&self) -> nvapi::Result<u32> {
+        self.gpu.gc6_force_wake().map_err(Into::into)
+    }
+
     /// Read the target-temperature wall for one policy slot (private GET-prime
     /// 0xC4554575). `Ok(None)` if the driver doesn't expose that slot.
     pub fn target_temperature(&self, policy_index: usize) -> nvapi::Result<Option<f32>> {

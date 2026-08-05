@@ -1218,6 +1218,61 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientRatedTdpControl(self.0, buf.as_ptr() as *const _)) }
     }
 
+    /// GC6 / RTD3 force-wake control (NDA 0xD387D414). Commands the RM driver
+    /// to query (cmd=0), force-sleep (cmd=1), or force-wake (cmd=2) the dGPU's
+    /// GC6 power state. Returns the driver-decoded `result` state
+    /// (`NV_GPU_GC6_STATE_*`: D0_ACTIVE=3, GC6_IDLE=2, OK=0). Use cmd=0 after a
+    /// wake to confirm the transition. On 610 mobile drivers this reaches the
+    /// kernel driver with no per-call GCOFF guard, so it can wake a powered-down
+    /// dGPU that would otherwise make overclock ops fail with -220.
+    pub fn gc6_control(&self, cmd: u32) -> crate::NvapiResult<u32> {
+        trace!("gpu.gc6_control(cmd={})", cmd);
+        use crate::sys::nvapi::VersionedStruct;
+        let mut data =
+            unsafe { std::mem::zeroed::<power::private::NV_GPU_GC6_CONTROL_V1>() };
+        *data.nvapi_version_mut() =
+            NvVersion::with_struct::<power::private::NV_GPU_GC6_CONTROL_V1>(1);
+        data.cmd = cmd;
+        let status = unsafe {
+            sys::api::NvAPI_GPU_GC6Control(self.0, ptr::from_mut(&mut data).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GC6Control, status)?;
+        Ok(data.result)
+    }
+
+    /// Query the current GC6 power state (GC6Control cmd=0). Returns the
+    /// driver-decoded state: 3 = D0/active, 2 = GC6/idle, 0 = OK/no report.
+    /// NOTE: on the 610 mobile driver the query path returns NVAPI_ERROR (-1)
+    /// even though wake (cmd=2) succeeds — only the SET half of GC6Control is
+    /// implemented there. Treat an `Err` here as "query unsupported", not a
+    /// wake failure; use [`force_gc6_exit`] + a follow-up op to confirm wakes.
+    pub fn gc6_query_state(&self) -> crate::NvapiResult<u32> {
+        self.gc6_control(power::private::NV_GPU_GC6_CONTROL_CMD_QUERY)
+    }
+
+    /// Force the dGPU into GC6 / idle (GC6Control cmd=1) — the sleep path.
+    pub fn gc6_force_sleep(&self) -> crate::NvapiResult<u32> {
+        self.gc6_control(power::private::NV_GPU_GC6_CONTROL_CMD_SLEEP)
+    }
+
+    /// Force the dGPU out of GC6 via the GC6Control cmd=2 path (NDA 0xD387D414).
+    /// Returns the post-wake state. Prefer [`PhysicalGpu::force_gc6_exit`] for a
+    /// simpler one-shot wake unless you need the struct-based result.
+    pub fn gc6_force_wake(&self) -> crate::NvapiResult<u32> {
+        self.gc6_control(power::private::NV_GPU_GC6_CONTROL_CMD_WAKE)
+    }
+
+    /// Force the dGPU out of GC6 / GCOFF — the one-shot wake (NDA 0x55590CB2).
+    /// Single-arg escape (0x10000FC); no struct, no version magic. The
+    /// purpose-built counterpart to `gc6_force_wake` but simpler and the
+    /// recommended first call before any overclock op on a 610 mobile driver
+    /// where the dGPU may have powered off. Returns -104 (mapped to an error)
+    /// on SKUs without GC6 support.
+    pub fn force_gc6_exit(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.force_gc6_exit()");
+        unsafe { nvcall!(NvAPI_GPU_ForceGC6Exit(self.0)) }
+    }
+
     /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
     /// read-modify-write the the ref tool `setTgpWatt` does: GET the 10016-byte
     /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
