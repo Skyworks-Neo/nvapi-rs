@@ -372,6 +372,10 @@ pub mod private {
     nvenum! {
         pub enum NV_GPU_CLOCK_LOCK_MODE / ClockLockMode {
             NVAPI_GPU_CLOCK_LOCK_NONE / None = 0,
+            /// Select a P-State (entry value = pstate number). RE'd from
+            /// GPUMon setPState: entries with id 4/5 (Unknown_4/5) use mode 1
+            /// to pin the active pstate.
+            NVAPI_GPU_CLOCK_LOCK_PSTATE_SELECT / PstateSelect = 1,
             NVAPI_GPU_CLOCK_LOCK_MANUAL_FREQUENCY / ManualFrequency = 2,
             NVAPI_GPU_CLOCK_LOCK_MANUAL_VOLTAGE / ManualVoltage = 3,
         }
@@ -635,5 +639,31 @@ pub mod private {
         /// lightweight counterpart to the full PerfClientLimits status
         /// (0xE440B867, 780B). 164-byte struct, version magic 0x10088 (v1).
         pub unsafe fn NvAPI_GPU_ClientPStateLimitStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLIENT_PSTATE_LIMIT_STATUS) -> NvAPI_Status;
+    }
+
+    // ------------------------------------------------------------------
+    // Rated-TDP control (NDA, ID 0xC9E9BB33). RE'd from GPUMon's
+    // `[GPUHandle::clearRatedTdp]`/`[GPUHandle::setRatedTdp]` (the setPState
+    // preamble + cmdPState index==0 path). 12-byte struct
+    // {version: 0x1000C, dword1: 1, mode}: mode=0 clear, mode=3 enable rated
+    // TDP (the "P0.TDP" level). NOT a P-State lock despite an earlier mislabel.
+    // ------------------------------------------------------------------
+
+    nvstruct! {
+        pub struct NV_GPU_RATED_TDP_CONTROL_V1 {
+            pub version: NvVersion,
+            pub flags: u32,
+            /// 0 = clear/disable, 3 = enable rated TDP.
+            pub mode: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_RATED_TDP_CONTROL NV_GPU_RATED_TDP_CONTROL_V1(1) = 12 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xC9E9BB33). Rated-TDP control. 12-byte struct,
+        /// version magic 0x1000C (v1). GPUMon calls this (mode 0) before every
+        /// P-State/frequency lock via 0x39442CFB.
+        pub unsafe fn NvAPI_GPU_ClientRatedTdpControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_RATED_TDP_CONTROL) -> NvAPI_Status;
     }
 }

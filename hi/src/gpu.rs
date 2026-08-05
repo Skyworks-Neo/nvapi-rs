@@ -27,6 +27,7 @@ pub use nvapi::{
     FanArbiterStatus, FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta,
     MemoryInfo, Microvolts, MicrovoltsDelta, PState, PciIdentifiers, Percentage, PerfInfo,
     PerfLimitId, PerfStatus, PerformanceDecreaseReason, PffCurve, PffPoint, PhysicalGpu,
+    PStateNativeLock,
     PowerMonitor, PowerRails, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType,
     ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalTarget, UtilizationDomain,
     Utilizations, Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
@@ -642,6 +643,12 @@ impl Gpu {
     /// nothing is locked. `Ok(None)` if the driver doesn't expose it.
     pub fn pstate_lock_status(&self) -> nvapi::Result<Option<Vec<u8>>> {
         self.gpu.pstate_lock_status().map_err(Into::into)
+    }
+
+    /// Set the native NVAPI P-State lock (NDA 0x39442CFB, the GPUMon
+    /// `-pstate:<index>` SETTER). See [`nvapi::PStateNativeLock`].
+    pub fn set_pstate_native(&self, lock: nvapi::PStateNativeLock) -> nvapi::Result<()> {
+        self.gpu.set_pstate_native(lock).map_err(Into::into)
     }
 
     /// Read the target-temperature wall for one policy slot (private GET-prime

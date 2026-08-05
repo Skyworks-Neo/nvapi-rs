@@ -1476,7 +1476,7 @@ Unknown_C118ED82 = 0xc118ed82,
 ///   - mode=0 → DISABLE/clear (setPState calls this first to reset before
 ///     applying a new P-State/frequency lock via 0x39442CFB).
 /// "Rated TDP" = the GPU's nominal/default power baseline.
-Unknown_C9E9BB33 = 0xc9e9bb33,
+NvAPI_GPU_ClientRatedTdpControl = 0xc9e9bb33,
 /// `NvAPI_GPU_ClientThermalTargetSetStatus` — GPUHandle::setTargetTemperature
 /// SET (NDA-private, ID 0xE097144F). The write half of the mobile temp-wall
 /// (targettemp): applies the 992-byte control buffer (target temp = celsius*256

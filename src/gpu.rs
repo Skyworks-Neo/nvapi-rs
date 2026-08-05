@@ -1135,6 +1135,89 @@ impl PhysicalGpu {
         Ok(Some(status.locked_pstates()))
     }
 
+    /// Set the native NVAPI P-State lock (the GPUMon `-pstate:<index>` SETTER,
+    /// PerfClientLimitsSetStatus NDA 0x39442CFB). RE'd byte-exact from GPUMon's
+    /// `[GPUHandle::setPState]`:
+    ///
+    /// - `PStateNativeLock::Reset` → 4 entries clearing limit IDs 0,1,4,5
+    ///   (Gpu, GpuLowerbound, Unknown_4, Unknown_5) to mode 0 (None).
+    /// - `PStateNativeLock::PstateOnly(n)` → 2 entries (id 5,4 mode 1 value n)
+    ///   selecting pstate `n` without touching frequency.
+    /// - `PStateNativeLock::PstateAndFreq { pstate, freq_khz }` → 4 entries:
+    ///   id 0/1 (Gpu/GpuLowerbound) mode 2 (ManualFrequency) value=freq_kHz,
+    ///   id 5/4 mode 1 (PstateSelect) value=pstate.
+    ///
+    /// Calls the private lifecycle init + clearRatedTdp (0xC9E9BB33 mode 0)
+    /// first, exactly as GPUMon's setPState does. `freq_khz` is in kHz
+    /// (MHz × 1000). Returns Ok if the lock applied.
+    pub fn set_pstate_native(&self, lock: PStateNativeLock) -> crate::NvapiResult<()> {
+        trace!("gpu.set_pstate_native({:?})", lock);
+        self.private_lifecycle_init()?;
+        self.clear_rated_tdp()?;
+
+        // 780-byte PerfClientLimits V2 buffer. Heap-backed.
+        let mut buf: Vec<u8> =
+            vec![0u8; std::mem::size_of::<clock::private::NV_GPU_PERF_CLIENT_LIMITS>()];
+        // version magic 0x2030C (v2 | 780).
+        buf[..4].copy_from_slice(&0x2030Cu32.to_ne_bytes());
+        let data: &mut clock::private::NV_GPU_PERF_CLIENT_LIMITS =
+            unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
+
+        // Raw mode codes (NV_GPU_CLOCK_LOCK_MODE is a c_int alias).
+        let mode_pstate = clock::private::ClockLockMode::PstateSelect.raw();
+        let mode_freq = clock::private::ClockLockMode::ManualFrequency.raw();
+        // Helper: write entry[k] = {id, mode, value} (other fields stay 0).
+        let mut set_entry =
+            |k: usize, id: i32, mode: i32, value: u32| match data.entries.get_mut(k) {
+                Some(e) => {
+                    e.id = id;
+                    e.mode = mode;
+                    e.value = value;
+                }
+                None => {}
+            };
+
+        match lock {
+            PStateNativeLock::Reset => {
+                data.count = 4;
+                // Clear limit IDs 0,1,4,5 to mode None (reset all locks).
+                for (k, id) in [0i32, 1, 4, 5].iter().enumerate() {
+                    set_entry(k, *id, 0, 0);
+                }
+            }
+            PStateNativeLock::PstateOnly { pstate } => {
+                data.count = 2;
+                set_entry(0, 5, mode_pstate, pstate as u32);
+                set_entry(1, 4, mode_pstate, pstate as u32);
+            }
+            PStateNativeLock::PstateAndFreq {
+                pstate,
+                freq_khz,
+            } => {
+                data.count = 4;
+                set_entry(0, 0, mode_freq, freq_khz); // Gpu upperbound
+                set_entry(1, 1, mode_freq, freq_khz); // Gpu lowerbound
+                set_entry(2, 5, mode_pstate, pstate as u32);
+                set_entry(3, 4, mode_pstate, pstate as u32);
+            }
+        }
+
+        unsafe { nvcall!(NvAPI_GPU_PerfClientLimitsSetStatus(self.0, buf.as_ptr() as *const _)) }
+    }
+
+    /// Clear the rated-TDP control (NDA 0xC9E9BB33, mode 0). GPUMon's setPState
+    /// calls this before applying a new P-State/frequency lock. "Rated TDP" =
+    /// the nominal default power baseline.
+    fn clear_rated_tdp(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.clear_rated_tdp()");
+        // 12-byte struct {version: 0x1000C, dword1: 1, mode: 0}. Heap-backed.
+        let mut buf = [0u8; 12];
+        buf[..4].copy_from_slice(&0x1000Cu32.to_ne_bytes());
+        buf[4..8].copy_from_slice(&1u32.to_ne_bytes());
+        // mode 0 (clear) — dword2 stays 0.
+        unsafe { nvcall!(NvAPI_GPU_ClientRatedTdpControl(self.0, buf.as_ptr() as *const _)) }
+    }
+
     /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
     /// read-modify-write the GPUMon `setTgpWatt` does: GET the 10016-byte
     /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
@@ -2585,6 +2668,25 @@ pub struct PStateClockRange {
 pub struct PStateLevelsInfo {
     /// Present P-States in ascending order, each with min/max core clock (kHz).
     pub pstates: Vec<PStateClockRange>,
+}
+
+/// Native NVAPI P-State lock request (the GPUMon `-pstate:<index>` SETTER,
+/// PerfClientLimitsSetStatus 0x39442CFB). RE'd from GPUMon's setPState.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PStateNativeLock {
+    /// Reset all P-State locks to default (GPUMon `-pstate:-1`).
+    Reset,
+    /// Pin the active P-State to `pstate` without locking a frequency
+    /// (GPUMon setPState with freq=-1).
+    PstateOnly {
+        pstate: u8,
+    },
+    /// Pin the active P-State AND lock its frequency to `freq_khz`
+    /// (GPUMon setPState with both pstate and freq). `freq_khz` is MHz × 1000.
+    PstateAndFreq {
+        pstate: u8,
+        freq_khz: u32,
+    },
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
