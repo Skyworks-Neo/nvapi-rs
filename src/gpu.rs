@@ -7,7 +7,7 @@ use crate::sys::{self, driverapi, i2c};
 use crate::types::{
     Kibibytes, Kilohertz2Delta, KilohertzDelta, Percentage, Percentage1000, RawConversion,
 };
-use log::trace;
+use log::{trace, warn};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -939,11 +939,21 @@ impl PhysicalGpu {
     }
 
     /// Private NVAPI lifecycle/controller init (NDA 0xAD298D3F). the ref tool calls
-    /// this with arg=1 at init, before any Dynamic-Boost/QBoost power setter.
-    /// Required to avoid NVAPI_API_NOT_INITIALIZED from those setters.
+    /// this with arg=1 at init, before any Dynamic-Boost/QBoost power setter, but
+    /// does NOT gate later setters on its result. Mirror that: `NoImplementation`
+    /// (observed on Linux `libnvidia-api`, where the TGP Get/Set private IDs ARE
+    /// implemented but the lifecycle init is not) is swallowed as non-fatal — the
+    /// real setter call surfaces its own status if it genuinely can't proceed.
     pub fn private_lifecycle_init(&self) -> crate::NvapiResult<()> {
         trace!("gpu.private_lifecycle_init()");
-        unsafe { nvcall!(NvAPI_GPU_PrivateLifecycleInit(true.into())) }
+        match unsafe { nvcall!(NvAPI_GPU_PrivateLifecycleInit(true.into())) } {
+            Ok(()) => Ok(()),
+            Err(e) if e.status == crate::Status::NoImplementation => {
+                warn!("private_lifecycle_init not implemented by this driver; continuing");
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// TGP-watts power range (min/default/max in **milliwatts**) + the active
