@@ -35,8 +35,11 @@ fn main() {
     // driver?"), and that is independent of GPU power state.
     match nvapi::initialize() {
         Ok(_) => println!("(NvAPI_Initialize ok — dGPU is currently powered)\n"),
-        Err(e) => println!("(NvAPI_Initialize failed: {:?} — dGPU likely GCOFF; \
-                            QI probe continues since ID resolution is driver-table-only)\n", e),
+        Err(e) => println!(
+            "(NvAPI_Initialize failed: {:?} — dGPU likely GCOFF; \
+                            QI probe continues since ID resolution is driver-table-only)\n",
+            e
+        ),
     }
 
     println!("=== dGPU force-wake candidates ===");

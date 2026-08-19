@@ -32,7 +32,10 @@ fn main() {
     match nvapi::initialize() {
         Ok(_) => println!("  ok (dGPU visible to enumerator)"),
         Err(e) => {
-            println!("  FAILED: {:?}\n  (dGPU is hard-GCOFF — even enumerate can't see it.", e);
+            println!(
+                "  FAILED: {:?}\n  (dGPU is hard-GCOFF — even enumerate can't see it.",
+                e
+            );
             println!("   Manually wake it once with any GPU load, then re-run.)");
             return;
         }

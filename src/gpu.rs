@@ -1096,12 +1096,7 @@ impl PhysicalGpu {
         let status = unsafe {
             sys::api::NvAPI_GPU_PerfPstatesGetInfoPrivate(self.0, buf.as_mut_ptr() as *mut _)
         };
-        if crate::status_result(
-            sys::Api::NvAPI_GPU_PerfPstatesGetInfoPrivate,
-            status,
-        )
-        .is_err()
-        {
+        if crate::status_result(sys::Api::NvAPI_GPU_PerfPstatesGetInfoPrivate, status).is_err() {
             return Ok(None);
         }
         let pstates = info
@@ -1177,15 +1172,15 @@ impl PhysicalGpu {
         let mode_pstate = clock::private::ClockLockMode::PstateSelect.raw();
         let mode_freq = clock::private::ClockLockMode::ManualFrequency.raw();
         // Helper: write entry[k] = {id, mode, value} (other fields stay 0).
-        let mut set_entry =
-            |k: usize, id: i32, mode: i32, value: u32| match data.entries.get_mut(k) {
-                Some(e) => {
-                    e.id = id;
-                    e.mode = mode;
-                    e.value = value;
-                }
-                None => {}
-            };
+        let mut set_entry = |k: usize, id: i32, mode: i32, value: u32| match data.entries.get_mut(k)
+        {
+            Some(e) => {
+                e.id = id;
+                e.mode = mode;
+                e.value = value;
+            }
+            None => {}
+        };
 
         match lock {
             PStateNativeLock::Reset => {
@@ -1200,10 +1195,7 @@ impl PhysicalGpu {
                 set_entry(0, 5, mode_pstate, pstate as u32);
                 set_entry(1, 4, mode_pstate, pstate as u32);
             }
-            PStateNativeLock::PstateAndFreq {
-                pstate,
-                freq_khz,
-            } => {
+            PStateNativeLock::PstateAndFreq { pstate, freq_khz } => {
                 data.count = 4;
                 set_entry(0, 0, mode_freq, freq_khz); // Gpu upperbound
                 set_entry(1, 1, mode_freq, freq_khz); // Gpu lowerbound
@@ -1212,7 +1204,12 @@ impl PhysicalGpu {
             }
         }
 
-        unsafe { nvcall!(NvAPI_GPU_PerfClientLimitsSetStatus(self.0, buf.as_ptr() as *const _)) }
+        unsafe {
+            nvcall!(NvAPI_GPU_PerfClientLimitsSetStatus(
+                self.0,
+                buf.as_ptr() as *const _
+            ))
+        }
     }
 
     /// Clear the rated-TDP control (NDA 0xC9E9BB33, mode 0). the ref tool's setPState
@@ -1225,7 +1222,12 @@ impl PhysicalGpu {
         buf[..4].copy_from_slice(&0x1000Cu32.to_ne_bytes());
         buf[4..8].copy_from_slice(&1u32.to_ne_bytes());
         // mode 0 (clear) — dword2 stays 0.
-        unsafe { nvcall!(NvAPI_GPU_ClientRatedTdpControl(self.0, buf.as_ptr() as *const _)) }
+        unsafe {
+            nvcall!(NvAPI_GPU_ClientRatedTdpControl(
+                self.0,
+                buf.as_ptr() as *const _
+            ))
+        }
     }
 
     /// GC6 / RTD3 force-wake control (NDA 0xD387D414). Commands the RM driver
@@ -1238,14 +1240,12 @@ impl PhysicalGpu {
     pub fn gc6_control(&self, cmd: u32) -> crate::NvapiResult<u32> {
         trace!("gpu.gc6_control(cmd={})", cmd);
         use crate::sys::nvapi::VersionedStruct;
-        let mut data =
-            unsafe { std::mem::zeroed::<power::private::NV_GPU_GC6_CONTROL_V1>() };
+        let mut data = unsafe { std::mem::zeroed::<power::private::NV_GPU_GC6_CONTROL_V1>() };
         *data.nvapi_version_mut() =
             NvVersion::with_struct::<power::private::NV_GPU_GC6_CONTROL_V1>(1);
         data.cmd = cmd;
-        let status = unsafe {
-            sys::api::NvAPI_GPU_GC6Control(self.0, ptr::from_mut(&mut data).cast())
-        };
+        let status =
+            unsafe { sys::api::NvAPI_GPU_GC6Control(self.0, ptr::from_mut(&mut data).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_GC6Control, status)?;
         Ok(data.result)
     }
@@ -2743,15 +2743,10 @@ pub enum PStateNativeLock {
     Reset,
     /// Pin the active P-State to `pstate` without locking a frequency
     /// (the ref tool setPState with freq=-1).
-    PstateOnly {
-        pstate: u8,
-    },
+    PstateOnly { pstate: u8 },
     /// Pin the active P-State AND lock its frequency to `freq_khz`
     /// (the ref tool setPState with both pstate and freq). `freq_khz` is MHz × 1000.
-    PstateAndFreq {
-        pstate: u8,
-        freq_khz: u32,
-    },
+    PstateAndFreq { pstate: u8, freq_khz: u32 },
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

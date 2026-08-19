@@ -21,7 +21,10 @@ use std::env;
 use std::time::Duration;
 
 fn idle_then(secs: u64, label: &str) {
-    println!("\n  [idle {}s — no nvapi/nvml calls, let GCOFF take hold]", secs);
+    println!(
+        "\n  [idle {}s — no nvapi/nvml calls, let GCOFF take hold]",
+        secs
+    );
     std::thread::sleep(Duration::from_secs(secs));
     println!("  --- {} ---", label);
 }
@@ -40,7 +43,10 @@ fn read(gpu: &PhysicalGpu, label: &str) -> bool {
 }
 
 fn main() {
-    let secs: u64 = env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(20);
+    let secs: u64 = env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
 
     println!("== initialize ==");
     match nvapi::initialize() {
@@ -92,7 +98,10 @@ fn main() {
 }
 
 fn verdict(name: &str, before: bool, after: bool) {
-    println!("  VERDICT {}: before_wake={}, after_wake={}", name, before, after);
+    println!(
+        "  VERDICT {}: before_wake={}, after_wake={}",
+        name, before, after
+    );
     if !before && after {
         println!("    => {} INDEPENDENTLY wakes a GCOFF'd dGPU.", name);
     } else if !after {

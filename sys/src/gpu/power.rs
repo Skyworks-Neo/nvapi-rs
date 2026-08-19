@@ -517,11 +517,11 @@ pub mod private {
     /// escape commands the RM driver to take.
     pub const NV_GPU_GC6_CONTROL_CMD_QUERY: u32 = 0; // read current state into `result`
     pub const NV_GPU_GC6_CONTROL_CMD_SLEEP: u32 = 1; // force GC6 entry (idle the dGPU)
-    pub const NV_GPU_GC6_CONTROL_CMD_WAKE: u32 = 2;  // force GC6 exit (wake the dGPU)
+    pub const NV_GPU_GC6_CONTROL_CMD_WAKE: u32 = 2; // force GC6 exit (wake the dGPU)
 
     /// `result` enum for [`NV_GPU_GC6_CONTROL_V1`] — decoded GC6 power state
     /// (populated when `cmd == NV_GPU_GC6_CONTROL_CMD_QUERY`).
-    pub const NV_GPU_GC6_STATE_OK: u32 = 0;       // command succeeded / no state to report
+    pub const NV_GPU_GC6_STATE_OK: u32 = 0; // command succeeded / no state to report
     pub const NV_GPU_GC6_STATE_GC6_IDLE: u32 = 2; // dGPU is in GC6 (link-off / idle)
     pub const NV_GPU_GC6_STATE_D0_ACTIVE: u32 = 3; // dGPU is in D0 (active / powered on)
     pub const NV_GPU_GC6_STATE_UNKNOWN: u32 = 4;
