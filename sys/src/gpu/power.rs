@@ -40,6 +40,193 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClientVoltRailsSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pVoltboostPercent: *const NV_GPU_CLIENT_VOLT_RAILS_CONTROL) -> NvAPI_Status;
     }
 
+    // --- melonVolt-path VoltRails family (READ-ONLY) ------------------------
+    // RE'd from melonVolt.exe / melonVoltDiag.exe + nvapi64_impl.dll 610.74
+    // (reverse/melonvolt/ANALYSIS.md). These are the private siblings the
+    // public Client trio forwards to internally; on this driver branch the
+    // whole family is exposed in the PUBLIC QueryInterface table, so none of
+    // melonVolt's runtime code-scanning is needed.
+    //
+    // Layout (opaque beyond the documented header; accessors use byte offsets):
+    //   rail-info entries: 192-byte stride indexed by rail BIT, type u32 @+76
+    //   ctrl/status entries: 84-byte stride indexed DENSELY (set bits only),
+    //     seed/type u32 @+72 seeded from rail entry +192*bit+76, then SIX u32
+    //     @+76..+100 which SPAN PAST the slot stride — the driver's own getter
+    //     copies exactly those six.
+    // RM layer: escape 0x07000191, ctrl cmds 0x2080A601 (info) / 0x2080A613
+    // (control), ~500 KB driver-internal buffers.
+    //
+    // VoltVoltRailsSetControl 0x87C55C8A (the µV-offset WRITE path melonVolt
+    // drives) is deliberately NOT declared: a voltage write needs
+    // snapshot/verify/restore semantics, not a blind setter.
+
+    /// Byte offsets into the per-rail entries of
+    /// [`NV_GPU_VOLT_RAILS_INFO`].
+    pub mod rail_entry {
+        /// stride per rail BIT index
+        pub const STRIDE: usize = 192;
+        /// u32 type discriminator (copied into control/status entry seeds)
+        pub const TYPE: usize = 76;
+    }
+
+    /// Byte offsets into the dense per-rail entries of the control/status
+    /// structs.
+    pub mod ctrl_entry {
+        /// stride per DENSE entry (set bits only, in ascending order)
+        pub const STRIDE: usize = 84;
+        /// u32 type discriminator (seed input, validated/filled output)
+        pub const TYPE: usize = 72;
+        /// six u32 payload (µV on voltage/offset entries); starts at +76 and
+        /// spans past the 84-byte slot stride into the next slot's unused head
+        pub const VALUES: usize = 76;
+        pub const VALUES_LEN: usize = 6;
+    }
+
+    /// Semantics of the SIX payload u32 in a **status** entry of type 1
+    /// (live voltage reading; confirmed on RTX 4060 Laptop / 610.74):
+    ///
+    /// | index | meaning                                                        |
+    /// |-------|----------------------------------------------------------------|
+    /// | 0     | current core-rail voltage (live: 0.63 V idle → 0.94 V load)    |
+    /// | 1     | P0 core-domain voltage WALL (max) — mirrors index 4            |
+    /// | 2     | unknown (observed 0)                                           |
+    /// | 3     | ~1.2 V — likely a voltage-domain absolute max; domain unknown  |
+    /// | 4     | mirror of index 1 (P0 voltage wall)                            |
+    /// | 5     | P0 core-domain MIN hold voltage (lowest voltage that sustains  |
+    /// |       | P0) — the lower bound the old brute-force VFP-lock scan probed |
+    ///
+    /// Indices 1/5 replace `handle_test_voltage_limits`' trial-and-error
+    /// VFP-point locking as a direct µV source for the P0 bounds.
+    ///
+    /// A **control** entry's payload has different semantics (type 3 on RTX
+    /// 5090 MSVDD = the µV offset melonVolt writes; type 0 on 4060 Laptop =
+    /// offset object unconfigured, all zeros).
+    pub mod status_values {
+        pub const CURRENT_UV: usize = 0;
+        pub const P0_MAX_WALL_UV: usize = 1;
+        pub const UNKNOWN_2: usize = 2;
+        pub const DOMAIN_MAX_UV: usize = 3;
+        pub const P0_MAX_WALL_MIRROR_UV: usize = 4;
+        pub const P0_MIN_HOLD_UV: usize = 5;
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_VOLT_RAILS_INFO_V2 {
+            pub version: NvVersion,
+            /// out: bitmask of present rails (RTX 5090: 0x2 = MSVDD @ bit 1;
+            /// RTX 4060 Laptop: 0x1 = single core rail)
+            pub rail_mask: u32,
+            pub rest: [u8; 6212],
+        }
+    }
+
+    nvversion! { @=NV_GPU_VOLT_RAILS_INFO NV_GPU_VOLT_RAILS_INFO_V2(2) = 6220 }
+
+    impl NV_GPU_VOLT_RAILS_INFO {
+        /// Type discriminator of the rail entry for `bit` (u32 @+192*bit+76).
+        pub fn rail_type(&self, bit: u32) -> Option<u32> {
+            let base = rail_entry::STRIDE.checked_mul(bit as usize)?;
+            let off = base + rail_entry::TYPE;
+            let end = off + 4;
+            let raw = self.rest.get(off - 8..end - 8)?;
+            Some(u32::from_le_bytes(raw.try_into().ok()?))
+        }
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_VOLT_RAILS_CONTROL_V2 {
+            pub version: NvVersion,
+            /// in: bitmask of rails to read (dense entry selection)
+            pub rail_mask: u32,
+            pub rest: [u8; 2752],
+        }
+    }
+
+    nvversion! { @=NV_GPU_VOLT_RAILS_CONTROL NV_GPU_VOLT_RAILS_CONTROL_V2(2) = 2760 }
+
+    nvstruct! {
+        /// Live-voltage variant: identical layout, but the driver only accepts
+        /// the V1 version stamp 0x10AC8 (68296) here.
+        pub struct NV_GPU_VOLT_RAILS_STATUS_V1 {
+            pub version: NvVersion,
+            /// in: bitmask of rails to read
+            pub rail_mask: u32,
+            pub rest: [u8; 2752],
+        }
+    }
+
+    nvversion! { @=NV_GPU_VOLT_RAILS_STATUS NV_GPU_VOLT_RAILS_STATUS_V1(1) = 2760 }
+
+    /// Seed/parse helpers shared by the control and status structs.
+    macro_rules! volt_rails_entries {
+        ($t:ty) => {
+            impl $t {
+                /// Copy the rail-type seeds from a filled
+                /// [`NV_GPU_VOLT_RAILS_INFO`] into the dense entries.
+                pub fn seed_from_info(&mut self, info: &NV_GPU_VOLT_RAILS_INFO) {
+                    self.rail_mask = info.rail_mask;
+                    let mut dense = 0usize;
+                    for bit in 0..32u32 {
+                        if info.rail_mask & (1 << bit) == 0 {
+                            continue;
+                        }
+                        let typ = info.rail_type(bit).unwrap_or(0).to_le_bytes();
+                        let dst = ctrl_entry::STRIDE * dense + ctrl_entry::TYPE;
+                        if dst + 4 <= 8 + self.rest.len() {
+                            self.rest[dst - 8..dst - 4].copy_from_slice(&typ);
+                        }
+                        dense += 1;
+                    }
+                }
+
+                /// Iterate the dense entries as (rail_bit, type, six payload u32).
+                pub fn entries(&self) -> impl Iterator<Item = (u32, u32, [i32; 6])> + '_ {
+                    let mask = self.rail_mask;
+                    let rest = &self.rest;
+                    (0..32u32)
+                        .filter(move |bit| mask & (1 << bit) != 0)
+                        .enumerate()
+                        .filter_map(move |(dense, bit)| {
+                            let base = ctrl_entry::STRIDE * dense + ctrl_entry::TYPE;
+                            if base + 4 + 4 * ctrl_entry::VALUES_LEN > 8 + rest.len() {
+                                return None;
+                            }
+                            let typ = u32::from_le_bytes(
+                                rest[base - 8..base - 4].try_into().ok()?,
+                            );
+                            let mut values = [0i32; ctrl_entry::VALUES_LEN];
+                            for (i, v) in values.iter_mut().enumerate() {
+                                let off = base + 4 + 4 * i - 8;
+                                *v = i32::from_le_bytes(rest[off..off + 4].try_into().ok()?);
+                            }
+                            Some((bit, typ, values))
+                        })
+                }
+            }
+        };
+    }
+
+    volt_rails_entries!(NV_GPU_VOLT_RAILS_CONTROL_V2);
+    volt_rails_entries!(NV_GPU_VOLT_RAILS_STATUS_V1);
+
+    nvapi! {
+        /// Private VoltRails "rail builder" (melonVolt's name): fills the rail
+        /// mask + per-rail descriptors. Verified live on driver 610.74.
+        pub unsafe fn NvAPI_GPU_VoltVoltRailsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pRailInfo: *mut NV_GPU_VOLT_RAILS_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private VoltRails control-object GET (per-rail offset entries).
+        /// The struct must be seeded from a prior GetInfo call.
+        pub unsafe fn NvAPI_GPU_VoltVoltRailsGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_VOLT_RAILS_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private VoltRails live-status GET (per-rail voltages, µV).
+        /// V1-stamped (0x10AC8) struct required; seeded like GetControl.
+        pub unsafe fn NvAPI_GPU_VoltVoltRailsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_VOLT_RAILS_STATUS) -> NvAPI_Status;
+    }
+
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT {
             pub freq_kHz: u32,

@@ -29,6 +29,94 @@ pub use sys::gpu::{
 pub type ClockFrequencies = <clock::NV_GPU_CLOCK_FREQUENCIES as RawConversion>::Target;
 pub type Utilizations = <pstate::NV_GPU_DYNAMIC_PSTATES_INFO_EX as RawConversion>::Target;
 
+/// One per-rail entry from the private VoltRails control/status objects (the
+/// "melonVolt path", reachable read-only through the public QueryInterface
+/// table on this driver branch — see `reverse/melonvolt/ANALYSIS.md`).
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct VoltRailEntry {
+    /// rail bit index (0..32) within the rail mask
+    pub rail_bit: u32,
+    /// entry type discriminator: RTX 5090 MSVDD control = 3 (the µV-offset
+    /// entry melonVolt writes); RTX 4060 Laptop control = 0 (offset object,
+    /// unsupported) / status = 1 (live voltage)
+    pub entry_type: u32,
+    /// six payload u32; semantics depend on `entry_type`. For **status** type 1
+    /// (see [`VoltRails::p0_bounds`] and `sys::gpu::power::private::status_values`):
+    /// `[current, P0_wall, ?, ~domain_max, P0_wall_mirror, P0_min_hold]` µV —
+    /// observed RTX 4060 Laptop rail0: `[630000, 1005000, 0, 1200000, 1005000, 630000]`
+    /// idle (current 0.63 V, P0 wall 1.005 V, min-hold 0.63 V).
+    /// For **control** type 3 (RTX 5090 MSVDD): index 0 = the µV offset.
+    pub values: [i32; 6],
+}
+
+impl VoltRailEntry {
+    fn from_raw((rail_bit, entry_type, values): (u32, u32, [i32; 6])) -> Self {
+        Self {
+            rail_bit,
+            entry_type,
+            values,
+        }
+    }
+}
+
+/// Read-only snapshot of the private VoltRails family: rail mask + per-rail
+/// control entries (offset objects) and status entries (live voltages).
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct VoltRails {
+    /// bitmask of present rails (RTX 5090: 0x2 = MSVDD @ bit 1;
+    /// RTX 4060 Laptop: 0x1 = single core rail)
+    pub rail_mask: u32,
+    pub control: Vec<VoltRailEntry>,
+    pub status: Vec<VoltRailEntry>,
+}
+
+/// P0 core-domain voltage bounds derived from a type-1 status entry
+/// (semantics confirmed on RTX 4060 Laptop / 610.74 — see
+/// `sys::gpu::power::private::status_values` for the per-index table).
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[allow(nonstandard_style)] // uV suffix matches the sys-layer field naming
+pub struct P0VoltageBounds {
+    /// live core-rail voltage
+    pub current_uV: i32,
+    /// P0 voltage wall (max) — payload index 1 (mirrored at 4)
+    pub max_wall_uV: i32,
+    /// P0 min hold voltage (lowest that sustains P0) — payload index 5
+    pub min_hold_uV: i32,
+}
+
+impl VoltRails {
+    /// Extract P0 core-domain voltage bounds from the first type-1 status
+    /// entry (preferring rail bit 0, the core rail on observed platforms).
+    /// Returns `None` unless the values pass a plausibility check
+    /// (`0 < min_hold <= current <= wall`), so a differently-laid-out driver
+    /// degrades to `None` instead of returning garbage.
+    pub fn p0_bounds(&self) -> Option<P0VoltageBounds> {
+        use power::private::status_values;
+        let entry = self
+            .status
+            .iter()
+            .filter(|e| e.entry_type == 1)
+            .min_by_key(|e| e.rail_bit)?;
+        let (current, wall, hold) = (
+            entry.values[status_values::CURRENT_UV],
+            entry.values[status_values::P0_MAX_WALL_UV],
+            entry.values[status_values::P0_MIN_HOLD_UV],
+        );
+        if current > 0 && hold > 0 && wall >= hold && current <= wall {
+            Some(P0VoltageBounds {
+                current_uV: current,
+                max_wall_uV: wall,
+                min_hold_uV: hold,
+            })
+        } else {
+            None
+        }
+    }
+}
+
 impl PhysicalGpu {
     pub fn handle(&self) -> &sys::handles::NvPhysicalGpuHandle {
         &self.0
@@ -867,6 +955,50 @@ impl PhysicalGpu {
         };
 
         unsafe { nvcall!(NvAPI_GPU_ClientVoltRailsSetControl(self.0, &data)) }
+    }
+
+    /// Read-only walk of the private VoltRails family (the "melonVolt path" —
+    /// see `reverse/melonvolt/ANALYSIS.md`): GetInfo (rail builder) → seed →
+    /// GetControl + GetStatus. Never writes; the SetControl sibling
+    /// (0x87C55C8A, the µV-offset path melonVolt drives on RTX 5090) is
+    /// intentionally unwrapped.
+    pub fn volt_rails(&self) -> crate::Result<VoltRails> {
+        trace!("gpu.volt_rails()");
+        use crate::sys::api::{
+            NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsGetInfo,
+            NvAPI_GPU_VoltVoltRailsGetStatus,
+        };
+        use power::private::{NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO, NV_GPU_VOLT_RAILS_STATUS_V1};
+
+        let mut info = NV_GPU_VOLT_RAILS_INFO::default();
+        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo, st)
+            .map_err(crate::Error::from)?;
+
+        let mut control = NV_GPU_VOLT_RAILS_CONTROL::default();
+        control.seed_from_info(&info);
+        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut control).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // GetStatus requires the V1 stamp (0x10AC8) — best-effort: a driver
+        // without it still yields the control object.
+        let mut status = NV_GPU_VOLT_RAILS_STATUS_V1::default();
+        status.seed_from_info(&info);
+        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetStatus(self.0, ptr::from_mut(&mut status).cast()) };
+        let status_entries = match crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetStatus, st) {
+            Ok(()) => status.entries().map(VoltRailEntry::from_raw).collect(),
+            Err(e) => {
+                warn!("VoltVoltRailsGetStatus failed ({e:?}); returning control-only snapshot");
+                Vec::new()
+            }
+        };
+
+        Ok(VoltRails {
+            rail_mask: info.rail_mask,
+            control: control.entries().map(VoltRailEntry::from_raw).collect(),
+            status: status_entries,
+        })
     }
 
     #[allow(unused_assignments)]

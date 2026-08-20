@@ -622,6 +622,27 @@ impl Gpu {
         self.gpu.set_dnotify_limit(didx).map_err(Into::into)
     }
 
+    /// Read-only snapshot of the private VoltRails family (the "melonVolt
+    /// path": rail mask + per-rail control-offset entries + live per-rail
+    /// voltages, via 0x2C73AFDC/0xA3070DB0/0x5D0634EE). `Ok(None)` where the
+    /// driver doesn't expose the private interface.
+    pub fn volt_rails(&self) -> nvapi::Result<Option<nvapi::VoltRails>> {
+        match self.gpu.volt_rails() {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported
+                        | nvapi::Status::NoImplementation
+                        | nvapi::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// P-State level table (present pstates + per-pstate min/max clock in kHz
     /// for the given clock-domain) from the private PerfPstatesGetInfo (NDA
     /// 0x7B30AE0D). Source of the ref tool's `-pstate` GET listing. `domain` selects

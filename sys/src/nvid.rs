@@ -728,6 +728,10 @@ NvAPI_GPU_ClockClientClkVfPointsGetStatus = 0x21537ad4, // aka NVAPI_ID_VFP_CURV
 NvAPI_GPU_PerfClientLimitsGetStatus = 0xe440b867, // aka NVAPI_ID_CURVE_GET / NvAPI_GPU_GetClockBoostLock
 NvAPI_GPU_PerfClientLimitsSetStatus = 0x39442cfb, // aka NVAPI_ID_CURVE_SET / NvAPI_GPU_SetClockBoostLock
 NvAPI_GPU_ClientVoltRailsGetControl = 0x9df23ca1, // aka NVAPI_ID_VOLTBOOST_GET / NvAPI_{DLL,GPU}_GetCoreVoltageBoostPercent
+// NOTE (melonVolt RE): the impl hard-validates version 0x10048 (V1, 72 B) and internally
+// walks the FULL V2 path (rail builder 0x2C73AFDC + getter 0xA3070DB0 with 6220/2760-byte
+// private structs) — but only surfaces ONE byte back (ctrl byte @+8 -> user struct @+4).
+// The per-rail offset object is only reachable via the private VoltVoltRails family.
 NvAPI_GPU_ClientVoltRailsSetControl = 0xb9306d9b, // aka NVAPI_ID_VOLTBOOST_SET / NvAPI_{DLL,GPU}_SetCoreVoltageBoostPercent
 
 NvAPI_GPU_ClientFanArbitersGetControl = 0x600f612e,
@@ -1201,6 +1205,13 @@ NvAPI_GPU_PowerDeviceGetInfo = 0xdb9ed906,
 /// `Unknown_5D1D3A4E` — GPUHandle::pollVoltage - voltage rail info (ClientVoltRailsGetInfo)
 Unknown_5D1D3A4E = 0x5d1d3a4e,
 /// `NvAPI_GPU_VoltVoltRailsGetInfo` — GPUHandle::pollVoltage - voltage rail data (ClientVoltRailsGetStatus)
+///
+/// melonVolt's "rail builder" (see reverse/melonvolt/ANALYSIS.md): `fn(hGPU, rail_struct)`.
+/// Rail struct V2 version 0x2184C (6220 B; V1 0x10ACC/2764 B also accepted). Out: rail
+/// mask u32 @+4, then per-rail entries at 192-byte stride indexed by rail BIT, type
+/// discriminator u32 @entry+76. RM layer: escape 0x07000191, ctrl cmd 0x2080A601, ~500 KB buf.
+/// LIVE-VERIFIED 610.74 mobile: mask=0x1 (single rail, core) on RTX 4060 Laptop; 5090 reports
+/// mask 0x2 (MSVDD = rail bit 1, control-entry type 3 carries the µV offset).
 NvAPI_GPU_VoltVoltRailsGetInfo = 0x2c73afdc,
 /// `Unknown_3B51F399` — GPUHandle::pollPcieBandwidth - NVPCF status data (PCIE Rx/Tx bandwidth)
 Unknown_3B51F399 = 0x3b51f399,
@@ -1471,6 +1482,13 @@ NvAPI_GPU_PowerPolicyGetStatus = 0x31b7a4cd,
 /// `NvAPI_GPU_PerfPerfCfTopologyGetStatus` — GPUHandle::pollPcieBandwidth - NVPCF status data (PCIE Rx/Tx bandwidth)
 NvAPI_GPU_PerfPerfCfTopologyGetStatus = 0x3b421ef9,
 /// `NvAPI_GPU_VoltVoltRailsGetStatus` — GPUHandle::pollVoltage - ClientVoltRailsGetStatus (voltage rail DATA, magics 68296/68300)
+///
+/// Live rail voltages (the reading melonVolt "intentionally does not display"):
+/// `fn(hGPU, ctrl_struct)` — 2760 B version 0x10AC8 (68296; NOT the 6220 B rail V2), with
+/// mask u32 @+4 + dense 84-byte-stride entries seeded (type u32 @entry+72 from the rail
+/// builder, same as GetControl). Out: per-rail type + 6×u32 @+76.. — LIVE-VERIFIED 610.74
+/// RTX 4060 Laptop rail0: [630000, 1005000, 0, 1200000, 1005000, 630000] µV (0.63 V current,
+/// 1.005 V target/limit, 1.2 V cap).
 NvAPI_GPU_VoltVoltRailsGetStatus = 0x5d0634ee,
 /// `NvAPI_GPU_LpwrPgGetSupport` — GPUHandle::pollDifrLayer1/2/3 - DIFR power-gating support/statistics
 NvAPI_GPU_LpwrPgGetSupport = 0x7caac987,
@@ -1532,6 +1550,8 @@ Unknown_01510308 = 0x01510308,
 /// NVAPI_API_NOT_INITIALIZED. Single u32 by-value arg (NOT a per-GPU call).
 NvAPI_GPU_PrivateLifecycleInit = 0xad298d3f,
 /// `Unknown_33C7358C` — the ref-tool GUI init - secondary lifecycle resolver (cached @ qword_140F1A7C8)
+/// melonVolt resolves this pair right after NvAPI_Initialize (0x0150E828) + private_lifecycle_init
+/// (0xAD298D3F); both must be non-NULL or its volt resolver aborts.
 Unknown_33C7358C_LifecycleInit = 0x33c7358c,
 /// `Unknown_593E8644` — the ref-tool GUI init - secondary lifecycle resolver (cached @ qword_140F1A7D0)
 Unknown_593E8644_LifecycleInit = 0x593e8644,
@@ -1780,9 +1800,20 @@ Unknown_593E8644_LifecycleInit = 0x593e8644,
     NvAPI_GPU_VoltPmumonVoltRailsGetSamples = 0x54f67bbf,
     NvAPI_GPU_GetCoreVoltage = 0x58337fa3,
     NvAPI_GPU_GetPMGRVoltageRequestArbiterValues = 0x717648fd,
+    /// melonVolt's "commit": `fn(hGPU, ctrl_struct)` — the MSVDD µV-offset WRITE path
+    /// (same 2760 B ctrl struct as GetControl below, RM escape 0x07000191). melonVolt
+    /// clamps to ±100 mV in 5 mV steps after a sanity check of ±250 mV, then read-verifies.
+    /// NEVER wrapped read-only-only (see reverse/melonvolt/ANALYSIS.md).
     NvAPI_GPU_VoltVoltRailsSetControl = 0x87c55c8a,
     NvAPI_GPU_VoltVoltPoliciesGetStatus = 0x8d877b8f,
     NvAPI_GPU_SetPMGRVoltageRequestArbiterValues = 0x9c4bb8d0,
+    /// melonVolt's "getter": `fn(hGPU, ctrl_struct)` — control-object GET. Ctrl struct
+    /// V2 version 0x20AC8 = 2760 B (V1 0x10AC8 accepted, same size). In: mask u32 @+4 +
+    /// dense per-rail entries at 84-byte stride, seed/type u32 @entry+72 copied from the
+    /// rail-builder entry (+192*bit+76). Out: type validated @+72, then SIX u32 filled
+    /// @+76..+100 (spanning past the 84-byte slot stride — driver copies exactly these).
+    /// RM layer: escape 0x07000191, ctrl cmd 0x2080A613. LIVE-VERIFIED 610.74 RTX 4060
+    /// Laptop: rail0 control entry type=0 (no offset control on Ada mobile), values 0.
     NvAPI_GPU_VoltVoltRailsGetControl = 0xa3070db0,
     NvAPI_GPU_VoltVoltDevicesGetInfo = 0xa38acf9d,
     NvAPI_GPU_GetCoreVoltageControl = 0xa91f88eb,
