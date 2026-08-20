@@ -60,6 +60,22 @@ impl VoltRailEntry {
     }
 }
 
+/// Raw 192-byte rail descriptor from GetInfo (only type @dword 19 decoded).
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct RailDescriptor {
+    pub rail_bit: u32,
+    /// 48 little-endian u32; dword 19 = entry type discriminator.
+    pub raw_u32: Vec<u32>,
+}
+
+impl RailDescriptor {
+    /// entry type discriminator (dword 19, byte offset +76)
+    pub fn entry_type(&self) -> u32 {
+        self.raw_u32.get(19).copied().unwrap_or(0)
+    }
+}
+
 /// Read-only snapshot of the private VoltRails family: rail mask + per-rail
 /// control entries (offset objects) and status entries (live voltages).
 #[derive(Clone, Debug, Default)]
@@ -70,6 +86,10 @@ pub struct VoltRails {
     pub rail_mask: u32,
     pub control: Vec<VoltRailEntry>,
     pub status: Vec<VoltRailEntry>,
+    /// raw 192-byte rail descriptors (48×u32) from GetInfo, indexed by rail
+    /// bit — only dword 19 (type @+76) is decoded so far; the rest is
+    /// undecoded driver data dumped for cross-platform comparison.
+    pub rail_descriptors: Vec<RailDescriptor>,
 }
 
 /// P0 core-domain voltage bounds derived from a type-1 status entry
@@ -994,11 +1014,89 @@ impl PhysicalGpu {
             }
         };
 
+        let rail_descriptors = (0..32u32)
+            .filter(|bit| info.rail_mask & (1 << bit) != 0)
+            .filter_map(|bit| {
+                info.rail_entry_raw(bit).map(|raw| RailDescriptor {
+                    rail_bit: bit,
+                    raw_u32: raw.to_vec(),
+                })
+            })
+            .collect();
+
         Ok(VoltRails {
             rail_mask: info.rail_mask,
             control: control.entries().map(VoltRailEntry::from_raw).collect(),
             status: status_entries,
+            rail_descriptors,
         })
+    }
+
+    /// Write a value into one rail's control-entry payload (index 0, @+76) and
+    /// verify the driver retained it — the mechanism half of melonVolt's
+    /// protocol (snapshot → locate → patch → SET → readback). Policy (type
+    /// check, ±mV limits) belongs to the caller; the entry's payload index 0
+    /// is the µV offset on RTX-5090 MSVDD (type 3) entries.
+    ///
+    /// Returns the value the driver actually retained.
+    #[allow(non_snake_case)] // uV suffix matches the sys-layer field naming
+    pub fn set_volt_rail_value(&self, rail_bit: u32, value_uV: i32) -> crate::Result<i32> {
+        trace!("gpu.set_volt_rail_value({rail_bit}, {value_uV})");
+        use crate::sys::api::{
+            NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsGetInfo,
+            NvAPI_GPU_VoltVoltRailsSetControl,
+        };
+        use power::private::{ctrl_entry, NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO};
+
+        let mut info = NV_GPU_VOLT_RAILS_INFO::default();
+        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo, st)
+            .map_err(crate::Error::from)?;
+
+        let dense = Self::dense_index_for(info.rail_mask, rail_bit)?;
+
+        let mut control = NV_GPU_VOLT_RAILS_CONTROL::default();
+        control.seed_from_info(&info);
+        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut control).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // patch payload index 0 (entry byte +76, dword units relative to `rest`)
+        let off = ctrl_entry::STRIDE * dense + ctrl_entry::VALUES - 8;
+        let dst = control
+            .rest
+            .get_mut(off..off + 4)
+            .ok_or(crate::Error::ArgumentRange(Default::default()))?;
+        dst.copy_from_slice(&value_uV.to_le_bytes());
+
+        let st = unsafe { NvAPI_GPU_VoltVoltRailsSetControl(self.0, ptr::from_ref(&control).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsSetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // readback: fresh seeded GET, compare payload index 0
+        let mut verify = NV_GPU_VOLT_RAILS_CONTROL::default();
+        verify.seed_from_info(&info);
+        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut verify).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetControl, st)
+            .map_err(crate::Error::from)?;
+        let retained = verify
+            .entries()
+            .find(|(bit, _, _)| *bit == rail_bit)
+            .map(|(_, _, values)| values[0])
+            .ok_or(crate::Error::ArgumentRange(Default::default()))?;
+        if retained != value_uV {
+            // "Driver did not retain requested value" (melonVolt's wording)
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        Ok(retained)
+    }
+
+    /// Dense-entry index of `rail_bit` within `mask` (set bits, ascending).
+    fn dense_index_for(mask: u32, rail_bit: u32) -> crate::Result<usize> {
+        if rail_bit >= 32 || mask & (1 << rail_bit) == 0 {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        Ok((0..rail_bit).filter(|b| mask & (1 << b) != 0).count())
     }
 
     #[allow(unused_assignments)]

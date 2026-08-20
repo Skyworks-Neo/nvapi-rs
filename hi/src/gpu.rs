@@ -643,6 +643,26 @@ impl Gpu {
         }
     }
 
+    /// Write one rail's control-entry value (payload index 0; µV offset on
+    /// type-3 entries) with the full melonVolt write protocol. `Ok(None)`
+    /// where the driver doesn't expose the private family. Policy (type
+    /// check, ±mV limits) is the caller's — see the core operation.
+    #[allow(non_snake_case)] // uV suffix matches the sys-layer field naming
+    pub fn set_volt_rail_value(&self, rail_bit: u32, value_uV: i32) -> nvapi::Result<Option<i32>> {
+        match self.gpu.set_volt_rail_value(rail_bit, value_uV) {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// P-State level table (present pstates + per-pstate min/max clock in kHz
     /// for the given clock-domain) from the private PerfPstatesGetInfo (NDA
     /// 0x7B30AE0D). Source of the ref tool's `-pstate` GET listing. `domain` selects

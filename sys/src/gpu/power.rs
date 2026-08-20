@@ -57,8 +57,9 @@ pub mod private {
     // (control), ~500 KB driver-internal buffers.
     //
     // VoltVoltRailsSetControl 0x87C55C8A (the µV-offset WRITE path melonVolt
-    // drives) is deliberately NOT declared: a voltage write needs
-    // snapshot/verify/restore semantics, not a blind setter.
+    // drives) is wrapped in the medium layer with the full melonVolt protocol
+    // (snapshot -> locate -> sanity -> write -> SET -> readback verify);
+    // do NOT call the raw FFI directly.
 
     /// Byte offsets into the per-rail entries of
     /// [`NV_GPU_VOLT_RAILS_INFO`].
@@ -130,6 +131,42 @@ pub mod private {
             let end = off + 4;
             let raw = self.rest.get(off - 8..end - 8)?;
             Some(u32::from_le_bytes(raw.try_into().ok()?))
+        }
+
+        /// Raw 192-byte rail descriptor for `bit` as 48 little-endian u32.
+        /// Only the type @dword 19 is decoded so far — the rest is undecoded
+        /// driver data (observed non-zero on 4060 Laptop); dumped for
+        /// cross-platform comparison.
+        ///
+        /// Rail entry 0 starts at struct offset 0, so its first 8 bytes
+        /// overlap the version/mask header — dword 0/1 of entry 0 are the
+        /// version/mask, not rail data. Entries are read from the struct base
+        /// (not `rest`, which begins at offset 8) to avoid underflow.
+        pub fn rail_entry_raw(&self, bit: u32) -> Option<Vec<u32>> {
+            let base = rail_entry::STRIDE.checked_mul(bit as usize)?;
+            // struct size = 8 (version+mask) + rest.len(); entry must fit
+            if base + rail_entry::STRIDE > 8 + self.rest.len() {
+                return None;
+            }
+            let mut out = Vec::with_capacity(rail_entry::STRIDE / 4);
+            for i in 0..rail_entry::STRIDE / 4 {
+                let off = base + 4 * i; // struct offset
+                let raw: [u8; 4] = if off < 8 {
+                    // head: dword 0 = version, dword 1 = rail_mask
+                    let mut b = [0u8; 4];
+                    if off == 0 {
+                        b = self.version.data.to_le_bytes();
+                    } else if off == 4 {
+                        b = self.rail_mask.to_le_bytes();
+                    }
+                    b
+                } else {
+                    let r = self.rest.get(off - 8..off - 4)?;
+                    r.try_into().ok()?
+                };
+                out.push(u32::from_le_bytes(raw));
+            }
+            Some(out)
         }
     }
 
@@ -225,6 +262,14 @@ pub mod private {
         /// Private VoltRails live-status GET (per-rail voltages, µV).
         /// V1-stamped (0x10AC8) struct required; seeded like GetControl.
         pub unsafe fn NvAPI_GPU_VoltVoltRailsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_VOLT_RAILS_STATUS) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private VoltRails control-object SET (the µV-offset write path
+        /// melonVolt drives on RTX 5090 MSVDD, rail bit 1, entry type 3).
+        /// Writes the WHOLE control object — always GET, patch, then SET,
+        /// and read back to verify the driver retained the value.
+        pub unsafe fn NvAPI_GPU_VoltVoltRailsSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_VOLT_RAILS_CONTROL) -> NvAPI_Status;
     }
 
     nvstruct! {
