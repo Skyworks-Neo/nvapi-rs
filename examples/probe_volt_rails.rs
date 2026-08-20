@@ -31,11 +31,11 @@
 //! Everything here is read-only; the only calls made are the builder (GET
 //! semantics) and the control GET.
 
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::api::{NvAPI_EnumPhysicalGPUs, NvAPI_GPU_GetFullName};
 use nvapi::sys::handles::NvPhysicalGpuHandle;
 use nvapi::sys::nvapi_QueryInterface;
 use nvapi::sys::types::NvAPI_ShortString;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 
 const VOLT_RAILS_GET_INFO: u32 = 0x2C73AFDC; // rail builder
 const VOLT_RAILS_GET_STATUS: u32 = 0x5D0634EE; // live rail status
@@ -100,7 +100,9 @@ fn main() {
         }
     }
     if !initialized {
-        println!("(could not initialize — QI table may still resolve, but the call chain will not)\n");
+        println!(
+            "(could not initialize — QI table may still resolve, but the call chain will not)\n"
+        );
     }
 
     println!("=== VoltRails private family (melonVolt path) ===");
@@ -137,7 +139,10 @@ fn main() {
     let mut rail = vec![0u8; RAIL_V2 as usize & 0xFFFF];
     rail[0..4].copy_from_slice(&RAIL_V2.to_le_bytes());
     let st = unsafe { builder(h, rail.as_mut_ptr()) };
-    println!("\nrail builder (V2 0x{RAIL_V2:X}): status={st} ({})", status_name(st));
+    println!(
+        "\nrail builder (V2 0x{RAIL_V2:X}): status={st} ({})",
+        status_name(st)
+    );
     if st != 0 {
         return;
     }
@@ -178,7 +183,10 @@ fn main() {
     if st != 0 {
         return;
     }
-    println!("ctrl+8 byte (public API surfaces this as boost) = {}", ctrl[8]);
+    println!(
+        "ctrl+8 byte (public API surfaces this as boost) = {}",
+        ctrl[8]
+    );
     let mut dense = 0usize;
     for bit in 0..32 {
         if mask & (1 << bit) == 0 {
@@ -227,7 +235,10 @@ fn main() {
                 }
             }
             let st = unsafe { getstatus(h, buf.as_mut_ptr()) };
-            println!("GetStatus version 0x{ver:X} ({size}B): status={st} ({})", status_name(st));
+            println!(
+                "GetStatus version 0x{ver:X} ({size}B): status={st} ({})",
+                status_name(st)
+            );
             if st == 0 {
                 let mask2 = u32::from_le_bytes(buf[4..8].try_into().unwrap());
                 println!("mask @+4 = 0x{mask2:08X}");
@@ -242,7 +253,11 @@ fn main() {
                     }
                     let typ = u32::from_le_bytes(buf[base..base + 4].try_into().unwrap());
                     let vals: Vec<i32> = (0..6)
-                        .map(|i| i32::from_le_bytes(buf[base + 4 + 4 * i..base + 8 + 4 * i].try_into().unwrap()))
+                        .map(|i| {
+                            i32::from_le_bytes(
+                                buf[base + 4 + 4 * i..base + 8 + 4 * i].try_into().unwrap(),
+                            )
+                        })
                         .collect();
                     println!("  rail[{bit:2}] type={typ} values(µV?)={vals:?}");
                     d += 1;

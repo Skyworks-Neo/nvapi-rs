@@ -228,9 +228,7 @@ pub mod private {
                             if base + 4 + 4 * ctrl_entry::VALUES_LEN > 8 + rest.len() {
                                 return None;
                             }
-                            let typ = u32::from_le_bytes(
-                                rest[base - 8..base - 4].try_into().ok()?,
-                            );
+                            let typ = u32::from_le_bytes(rest[base - 8..base - 4].try_into().ok()?);
                             let mut values = [0i32; ctrl_entry::VALUES_LEN];
                             for (i, v) in values.iter_mut().enumerate() {
                                 let off = base + 4 + 4 * i - 8;

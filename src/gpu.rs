@@ -988,7 +988,9 @@ impl PhysicalGpu {
             NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsGetInfo,
             NvAPI_GPU_VoltVoltRailsGetStatus,
         };
-        use power::private::{NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO, NV_GPU_VOLT_RAILS_STATUS_V1};
+        use power::private::{
+            NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO, NV_GPU_VOLT_RAILS_STATUS_V1,
+        };
 
         let mut info = NV_GPU_VOLT_RAILS_INFO::default();
         let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
@@ -997,7 +999,9 @@ impl PhysicalGpu {
 
         let mut control = NV_GPU_VOLT_RAILS_CONTROL::default();
         control.seed_from_info(&info);
-        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut control).cast()) };
+        let st = unsafe {
+            NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut control).cast())
+        };
         crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetControl, st)
             .map_err(crate::Error::from)?;
 
@@ -1005,14 +1009,16 @@ impl PhysicalGpu {
         // without it still yields the control object.
         let mut status = NV_GPU_VOLT_RAILS_STATUS_V1::default();
         status.seed_from_info(&info);
-        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetStatus(self.0, ptr::from_mut(&mut status).cast()) };
-        let status_entries = match crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetStatus, st) {
-            Ok(()) => status.entries().map(VoltRailEntry::from_raw).collect(),
-            Err(e) => {
-                warn!("VoltVoltRailsGetStatus failed ({e:?}); returning control-only snapshot");
-                Vec::new()
-            }
-        };
+        let st =
+            unsafe { NvAPI_GPU_VoltVoltRailsGetStatus(self.0, ptr::from_mut(&mut status).cast()) };
+        let status_entries =
+            match crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetStatus, st) {
+                Ok(()) => status.entries().map(VoltRailEntry::from_raw).collect(),
+                Err(e) => {
+                    warn!("VoltVoltRailsGetStatus failed ({e:?}); returning control-only snapshot");
+                    Vec::new()
+                }
+            };
 
         let rail_descriptors = (0..32u32)
             .filter(|bit| info.rail_mask & (1 << bit) != 0)
@@ -1046,7 +1052,7 @@ impl PhysicalGpu {
             NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsGetInfo,
             NvAPI_GPU_VoltVoltRailsSetControl,
         };
-        use power::private::{ctrl_entry, NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO};
+        use power::private::{NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO, ctrl_entry};
 
         let mut info = NV_GPU_VOLT_RAILS_INFO::default();
         let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
@@ -1057,7 +1063,9 @@ impl PhysicalGpu {
 
         let mut control = NV_GPU_VOLT_RAILS_CONTROL::default();
         control.seed_from_info(&info);
-        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut control).cast()) };
+        let st = unsafe {
+            NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut control).cast())
+        };
         crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetControl, st)
             .map_err(crate::Error::from)?;
 
@@ -1069,14 +1077,16 @@ impl PhysicalGpu {
             .ok_or(crate::Error::ArgumentRange(Default::default()))?;
         dst.copy_from_slice(&value_uV.to_le_bytes());
 
-        let st = unsafe { NvAPI_GPU_VoltVoltRailsSetControl(self.0, ptr::from_ref(&control).cast()) };
+        let st =
+            unsafe { NvAPI_GPU_VoltVoltRailsSetControl(self.0, ptr::from_ref(&control).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsSetControl, st)
             .map_err(crate::Error::from)?;
 
         // readback: fresh seeded GET, compare payload index 0
         let mut verify = NV_GPU_VOLT_RAILS_CONTROL::default();
         verify.seed_from_info(&info);
-        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut verify).cast()) };
+        let st =
+            unsafe { NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut verify).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetControl, st)
             .map_err(crate::Error::from)?;
         let retained = verify
