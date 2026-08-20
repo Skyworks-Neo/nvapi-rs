@@ -43,9 +43,10 @@ pub struct VoltRailEntry {
     pub entry_type: u32,
     /// six payload u32; semantics depend on `entry_type`. For **status** type 1
     /// (see [`VoltRails::p0_bounds`] and `sys::gpu::power::private::status_values`):
-    /// `[current, P0_wall, ?, ~domain_max, P0_wall_mirror, P0_min_hold]` µV —
-    /// observed RTX 4060 Laptop rail0: `[630000, 1005000, 0, 1200000, 1005000, 630000]`
-    /// idle (current 0.63 V, P0 wall 1.005 V, min-hold 0.63 V).
+    /// `[current, target_wall, vbios_wall, vrm_max_wall, effective_wall, p0_min_hold]` µV —
+    /// observed RTX 4060 Laptop rail0: `[940000, 1005000, 0, 1200000, 1005000, 625000]`
+    /// (current 0.94 V, target wall 1.005 V, no vBIOS wall, ctrl max 1.200 V,
+    /// effective 1.005 V, min-hold 0.625 V).
     /// For **control** type 3 (RTX 5090 MSVDD): index 0 = the µV offset.
     pub values: [i32; 6],
 }
@@ -93,29 +94,35 @@ pub struct VoltRails {
 }
 
 /// P0 core-domain voltage bounds derived from a type-1 status entry
-/// (semantics confirmed on RTX 4060 Laptop / 610.74 — see
-/// `sys::gpu::power::private::status_values` for the per-index table).
+/// (semantics confirmed on RTX 4060 Laptop / 610.74 and desktop 20/30-series —
+/// see `sys::gpu::power::private::status_values` for the per-index table).
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[allow(nonstandard_style)] // uV suffix matches the sys-layer field naming
 pub struct P0VoltageBounds {
-    /// live core-rail voltage
+    /// live core-rail voltage — payload index 0
     pub current_uV: i32,
-    /// P0 voltage wall (max) — payload index 1 (mirrored at 4)
-    pub max_wall_uV: i32,
+    /// target wall (the value the SET side requested) — payload index 1
+    pub target_wall_uV: i32,
+    /// vBIOS voltage wall — payload index 2; 0 on mobile, on desktop a hard
+    /// cap the effective wall cannot exceed. `0` = no vBIOS wall.
+    pub vbios_wall_uV: i32,
+    /// VRM-max wall — payload index 3; the max wall the VRM (voltage
+    /// regulator) can sustain (1.200 V on observed GPUs).
+    pub vrm_max_wall_uV: i32,
+    /// effective wall — payload index 4; the final clamped wall in force
+    /// (min of target / vbios_wall / vrm_max_wall).
+    pub effective_wall_uV: i32,
     /// P0 min hold voltage (lowest that sustains P0) — payload index 5
     pub min_hold_uV: i32,
-    /// domain maximum — payload index 3; the hard ceiling the driver clamps
-    /// the wall to (RTX 4060 Laptop: 1.200 V). `0` if the driver didn't fill it.
-    pub domain_max_uV: i32,
 }
 
 impl VoltRails {
     /// Extract P0 core-domain voltage bounds from the first type-1 status
     /// entry (preferring rail bit 0, the core rail on observed platforms).
     /// Returns `None` unless the values pass a plausibility check
-    /// (`0 < min_hold <= current <= wall`), so a differently-laid-out driver
-    /// degrades to `None` instead of returning garbage.
+    /// (`0 < min_hold <= current <= effective_wall`), so a differently-laid-out
+    /// driver degrades to `None` instead of returning garbage.
     pub fn p0_bounds(&self) -> Option<P0VoltageBounds> {
         use power::private::status_values;
         let entry = self
@@ -123,29 +130,31 @@ impl VoltRails {
             .iter()
             .filter(|e| e.entry_type == 1)
             .min_by_key(|e| e.rail_bit)?;
-        let (current, wall, hold) = (
+        let (current, effective, hold) = (
             entry.values[status_values::CURRENT_UV],
-            entry.values[status_values::P0_MAX_WALL_UV],
+            entry.values[status_values::EFFECTIVE_WALL_UV],
             entry.values[status_values::P0_MIN_HOLD_UV],
         );
-        if current > 0 && hold > 0 && wall >= hold && current <= wall {
+        if current > 0 && hold > 0 && effective >= hold && current <= effective {
             Some(P0VoltageBounds {
                 current_uV: current,
-                max_wall_uV: wall,
+                target_wall_uV: entry.values[status_values::TARGET_WALL_UV],
+                vbios_wall_uV: entry.values[status_values::VBIOS_WALL_UV],
+                vrm_max_wall_uV: entry.values[status_values::VRM_MAX_WALL_UV],
+                effective_wall_uV: effective,
                 min_hold_uV: hold,
-                domain_max_uV: entry.values[status_values::DOMAIN_MAX_UV],
             })
         } else {
             None
         }
     }
 
-    /// Max overvolt offset the driver will actually honour for `rail_bit`,
-    /// derived from the type-1 status entry on the same rail: the offset that
-    /// would raise the P0 wall exactly to `domain_max`. Computed as
-    /// `domain_max - base_wall`, where `base_wall = current_wall - current_offset`
-    /// (the wall at offset 0). Returns `None` if no type-1 status entry or no
-    /// control entry exists for the rail, or if the values don't parse.
+    /// Max overvolt offset the driver will actually honour for `rail_bit`.
+    /// The effective wall (index 4) is clamped to `min(target, vbios_wall,
+    /// vrm_max_wall)`, so the ceiling is `min(vbios_wall, vrm_max_wall) −
+    /// base_wall`, where `base_wall = effective_wall − current_offset` (the
+    /// wall at offset 0). A non-zero vBIOS wall (desktop) tightens the ceiling
+    /// below vrm_max_wall. Returns `None` if the values don't parse.
     #[allow(non_snake_case)]
     pub fn offset_ceiling_uV(&self, rail_bit: u32) -> Option<i32> {
         use power::private::status_values;
@@ -155,24 +164,28 @@ impl VoltRails {
             .filter(|e| e.entry_type == 1 && e.rail_bit == rail_bit)
             .min_by_key(|e| e.rail_bit)
             .or_else(|| self.status.iter().find(|e| e.entry_type == 1))?;
-        let control = self
-            .control
-            .iter()
-            .find(|e| e.rail_bit == rail_bit)?;
-        let domain_max = status.values[status_values::DOMAIN_MAX_UV];
-        let wall = status.values[status_values::P0_MAX_WALL_UV];
+        let control = self.control.iter().find(|e| e.rail_bit == rail_bit)?;
+        let vrm_max = status.values[status_values::VRM_MAX_WALL_UV];
+        let vbios = status.values[status_values::VBIOS_WALL_UV];
+        let effective = status.values[status_values::EFFECTIVE_WALL_UV];
         let current_offset = control.values[0];
-        if domain_max <= 0 || wall <= 0 {
+        if vrm_max <= 0 || effective <= 0 {
             return None;
         }
-        // base_wall = current_wall − current_offset (the wall at offset 0).
-        // Guard: if the current offset already pushes the wall above domain_max
-        // (or the offset sign is unexpected), fall back to using wall as base.
-        let base_wall = wall
+        // The hard ceiling the effective wall can reach: vrm_max, or tighter
+        // if a non-zero vBIOS wall (desktop) caps it.
+        let mut ceiling = vrm_max;
+        if vbios > 0 && vbios < ceiling {
+            ceiling = vbios;
+        }
+        // base_wall = effective_wall − current_offset (the wall at offset 0).
+        // Guard: if the current offset already pushes the wall above the
+        // ceiling (or the offset sign is unexpected), fall back to effective.
+        let base_wall = effective
             .checked_sub(current_offset)
             .filter(|b| *b > 0)
-            .unwrap_or(wall);
-        domain_max.checked_sub(base_wall).filter(|c| *c >= 0)
+            .unwrap_or(effective);
+        ceiling.checked_sub(base_wall).filter(|c| *c >= 0)
     }
 }
 

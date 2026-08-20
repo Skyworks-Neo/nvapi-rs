@@ -84,18 +84,24 @@ pub mod private {
     }
 
     /// Semantics of the SIX payload u32 in a **status** entry of type 1
-    /// (live voltage reading; confirmed on RTX 4060 Laptop / 610.74):
+    /// (live voltage reading; confirmed on RTX 4060 Laptop / 610.74 and
+    /// cross-checked against desktop 20/30-series):
     ///
     /// | index | meaning                                                        |
     /// |-------|----------------------------------------------------------------|
     /// | 0     | current core-rail voltage (live: 0.63 V idle → 0.94 V load)    |
-    /// | 1     | P0 core-domain voltage WALL (max) — mirrors index 4            |
-    /// | 2     | unknown (observed 0)                                           |
-    /// | 3     | ~1.2 V — likely a voltage-domain absolute max; domain unknown  |
-    /// | 4     | mirror of index 1 (P0 voltage wall)                            |
+    /// | 1     | target voltage wall (the value the SET side requested)         |
+    /// | 2     | vBIOS voltage wall — 0 on mobile; on desktop a hard cap the    |
+    /// |       | final effective wall (index 4) cannot exceed                   |
+    /// | 3     | VRM-max wall — the max wall the VRM (voltage regulator) can    |
+    /// |       | sustain (1.200 V on observed GPUs)                             |
+    /// | 4     | effective wall — the final clamped wall actually in force       |
+    /// |       | (min of target [1], vBIOS wall [2], VRM-max [3] after clamps)   |
     /// | 5     | P0 core-domain MIN hold voltage (lowest voltage that sustains  |
     /// |       | P0) — the lower bound the old brute-force VFP-lock scan probed |
     ///
+    /// The effective wall (index 4) = min(target [1], vBIOS wall [2] if set,
+    /// VRM-max [3]); index 1 mirrors index 4 when nothing is clamping.
     /// Indices 1/5 replace `handle_test_voltage_limits`' trial-and-error
     /// VFP-point locking as a direct µV source for the P0 bounds.
     ///
@@ -104,10 +110,10 @@ pub mod private {
     /// offset object unconfigured, all zeros).
     pub mod status_values {
         pub const CURRENT_UV: usize = 0;
-        pub const P0_MAX_WALL_UV: usize = 1;
-        pub const UNKNOWN_2: usize = 2;
-        pub const DOMAIN_MAX_UV: usize = 3;
-        pub const P0_MAX_WALL_MIRROR_UV: usize = 4;
+        pub const TARGET_WALL_UV: usize = 1;
+        pub const VBIOS_WALL_UV: usize = 2;
+        pub const VRM_MAX_WALL_UV: usize = 3;
+        pub const EFFECTIVE_WALL_UV: usize = 4;
         pub const P0_MIN_HOLD_UV: usize = 5;
     }
 
