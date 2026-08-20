@@ -105,6 +105,9 @@ pub struct P0VoltageBounds {
     pub max_wall_uV: i32,
     /// P0 min hold voltage (lowest that sustains P0) — payload index 5
     pub min_hold_uV: i32,
+    /// domain maximum — payload index 3; the hard ceiling the driver clamps
+    /// the wall to (RTX 4060 Laptop: 1.200 V). `0` if the driver didn't fill it.
+    pub domain_max_uV: i32,
 }
 
 impl VoltRails {
@@ -130,10 +133,46 @@ impl VoltRails {
                 current_uV: current,
                 max_wall_uV: wall,
                 min_hold_uV: hold,
+                domain_max_uV: entry.values[status_values::DOMAIN_MAX_UV],
             })
         } else {
             None
         }
+    }
+
+    /// Max overvolt offset the driver will actually honour for `rail_bit`,
+    /// derived from the type-1 status entry on the same rail: the offset that
+    /// would raise the P0 wall exactly to `domain_max`. Computed as
+    /// `domain_max - base_wall`, where `base_wall = current_wall - current_offset`
+    /// (the wall at offset 0). Returns `None` if no type-1 status entry or no
+    /// control entry exists for the rail, or if the values don't parse.
+    #[allow(non_snake_case)]
+    pub fn offset_ceiling_uV(&self, rail_bit: u32) -> Option<i32> {
+        use power::private::status_values;
+        let status = self
+            .status
+            .iter()
+            .filter(|e| e.entry_type == 1 && e.rail_bit == rail_bit)
+            .min_by_key(|e| e.rail_bit)
+            .or_else(|| self.status.iter().find(|e| e.entry_type == 1))?;
+        let control = self
+            .control
+            .iter()
+            .find(|e| e.rail_bit == rail_bit)?;
+        let domain_max = status.values[status_values::DOMAIN_MAX_UV];
+        let wall = status.values[status_values::P0_MAX_WALL_UV];
+        let current_offset = control.values[0];
+        if domain_max <= 0 || wall <= 0 {
+            return None;
+        }
+        // base_wall = current_wall − current_offset (the wall at offset 0).
+        // Guard: if the current offset already pushes the wall above domain_max
+        // (or the offset sign is unexpected), fall back to using wall as base.
+        let base_wall = wall
+            .checked_sub(current_offset)
+            .filter(|b| *b > 0)
+            .unwrap_or(wall);
+        domain_max.checked_sub(base_wall).filter(|c| *c >= 0)
     }
 }
 
