@@ -1582,27 +1582,19 @@ impl PhysicalGpu {
             }
         }
 
-        // CLASSIFY by voltage-axis SHAPE, not record type: a V/F curve
-        // spans a voltage range; a pstate-bin list sits at one constant
-        // voltage. Type-based classification mislabels generations —
-        // Turing's GPC curve records arrive as the same type Ada uses for
-        // pstate bins. When the whole run sits at voltage 0 (Pascal type-1
-        // records carry no voltage axis), fall back to the type set
-        // {1, 8, 13, 18} = curve.
+        // CLASSIFY by run LENGTH, per the multi-generation census
+        // (Pascal/Turing/Ampere/Ada + A100): every segment is
+        // voltage-and-frequency ascending internally, and a new segment
+        // starts at a voltage-axis reset (the merge rule above). Curves
+        // are long (80 / 127 / 128 points observed); pstate-bin lists
+        // (mem-style: one freq/voltage per pstate) are 4-5 points.
+        // Record TYPE is useless here — generations reuse types across
+        // the two kinds (Turing's GPC curve and Ada's bins share a type).
         for s in segments.iter_mut() {
-            let flat_nonzero =
-                s.voltage_uV_min == s.voltage_uV_max && s.voltage_uV_min != 0;
-            let zero_axis = s.voltage_uV_max == 0;
-            s.kind = if flat_nonzero {
-                crate::clock::ClkVfSegmentKind::PstateBins
-            } else if zero_axis {
-                if matches!(s.record_type, 1 | 8 | 13 | 18) {
-                    crate::clock::ClkVfSegmentKind::VfCurve
-                } else {
-                    crate::clock::ClkVfSegmentKind::PstateBins
-                }
-            } else {
+            s.kind = if s.count >= 8 {
                 crate::clock::ClkVfSegmentKind::VfCurve
+            } else {
+                crate::clock::ClkVfSegmentKind::PstateBins
             };
         }
         for s in segments.iter_mut() {
