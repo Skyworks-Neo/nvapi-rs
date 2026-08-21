@@ -707,6 +707,28 @@ impl Gpu {
         }
     }
 
+    /// Batch physical clocks for many domains via the V3 MEASURE_FREQ
+    /// (magic 0x30038) — one RM round-trip per sample instead of one per
+    /// domain. Per-domain V1/V2 fallback when the driver rejects the batch
+    /// form. `Ok(None)` where the family is absent.
+    pub fn clk_domain_freqs_batch(
+        &self,
+        domains: &[u32],
+    ) -> nvapi::Result<Option<Vec<nvapi::ClockDomainFreq>>> {
+        match self.gpu.clk_domain_freqs_batch(domains) {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Write a signed kHz offset into one clock-domain's control record via
     /// the private ClockClient SET_CONTROL (RM 0x2080d01c, ID 0xD14B69CF).
     /// DANGEROUS GPU clock write: snapshots the full GetControl block,
