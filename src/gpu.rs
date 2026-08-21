@@ -1515,13 +1515,19 @@ impl PhysicalGpu {
                     Some(t) if t != 0 => t,
                     _ => continue,
                 };
+                // Pascal-generation parser: type-1 records report the
+                // +0x24 frequency term DOUBLED (live-observed on a
+                // 10-series: the parsed "default" is exactly 2× the
+                // running clock). Halve type-1 frequency terms; type 8/13/18
+                // (Ada+) are plain MHz.
+                let div = if typ == 1 { 2 } else { 1 };
                 points.push(crate::clock::ClkVfPointPrivate {
                     bank: bank as u8,
                     index: idx as u16,
                     record_type: typ,
                     voltage_uV: status.voltage_uv(bank, idx).unwrap_or(0),
-                    freq_default_mhz: status.freq_default_mhz(bank, idx).unwrap_or(0),
-                    freq_current_mhz: status.freq_current_mhz(bank, idx).unwrap_or(0),
+                    freq_default_mhz: status.freq_default_mhz(bank, idx).unwrap_or(0) / div,
+                    freq_current_mhz: status.freq_current_mhz(bank, idx).unwrap_or(0) / div,
                 });
             }
         }
@@ -1560,7 +1566,7 @@ impl PhysicalGpu {
                         p.freq_current_mhz as i32 - p.freq_default_mhz as i32;
                 }
                 _ => {
-                    let kind = if matches!(p.record_type, 8 | 13 | 18) {
+                    let kind = if matches!(p.record_type, 1 | 8 | 13 | 18) {
                         crate::clock::ClkVfSegmentKind::VfCurve
                     } else {
                         crate::clock::ClkVfSegmentKind::PstateBins
