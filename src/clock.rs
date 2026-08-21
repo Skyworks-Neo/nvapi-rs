@@ -49,6 +49,17 @@ pub type EffectiveClocks = BTreeMap<ClockDomain, Kilohertz>;
 /// clock" and similar readings come from. Only domains with a non-zero
 /// `effective_frequency` are included.
 ///
+/// **MOBILE/LAPTOP GAP — important.** On desktop GPUs `extended_domain[]`
+/// is populated and this returns the full fabric table. On at least one
+/// mobile GPU (RTX 4060 Laptop / R610.74) the driver returns `extended_domain[]`
+/// ALL-ZERO — only `domain[]` base clocks come back — so `all_clocks()`
+/// yields an empty map and `get-status` shows no fabric domains. The
+/// base clocks (the `clocks`/`GetAllClockFrequencies` table) ARE returned
+/// on mobile; only the V2 effective-fabric extension is absent. This is a
+/// driver/GPU behavior, not a parse error. The private ClockClient
+/// `MEASURE_FREQ` (`get-clk-domain-freq`) is the mobile-side workaround —
+/// it reads every controllable domain's physical clock directly.
+///
 /// **ARCHITECTURE-DEPENDENT LABELS — important caveat.** The
 /// [`ClockDomainId`] enum names (Gpc/Xbar/Sys/Hub/…) come from the RTSS
 /// (RivaTuner) NDA header and are a *historical* convention. The first four
