@@ -1517,6 +1517,11 @@ impl PhysicalGpu {
         // packs multiple domains back-to-back (GPC curve, mem pstate bins,
         // XBAR curve, ...), so runs are the plottable units.
         let mut segments: Vec<crate::clock::ClkVfSegment> = Vec::new();
+        // ordinal of each kind within the current bank — the empirical
+        // domain_hint is keyed on it (vf #1=GPC, #2=XBAR, #3=HOST; bins
+        // #1=Mem, #2=Host; live A/B on 4060 Laptop / R610.74)
+        let mut vf_ordinal = [0usize; 2];
+        let mut bins_ordinal = [0usize; 2];
         for p in &points {
             let last = segments.last_mut();
             match last {
@@ -1541,14 +1546,40 @@ impl PhysicalGpu {
                     s.delta_mhz =
                         p.freq_current_mhz as i32 - p.freq_default_mhz as i32;
                 }
-                _ => segments.push(crate::clock::ClkVfSegment {
-                    bank: p.bank,
-                    record_type: p.record_type,
-                    kind: if matches!(p.record_type, 8 | 13 | 18) {
+                _ => {
+                    let kind = if matches!(p.record_type, 8 | 13 | 18) {
                         crate::clock::ClkVfSegmentKind::VfCurve
                     } else {
                         crate::clock::ClkVfSegmentKind::PstateBins
-                    },
+                    };
+                    let ord = &mut (match kind {
+                        crate::clock::ClkVfSegmentKind::VfCurve => &mut vf_ordinal,
+                        crate::clock::ClkVfSegmentKind::PstateBins => &mut bins_ordinal,
+                    }[p.bank as usize]);
+                    let hint = match (kind, *ord) {
+                        (crate::clock::ClkVfSegmentKind::VfCurve, 0) => {
+                            crate::clock::ClkVfDomainHint::Gpc
+                        }
+                        (crate::clock::ClkVfSegmentKind::VfCurve, 1) => {
+                            crate::clock::ClkVfDomainHint::Xbar
+                        }
+                        (crate::clock::ClkVfSegmentKind::VfCurve, 2) => {
+                            crate::clock::ClkVfDomainHint::Host
+                        }
+                        (crate::clock::ClkVfSegmentKind::PstateBins, 0) => {
+                            crate::clock::ClkVfDomainHint::Mem
+                        }
+                        (crate::clock::ClkVfSegmentKind::PstateBins, 1) => {
+                            crate::clock::ClkVfDomainHint::Host
+                        }
+                        _ => crate::clock::ClkVfDomainHint::Unknown,
+                    };
+                    *ord += 1;
+                    segments.push(crate::clock::ClkVfSegment {
+                    bank: p.bank,
+                    record_type: p.record_type,
+                    kind,
+                    domain_hint: hint,
                     start_index: p.index,
                     end_index: p.index,
                     count: 1,
@@ -1557,7 +1588,8 @@ impl PhysicalGpu {
                     freq_default_mhz_min: p.freq_default_mhz,
                     freq_default_mhz_max: p.freq_default_mhz,
                     delta_mhz: p.freq_current_mhz as i32 - p.freq_default_mhz as i32,
-                }),
+                })
+                }
             }
         }
 

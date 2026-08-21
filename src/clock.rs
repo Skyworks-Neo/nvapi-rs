@@ -430,6 +430,13 @@ pub struct ClkVfSegment {
     pub record_type: u8,
     /// "vf_curve" (type 8/13/18) or "pstate_bins" (type 7) — plotting hint
     pub kind: ClkVfSegmentKind,
+    /// EMPIRICAL domain attribution (advisory), by ordinal within the bank:
+    /// vf_curve #1=GPC, #2=XBAR, #3=HOST; pstate_bins #1=Mem, #2=Host.
+    /// Live A/B on an RTX 4060 Laptop / R610.74; the ordinal order is
+    /// stable per driver but another GPU may pack domains differently —
+    /// confirm by offsetting one domain and watching which segment's
+    /// `delta_mhz` shifts.
+    pub domain_hint: ClkVfDomainHint,
     /// index of the first point (within the bank)
     pub start_index: u16,
     /// index of the last point (within the bank), inclusive
@@ -445,6 +452,38 @@ pub struct ClkVfSegment {
     /// (current - default) at the run's top point (MHz) — the applied
     /// offset this segment's domain carries
     pub delta_mhz: i32,
+}
+
+/// Advisory domain attribution for a [`ClkVfSegment`] — see
+/// [`ClkVfSegment::domain_hint`].
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub enum ClkVfDomainHint {
+    Gpc,
+    Xbar,
+    Host,
+    Mem,
+    #[default]
+    Unknown,
+}
+
+impl ClkVfDomainHint {
+    /// lowercase slug used in CLI/JSON output ("gpc", "xbar", …)
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClkVfDomainHint::Gpc => "gpc",
+            ClkVfDomainHint::Xbar => "xbar",
+            ClkVfDomainHint::Host => "host",
+            ClkVfDomainHint::Mem => "mem",
+            ClkVfDomainHint::Unknown => "unknown",
+        }
+    }
+}
+
+impl fmt::Display for ClkVfDomainHint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Plotting hint for a [`ClkVfSegment`].
