@@ -1777,6 +1777,113 @@ impl PhysicalGpu {
         })
     }
 
+    /// Write one V/F curve point via the private ClockClient V/F-POINTS
+    /// SetControl (RM 0x20809062→0x07000109, ID 0xFEC00D04). DANGEROUS V/F
+    /// curve write — the per-point analogue of the public `set_vfp_table`,
+    /// but covering ALL fabric domains (GPC/XBAR/HOST/...) and supporting
+    /// absolute mode (mode=0) which the public path cannot do.
+    ///
+    /// Implements the mandated RMW recipe (mirrors `set_clk_domain_offset`):
+    /// GetInfo → seed bank masks → GetControl snapshot → patch one record →
+    /// SetControl → GetControl readback → verify → restore on mismatch.
+    ///
+    /// `bank` is 0 (pstate-class records) or 1 (V/F curve points). `idx`
+    /// is the point index (0..2048) within that bank. `absolute` selects
+    /// mode 0 (absolute u32 value) vs mode 1 (i16 delta). `value` is the
+    /// raw u32 to write (for delta mode, only the low i16 is used).
+    pub fn set_vfp_point_private(
+        &self,
+        bank: usize,
+        idx: usize,
+        absolute: bool,
+        value: u32,
+    ) -> crate::Result<u32> {
+        trace!("gpu.set_vfp_point_private(bank={bank}, idx={idx}, absolute={absolute}, value={value})");
+        use crate::sys::api::{
+            NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
+            NvAPI_GPU_ClockClkVfPointsSetControl,
+        };
+        use clock::private::{
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
+        };
+
+        if bank > 1 || idx >= clock::private::clk_vfp_control::POINTS {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+
+        // 1. GetInfo → seed bank masks (mandatory, same as the read path)
+        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from)?;
+
+        // 2. GetControl snapshot with seeded masks — the RMW source
+        let mut snapshot = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE::default());
+        snapshot.seed_masks_from_info(&info);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // 3. Gate: verify the point is present in the mask + has a valid type
+        if info.point_present(bank, idx) != Some(true) {
+            return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl,
+                Status::NotSupported,
+            )));
+        }
+
+        // 4. Patch a copy
+        let mut modified = snapshot.clone();
+        if absolute {
+            modified.set_absolute(bank, idx, value)
+        } else {
+            modified.set_delta(bank, idx, value as i16)
+        }
+        .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+
+        // 5. SetControl
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsSetControl(self.0, ptr::from_ref(&modified).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // 6. Readback + verify
+        let mut verify = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE::default());
+        verify.seed_masks_from_info(&info);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        let retained_mode = verify.mode(bank, idx).unwrap_or(0);
+        let retained_value = verify.value(bank, idx).unwrap_or(0);
+
+        // For mode 0: value must match exactly
+        // For mode 1: low i16 must match
+        let ok = if absolute {
+            retained_mode == 0 && retained_value == value
+        } else {
+            retained_mode == 1 && (retained_value as i16) == (value as i16)
+        };
+
+        if !ok {
+            // restore the original snapshot (best effort)
+            let _ = unsafe {
+                NvAPI_GPU_ClockClkVfPointsSetControl(self.0, ptr::from_ref(&snapshot).cast())
+            };
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+
+        Ok(retained_value)
+    }
+
     #[allow(unused_assignments)]
     pub fn power_usage<C: IntoIterator<Item = crate::clock::PowerTopologyChannelId>>(
         &self,

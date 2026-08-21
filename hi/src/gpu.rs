@@ -728,6 +728,33 @@ impl Gpu {
         }
     }
 
+    /// Write one V/F curve point via the private ClockClient V/F-POINTS
+    /// SetControl (ID 0xFEC00D04). DANGEROUS: snapshots the full control
+    /// block, patches one record, SETs, readbacks, restores on mismatch.
+    /// `bank` 0 = pstate-class, 1 = V/F curve points; `idx` 0..2048.
+    /// `absolute` = mode 0 (u32 value) vs mode 1 (i16 delta). Returns the
+    /// retained value, or `Ok(None)` where the family is absent.
+    pub fn set_vfp_point_private(
+        &self,
+        bank: usize,
+        idx: usize,
+        absolute: bool,
+        value: u32,
+    ) -> nvapi::Result<Option<u32>> {
+        match self.gpu.set_vfp_point_private(bank, idx, absolute, value) {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Batch physical clocks for many domains via the V3 MEASURE_FREQ
     /// (magic 0x30038) — one RM round-trip per sample instead of one per
     /// domain. Per-domain V1/V2 fallback when the driver rejects the batch
