@@ -322,10 +322,14 @@ pub struct ClkDomainControlEntry {
 
 impl ClkDomainControlEntry {
     /// Protocol types whose value dwords the V2 (magic 0x261A4) protocol
-    /// marshals in both GET and SET (internal set {2,4,5,6,7,8,9,0xA,0xB,
-    /// 0x10} remapped to protocol).
+    /// marshals in both GET and SET. The protocol→internal remap
+    /// (sub_18015BD20) is identity+1, and the per-record switch only
+    /// handles internal {2,4,5,6,7,8,9,0xA,0xB,0x10} → protocol
+    /// {1,3,4,5,6,7,8,9,10,15}. Protocol 2 (e.g. Disp bit 6 → internal 3)
+    /// is marshalled by NEITHER version — the driver silently drops it
+    /// (live-confirmed: disp SET readback never matches).
     pub fn v2_marshalable(entry_type: u8) -> bool {
-        matches!(entry_type, 1..=10 | 15)
+        matches!(entry_type, 1 | 3..=10 | 15)
     }
 
     /// Protocol types whose value dwords the V1 (magic 0x10964) protocol
@@ -376,6 +380,7 @@ pub struct ClockDomainFreq {
 /// public OC).
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+#[allow(nonstandard_style)] // uV/mhz suffixes match the sys-layer field naming
 pub struct ClkVfPointPrivate {
     /// bank (0 or 1) the record came from
     pub bank: u8,
@@ -401,6 +406,56 @@ pub struct ClkVfPointsPrivate {
     pub masks: [u64; 8],
     /// V/F points the driver filled (record type != 0), bank-major order
     pub points: Vec<ClkVfPointPrivate>,
+    /// contiguous same-type runs of [`points`] — bank 0 packs multiple
+    /// domains back-to-back, so segmentation is what makes the table
+    /// plottable (one curve per type-8 segment)
+    pub segments: Vec<ClkVfSegment>,
+}
+
+/// One contiguous same-record-type run inside the V/F-points table.
+/// Attribution (live A/B on a 4060 Laptop, R610.74 — bank 0):
+/// type-8 run 1 (127 pts) = GPC curve, type-7 run = mem pstate bins,
+/// type-8 run 2 (127 pts) = XBAR curve, then HOST curve + its pstate
+/// list. Segment ORDER is stable per GPU/driver but the domain each run
+/// belongs to must be A/B'd (offset one domain, watch which segment's
+/// `freq_current_mhz` shifts).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+#[allow(nonstandard_style)] // uV/mhz suffixes match the sys-layer field naming
+pub struct ClkVfSegment {
+    /// 0 or 1
+    pub bank: u8,
+    /// record type: 8 (13/18 on other drivers) = V/F curve point,
+    /// 7 = pstate frequency bin
+    pub record_type: u8,
+    /// "vf_curve" (type 8/13/18) or "pstate_bins" (type 7) — plotting hint
+    pub kind: ClkVfSegmentKind,
+    /// index of the first point (within the bank)
+    pub start_index: u16,
+    /// index of the last point (within the bank), inclusive
+    pub end_index: u16,
+    /// points in the run
+    pub count: u16,
+    /// voltage axis range (µV)
+    pub voltage_uV_min: u32,
+    pub voltage_uV_max: u32,
+    /// default-frequency range (MHz)
+    pub freq_default_mhz_min: u32,
+    pub freq_default_mhz_max: u32,
+    /// (current - default) at the run's top point (MHz) — the applied
+    /// offset this segment's domain carries
+    pub delta_mhz: i32,
+}
+
+/// Plotting hint for a [`ClkVfSegment`].
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub enum ClkVfSegmentKind {
+    /// V/F curve: voltage-indexed frequency points — plot freq vs voltage
+    VfCurve,
+    #[default]
+    /// pstate frequency bins — a discrete list, not a curve
+    PstateBins,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

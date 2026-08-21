@@ -6,7 +6,7 @@ mod gpu;
 pub use gpu::*;
 
 pub use nvapi::{
-    Error, NvapiError, Result, Status, chipset_info, driver_version, error_message, initialize,
+    ClkVfSegmentKind, Error, NvapiError, Result, Status, chipset_info, driver_version, error_message, initialize,
     interface_version, sys, unload,
 };
 

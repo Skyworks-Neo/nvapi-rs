@@ -1170,6 +1170,7 @@ impl PhysicalGpu {
     /// GetControl (RM 0x2080901b, ID 0xF58938F5). Returns the controllable
     /// mask + per-domain type/range/offset entries. The article's XBAR
     /// domain is bit 1 ([`crate::clock::ClockDomainId::Xbar`]).
+    #[allow(non_snake_case)] // kHz suffix matches the sys-layer field naming
     pub fn clk_domains_control(&self) -> crate::Result<crate::clock::ClockDomainControl> {
         trace!("gpu.clk_domains_control()");
         use crate::sys::api::NvAPI_GPU_ClockClkDomainsGetControl;
@@ -1512,7 +1513,59 @@ impl PhysicalGpu {
             }
         }
 
-        Ok(crate::clock::ClkVfPointsPrivate { masks, points })
+        // Segment the filled points into contiguous same-type runs — bank 0
+        // packs multiple domains back-to-back (GPC curve, mem pstate bins,
+        // XBAR curve, ...), so runs are the plottable units.
+        let mut segments: Vec<crate::clock::ClkVfSegment> = Vec::new();
+        for p in &points {
+            let last = segments.last_mut();
+            match last {
+                Some(s)
+                    if s.bank == p.bank
+                        && s.record_type == p.record_type
+                        && s.end_index + 1 == p.index
+                        // a same-type curve CONCATENATION (GPC then XBAR,
+                        // both type 8) restarts the voltage axis — split
+                        // there too, or plotting would glue two domains
+                        // into one curve
+                        && p.voltage_uV >= s.voltage_uV_max =>
+                {
+                    s.end_index = p.index;
+                    s.count += 1;
+                    s.voltage_uV_min = s.voltage_uV_min.min(p.voltage_uV);
+                    s.voltage_uV_max = s.voltage_uV_max.max(p.voltage_uV);
+                    s.freq_default_mhz_min =
+                        s.freq_default_mhz_min.min(p.freq_default_mhz);
+                    s.freq_default_mhz_max =
+                        s.freq_default_mhz_max.max(p.freq_default_mhz);
+                    s.delta_mhz =
+                        p.freq_current_mhz as i32 - p.freq_default_mhz as i32;
+                }
+                _ => segments.push(crate::clock::ClkVfSegment {
+                    bank: p.bank,
+                    record_type: p.record_type,
+                    kind: if matches!(p.record_type, 8 | 13 | 18) {
+                        crate::clock::ClkVfSegmentKind::VfCurve
+                    } else {
+                        crate::clock::ClkVfSegmentKind::PstateBins
+                    },
+                    start_index: p.index,
+                    end_index: p.index,
+                    count: 1,
+                    voltage_uV_min: p.voltage_uV,
+                    voltage_uV_max: p.voltage_uV,
+                    freq_default_mhz_min: p.freq_default_mhz,
+                    freq_default_mhz_max: p.freq_default_mhz,
+                    delta_mhz: p.freq_current_mhz as i32 - p.freq_default_mhz as i32,
+                }),
+            }
+        }
+
+        Ok(crate::clock::ClkVfPointsPrivate {
+            masks,
+            points,
+            segments,
+        })
     }
 
     #[allow(unused_assignments)]

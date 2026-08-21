@@ -1246,4 +1246,181 @@ pub mod private {
         /// live (magic 2000388) on R610.74.
         pub unsafe fn NvAPI_GPU_ClockClkVfPointsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE) -> NvAPI_Status;
     }
+
+    /// Byte offsets into the private ClockClient V/F-POINTS GetControl /
+    /// SetControl block (IDs 0xDA025C3E / 0xFEC00D04, RM cmd 117440585).
+    ///
+    /// IDA (sub_180215FC0 GET / sub_180218090 SET, R610.74): the canonical
+    /// magic is 4670980 (0x474604) over a 4343300-byte (0x424604) buffer —
+    /// once again magic ≠ version<<16|sizeof. Both handlers ALSO accept the
+    /// smaller magics {82976, 401472, 737404, 1348740}, in which case they
+    /// internally allocate the full buffer, stamp 4670980 and fill it from
+    /// current driver state (sub_1801FAF30) before copying the user's
+    /// masks/records over it — the sanctioned RMW snapshot path.
+    ///
+    /// Layout: bank-1 point mask @+4 (128B, input seed — copy from
+    /// GetInfo), bank-1 records @+772 stride 1060; bank-2 mask @+2171652,
+    /// bank-2 records @+2172420 stride 1060. Bank-1 record types
+    /// {2,5,10,15}/{3,7,12,17} = pstate-ish; bank-2 record types
+    /// {8,13,18} = V/F curve points (anything else → -103).
+    ///
+    /// Per-record WRITE semantics (what the driver reads back from us):
+    /// - rec+0: type dword (remapped via sub_180202580)
+    /// - rec+36 (dword[9]): mode — 0 = absolute, 1 = delta
+    /// - rec+56: u32 value (mode 0) or i16 delta (mode 1); for bank-2
+    ///   type-8 records this is the V/F point's programmed value
+    /// - rec+96 (byte): passthrough flag (bank-2 only)
+    pub mod clk_vfp_control {
+        /// canonical magic (accepted input and internal fill stamp)
+        pub const MAGIC: u32 = 4670980;
+        /// buffer size (0x424604 — NOT derived from the magic)
+        pub const SIZE: usize = 4343300;
+        /// bank-1 point mask (input seed from GetInfo)
+        pub const MASK1: usize = 4;
+        /// bank-1 records base, stride 1060
+        pub const REC1: usize = 772;
+        /// per-record stride (both banks)
+        pub const STRIDE: usize = 1060;
+        /// bank-2 point mask
+        pub const MASK2: usize = 2171652;
+        /// bank-2 records base
+        pub const REC2: usize = 2172420;
+        /// records per bank
+        pub const POINTS: usize = 2048;
+        /// record type dword
+        pub const TYPE: usize = 0;
+        /// mode dword: 0 = absolute, 1 = delta
+        pub const MODE: usize = 36;
+        /// value (u32 absolute @+56; i16 delta at the same offset in mode 1)
+        pub const VALUE: usize = 56;
+        /// passthrough flag byte (bank-2 records)
+        pub const FLAG: usize = 96;
+    }
+
+    nvstruct! {
+        /// Private ClockClient V/F-POINTS GetControl/SetControl block
+        /// (0xDA025C3E / 0xFEC00D04). See [`clk_vfp_control`] for layout and
+        /// the per-record write semantics. For a safe RMW: GetControl with
+        /// the masks seeded from GetInfo → snapshot → patch → SetControl →
+        /// GetControl readback → restore on mismatch.
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE_V1 {
+            pub version: NvVersion,
+            /// +4 .. +4343300
+            pub rest: [u8; 4343296],
+        }
+    }
+
+    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE_V1;
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE_V1 {
+        fn off(&self, abs: usize, len: usize) -> Option<usize> {
+            let off = abs.checked_sub(4)?;
+            let end = off.checked_add(len)?;
+            if end <= self.rest.len() { Some(off) } else { None }
+        }
+
+        fn off_mut(&mut self, abs: usize, len: usize) -> Option<usize> {
+            let off = abs.checked_sub(4)?;
+            let end = off.checked_add(len)?;
+            if end <= self.rest.len() { Some(off) } else { None }
+        }
+
+        fn u32_at(&self, abs: usize) -> Option<u32> {
+            let off = self.off(abs, 4)?;
+            self.rest
+                .get(off..off + 4)
+                .and_then(|s| s.try_into().ok())
+                .map(u32::from_le_bytes)
+        }
+
+        /// Seed both bank masks from a GetInfo block's +4/+0x34304 mask
+        /// outputs (128B each). The handlers only touch masked points.
+        pub fn seed_masks_from_info(
+            &mut self,
+            info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1,
+        ) {
+            for (dst_abs, src_abs) in [
+                (clk_vfp_control::MASK1, clk_vfp_info::MASK1),
+                (clk_vfp_control::MASK2, clk_vfp_info::MASK2),
+            ] {
+                let dst = self.off_mut(dst_abs, 128).unwrap_or(0);
+                let src = info.off(src_abs, 128).unwrap_or(0);
+                let n = 128
+                    .min(self.rest.len() - dst)
+                    .min(info.rest.len() - src);
+                self.rest[dst..dst + n].copy_from_slice(&info.rest[src..src + n]);
+            }
+        }
+
+        fn rec_base(bank: usize, idx: usize) -> Option<usize> {
+            if bank > 1 || idx >= clk_vfp_control::POINTS {
+                return None;
+            }
+            Some(if bank == 0 { clk_vfp_control::REC1 } else { clk_vfp_control::REC2 }
+                + clk_vfp_control::STRIDE * idx)
+        }
+
+        /// Record type low byte for point `idx` in bank `bank`.
+        pub fn record_type(&self, bank: usize, idx: usize) -> Option<u8> {
+            let base = Self::rec_base(bank, idx)?;
+            let off = self.off(base + clk_vfp_control::TYPE, 1)?;
+            self.rest.get(off).copied()
+        }
+
+        /// Mode dword (rec+36): 0 = absolute, 1 = delta.
+        pub fn mode(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_control::MODE)
+        }
+
+        /// Value dword (rec+56).
+        pub fn value(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_control::VALUE)
+        }
+
+        /// Program a point absolutely: mode 0 + u32 value (rec+36/+56).
+        pub fn set_absolute(&mut self, bank: usize, idx: usize, value: u32) -> Option<()> {
+            let base = Self::rec_base(bank, idx)?;
+            let m = self.off_mut(base + clk_vfp_control::MODE, 4)?;
+            self.rest[m..m + 4].copy_from_slice(&0u32.to_le_bytes());
+            let v = self.off_mut(base + clk_vfp_control::VALUE, 4)?;
+            self.rest[v..v + 4].copy_from_slice(&value.to_le_bytes());
+            Some(())
+        }
+
+        /// Program a point as a delta: mode 1 + i16 delta (rec+36/+56).
+        pub fn set_delta(&mut self, bank: usize, idx: usize, delta: i16) -> Option<()> {
+            let base = Self::rec_base(bank, idx)?;
+            let m = self.off_mut(base + clk_vfp_control::MODE, 4)?;
+            self.rest[m..m + 4].copy_from_slice(&1u32.to_le_bytes());
+            let v = self.off_mut(base + clk_vfp_control::VALUE, 2)?;
+            self.rest[v..v + 2].copy_from_slice(&delta.to_le_bytes());
+            Some(())
+        }
+    }
+
+    impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE_V1 {
+        fn default() -> Self {
+            Self {
+                version: NvVersion::with_version(clk_vfp_control::MAGIC),
+                rest: [0; 4343296],
+            }
+        }
+    }
+
+    nvapi! {
+        /// Private ClockClient V/F-POINTS GET_CONTROL (ID 0xDA025C3E). Returns
+        /// the 1060B-record control block; seed the bank masks from GetInfo
+        /// first. Non-4670980 magics get internally expanded + filled from
+        /// current state — the RMW snapshot source for SetControl.
+        pub unsafe fn NvAPI_GPU_ClockClkVfPointsGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private ClockClient V/F-POINTS SET_CONTROL (ID 0xFEC00D04).
+        /// DANGEROUS V/F curve write. Always snapshot via GetControl first,
+        /// patch a copy, SET, read back, restore on mismatch.
+        pub unsafe fn NvAPI_GPU_ClockClkVfPointsSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE) -> NvAPI_Status;
+    }
 }
