@@ -1290,7 +1290,7 @@ impl PhysicalGpu {
 
         let (c1, t1, _, _) = sample(self.0, domain_bit)?;
         std::thread::sleep(std::time::Duration::from_millis(50));
-        let (c2, t2, extra, protocol) = sample(self.0, domain_bit)?;
+        let (c2, t2, _, _) = sample(self.0, domain_bit)?;
 
         let dt_ns = t2.saturating_sub(t1);
         let dc = c2.saturating_sub(c1);
