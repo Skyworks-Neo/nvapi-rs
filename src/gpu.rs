@@ -1562,8 +1562,6 @@ impl PhysicalGpu {
                         s.freq_default_mhz_min.min(p.freq_default_mhz);
                     s.freq_default_mhz_max =
                         s.freq_default_mhz_max.max(p.freq_default_mhz);
-                    s.delta_mhz =
-                        p.freq_current_mhz as i32 - p.freq_default_mhz as i32;
                 }
                 _ => {
                     segments.push(crate::clock::ClkVfSegment {
@@ -1579,7 +1577,6 @@ impl PhysicalGpu {
                     voltage_uV_max: p.voltage_uV,
                     freq_default_mhz_min: p.freq_default_mhz,
                     freq_default_mhz_max: p.freq_default_mhz,
-                    delta_mhz: p.freq_current_mhz as i32 - p.freq_default_mhz as i32,
                 })
                 }
             }

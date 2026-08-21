@@ -435,7 +435,7 @@ pub struct ClkVfSegment {
     /// Live A/B on an RTX 4060 Laptop / R610.74; the ordinal order is
     /// stable per driver but another GPU may pack domains differently —
     /// confirm by offsetting one domain and watching which segment's
-    /// `delta_mhz` shifts.
+    /// per-point current/default values shift.
     pub domain_hint: ClkVfDomainHint,
     /// index of the first point (within the bank)
     pub start_index: u16,
@@ -449,9 +449,6 @@ pub struct ClkVfSegment {
     /// default-frequency range (MHz)
     pub freq_default_mhz_min: u32,
     pub freq_default_mhz_max: u32,
-    /// (current - default) at the run's top point (MHz) — the applied
-    /// offset this segment's domain carries
-    pub delta_mhz: i32,
 }
 
 /// Advisory domain attribution for a [`ClkVfSegment`] — see
