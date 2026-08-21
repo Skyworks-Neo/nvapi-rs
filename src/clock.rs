@@ -287,6 +287,122 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO {
     }
 }
 
+// --- Blackwell XBar ClockClient clock-domain family -----------------------
+// (reverse/melonvolt/xbar.txt — Loong0x00 LACT #1147). The 4 NV2080 RM
+// commands wrapped via private NVAPI IDs (escape 0x07000109, same 0x0700_01xx
+// family as VoltRails). All live-verified on Ada 4060 Laptop / R575.74.
+
+/// One controllable clock-domain entry from the private ClockClient
+/// GetControl (RM 0x2080901b, ID 0xF58938F5). `domain` is the
+/// [`ClockDomainId`] (its value also = the controllable-mask bit position =
+/// the MEASURE_FREQ `domain_index`). The article's XBAR domain is
+/// [`ClockDomainId::Xbar`] = 1 (mask bit 0x2).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+#[allow(nonstandard_style)] // kHz suffix matches the sys-layer field naming
+pub struct ClkDomainControlEntry {
+    /// mask bit position (== domain index)
+    pub bit: u32,
+    /// record type byte (live 0x0A=10 on GPC/XBAR/SYS/MCLK on Ada 4060 Laptop)
+    pub entry_type: u8,
+    /// Whether the protocol marshals this record's value dwords at all.
+    /// The driver-side remap (sub_18015BB30/BD20) maps protocol ↔ internal
+    /// types and the per-record switch only copies value dwords for a fixed
+    /// internal-type set: V2 (magic 0x261A4) handles {1..=10, 15}, V1
+    /// (magic 0x10964) only {1,3,4,5,6,7,8,9}. Type 0x02 (e.g. Disp bit 6)
+    /// is marshalled by NEITHER — its values are not driver data.
+    pub values_valid: bool,
+    /// The record's value dwords. V2 reads them from rec+268..296 (8
+    /// dwords); the V1 fallback fills slots 0..4 from rec+44..60. Slot
+    /// semantics are driver-opaque — per the article slot 0 is the signed
+    /// frequency offset (kHz) and neighbors are range/voltage terms, but
+    /// only an A/B SET + MEASURE_FREQ experiment confirms which is which.
+    pub values_kHz: [i32; 8],
+}
+
+impl ClkDomainControlEntry {
+    /// Protocol types whose value dwords the V2 (magic 0x261A4) protocol
+    /// marshals in both GET and SET (internal set {2,4,5,6,7,8,9,0xA,0xB,
+    /// 0x10} remapped to protocol).
+    pub fn v2_marshalable(entry_type: u8) -> bool {
+        matches!(entry_type, 1..=10 | 15)
+    }
+
+    /// Protocol types whose value dwords the V1 (magic 0x10964) protocol
+    /// marshals (internal set {2,4,5,6,7,8,9,0xA} remapped to protocol).
+    pub fn v1_marshalable(entry_type: u8) -> bool {
+        matches!(entry_type, 1 | 3 | 4 | 5 | 6 | 7 | 8 | 9)
+    }
+}
+
+impl ClkDomainControlEntry {
+    /// The typed clock-domain id for this entry's bit, or `None` if the bit
+    /// doesn't map to a known [`ClockDomainId`] (e.g. an unnamed NDA domain).
+    pub fn domain(&self) -> Option<ClockDomainId> {
+        ClockDomainId::from_raw(self.bit as i32).ok()
+    }
+}
+
+/// Read-only snapshot of the controllable clock-domain block from GetControl.
+/// `mask` is the controllable-domain bitmask; `entries` one per set bit.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClockDomainControl {
+    /// controllable-domain bitmask (live 0xFF on Ada 4060 Laptop; includes
+    /// XBAR bit 0x2 — XBAR-as-controllable is NOT Blackwell-only)
+    pub mask: u32,
+    pub entries: Vec<ClkDomainControlEntry>,
+}
+
+/// Physical clock measurement from MEASURE_FREQ (RM 0x20809006, ID
+/// 0xFB8F61EC). Windows returns raw {counter, timestamp}, NOT the article's
+/// direct kHz; the medium layer samples twice and computes
+/// `freq = Δcounter / Δtimestamp_ns × 1e9 Hz`, reported here as MHz.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct ClockDomainFreq {
+    /// the measured domain
+    pub domain: ClockDomainId,
+    /// physical frequency in MHz (two-sample Δcounter/Δt)
+    pub freq_mhz: f64,
+}
+
+/// One V/F curve point from the private ClockClient V/F-POINTS GetStatus
+/// (RM 0x20809062, ID 0x7FEE9032, 488B type-08 records). Records are
+/// INDEXED BY VOLTAGE; units live-calibrated against the public GPC VFP
+/// curve (`get-vfp`) on R610.74: voltage µV @rec+0x58 (450000 = 450 mV =
+/// public point #0), default MHz @rec+0x24, current MHz @rec+0x64
+/// (= default + applied offset — 300 = 210 + 90 matched a live +90 MHz
+/// public OC).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct ClkVfPointPrivate {
+    /// bank (0 or 1) the record came from
+    pub bank: u8,
+    /// point index within the bank (0..2048)
+    pub index: u16,
+    /// record type byte (live 0x08 = V/F curve point on R610.74)
+    pub record_type: u8,
+    /// point voltage (µV — the V/F grid axis)
+    pub voltage_uV: u32,
+    /// default frequency at this voltage (MHz)
+    pub freq_default_mhz: u32,
+    /// current/effective frequency (MHz; = default + applied offset)
+    pub freq_current_mhz: u32,
+}
+
+/// Read-only snapshot of the private ClockClient V/F-POINTS read path:
+/// GetInfo (0x8895B510) point masks + GetStatus (0x7FEE9032) records.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkVfPointsPrivate {
+    /// present-point masks, 2048 bits per bank: bank0 = masks[0..4],
+    /// bank1 = masks[4..8]
+    pub masks: [u64; 8],
+    /// V/F points the driver filled (record type != 0), bank-major order
+    pub points: Vec<ClkVfPointPrivate>,
+}
+
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Default, Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
 pub struct VfPoint<T> {

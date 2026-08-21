@@ -663,6 +663,99 @@ impl Gpu {
         }
     }
 
+    // --- Blackwell XBar ClockClient clock-domain family ---------------------
+    // (reverse/melonvolt/xbar.txt — Loong0x00 LACT #1147). The 4 NV2080 RM
+    // commands wrapped via private NVAPI IDs (escape 0x07000109).
+
+    /// Controllable clock-domain block from the private ClockClient
+    /// GetControl (RM 0x2080901b, ID 0xF58938F5). `Ok(None)` where the driver
+    /// doesn't expose the private interface. The article's XBAR domain is
+    /// bit 1 (`nvapi::ClockDomainId::Xbar`).
+    pub fn clk_domains_control(&self) -> nvapi::Result<Option<nvapi::ClockDomainControl>> {
+        match self.gpu.clk_domains_control() {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported
+                        | nvapi::Status::NoImplementation
+                        | nvapi::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Physical clock for one domain from MEASURE_FREQ (RM 0x20809006,
+    /// ID 0xFB8F61EC) via two-sample Δcounter/Δtimestamp. `domain_bit` is the
+    /// sequential domain index (GPC=0, XBAR=1, SYS=2, MCLK=4). `Ok(None)`
+    /// where the driver doesn't expose the private interface.
+    pub fn clk_domain_freq(&self, domain_bit: u32) -> nvapi::Result<Option<nvapi::ClockDomainFreq>> {
+        match self.gpu.clk_domain_freq(domain_bit) {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Write a signed kHz offset into one clock-domain's control record via
+    /// the private ClockClient SET_CONTROL (RM 0x2080d01c, ID 0xD14B69CF).
+    /// DANGEROUS GPU clock write: snapshots the full GetControl block,
+    /// version-gates (magic 0x261A4 V2), patches a copy, SETs, readbacks,
+    /// restores on mismatch. `slot` picks the record's value dword (0-7,
+    /// slot 0 = the article's signed frequency offset). If `temporary`, the
+    /// snapshot is written back and verified restored before returning.
+    /// `Ok(None)` where the driver doesn't expose the private interface.
+    #[allow(non_snake_case)] // kHz suffix matches the sys-layer field naming
+    pub fn set_clk_domain_offset(
+        &self,
+        domain_bit: u32,
+        offset_kHz: i32,
+        slot: u32,
+        temporary: bool,
+    ) -> nvapi::Result<Option<nvapi::ClkDomainControlEntry>> {
+        match self.gpu.set_clk_domain_offset(domain_bit, offset_kHz, slot, temporary) {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// V/F curve points from the private ClockClient V/F-POINTS read path
+    /// (GetInfo 0x8895B510 → GetStatus 0x7FEE9032, RM 0x20809061/0x20809062).
+    /// Units live-calibrated vs the public GPC VFP curve. `Ok(None)` where
+    /// the driver doesn't expose the private interface.
+    pub fn clk_vf_points_private(&self) -> nvapi::Result<Option<nvapi::ClkVfPointsPrivate>> {
+        match self.gpu.clk_vf_points_private() {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// P-State level table (present pstates + per-pstate min/max clock in kHz
     /// for the given clock-domain) from the private PerfPstatesGetInfo (NDA
     /// 0x7B30AE0D). Source of the ref tool's `-pstate` GET listing. `domain` selects

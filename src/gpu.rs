@@ -1161,6 +1161,360 @@ impl PhysicalGpu {
         Ok((0..rail_bit).filter(|b| mask & (1 << b) != 0).count())
     }
 
+    // --- Blackwell XBar ClockClient clock-domain family ---------------------
+    // (reverse/melonvolt/xbar.txt — Loong0x00 LACT #1147). The 4 NV2080 RM
+    // commands wrapped via private NVAPI IDs (escape 0x07000109). All GET paths
+    // live-verified on Ada 4060 Laptop / R575.74.
+
+    /// Controllable clock-domain block from the private ClockClient
+    /// GetControl (RM 0x2080901b, ID 0xF58938F5). Returns the controllable
+    /// mask + per-domain type/range/offset entries. The article's XBAR
+    /// domain is bit 1 ([`crate::clock::ClockDomainId::Xbar`]).
+    pub fn clk_domains_control(&self) -> crate::Result<crate::clock::ClockDomainControl> {
+        trace!("gpu.clk_domains_control()");
+        use crate::sys::api::NvAPI_GPU_ClockClkDomainsGetControl;
+        use clock::private::{NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL, NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2};
+
+        // GET_CONTROL is MASK-SEEDED: the handler reads the mask at +8 to
+        // decide which per-domain records to fill, and echoes it back. Seed a
+        // broad mask so every controllable domain is populated, then derive
+        // the TRUE controllable set from records the driver actually filled
+        // (record type != 0). The driver rejects u32::MAX; 0xFF is accepted.
+        //
+        // V2 (magic 0x261A4, 24996B) is preferred: it marshals value dwords
+        // for the type-0x0A records modern drivers report; V1 only fills
+        // their type dword. Fall back to V1 when the driver rejects V2.
+        let mut v2 = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2::default();
+        v2.set_mask(0xFF);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut v2).cast())
+        };
+        if crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st).is_ok() {
+            let mask = v2.controllable_mask();
+            let entries = (0..32u32)
+                .filter_map(|bit| {
+                    let typ = v2.record_type(bit).filter(|&t| t != 0)?;
+                    let values_valid =
+                        crate::clock::ClkDomainControlEntry::v2_marshalable(typ);
+                    let mut values_kHz = [0i32; 8];
+                    if values_valid {
+                        for (i, v) in values_kHz.iter_mut().enumerate() {
+                            *v = v2.value(bit, i).unwrap_or(0);
+                        }
+                    }
+                    Some(crate::clock::ClkDomainControlEntry {
+                        bit,
+                        entry_type: typ,
+                        values_valid,
+                        values_kHz,
+                    })
+                })
+                .collect();
+            return Ok(crate::clock::ClockDomainControl { mask, entries });
+        }
+
+        // V1 fallback (older drivers): values only for types {1,3,4,5,6,7,8,9}.
+        let mut control = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL::default();
+        control.set_mask(0xFF);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut control).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        let mask = control.controllable_mask();
+        let entries = control
+            .entries()
+            .map(|(bit, typ, off, rmin, rmax, appl)| {
+                let values_valid =
+                    crate::clock::ClkDomainControlEntry::v1_marshalable(typ);
+                let mut values_kHz = [0i32; 8];
+                if values_valid {
+                    values_kHz[0] = off;
+                    values_kHz[1] = rmin;
+                    values_kHz[2] = rmax;
+                    values_kHz[3] = appl;
+                }
+                crate::clock::ClkDomainControlEntry {
+                    bit,
+                    entry_type: typ,
+                    values_valid,
+                    values_kHz,
+                }
+            })
+            .collect();
+
+        Ok(crate::clock::ClockDomainControl { mask, entries })
+    }
+
+    /// Physical clock for one domain from the private ClockClient
+    /// MEASURE_FREQ (RM 0x20809006, ID 0xFB8F61EC). Windows returns a raw
+    /// {counter, timestamp} pair — NOT the article's direct kHz — so this
+    /// samples twice (~50 ms apart) and computes
+    /// `freq = Δcounter / Δtimestamp_ns × 1e9 Hz`. `domain_bit` is the
+    /// sequential domain INDEX (GPC=0, XBAR=1, SYS=2, MCLK=4).
+    pub fn clk_domain_freq(&self, domain_bit: u32) -> crate::Result<crate::clock::ClockDomainFreq> {
+        trace!("gpu.clk_domain_freq({domain_bit})");
+        use crate::sys::api::NvAPI_GPU_ClockCounterMeasureAvgFreq;
+        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE;
+
+        fn sample(
+            gpu: sys::handles::NvPhysicalGpuHandle,
+            domain_bit: u32,
+        ) -> crate::Result<(u64, u64)> {
+            let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE::default();
+            // stamp V1 magic 0x10020 (version 1, size 0x20)
+            m.version = sys::api::NvVersion::new(0x20, 1);
+            m.domain_index = domain_bit;
+            let st = unsafe {
+                NvAPI_GPU_ClockCounterMeasureAvgFreq(gpu, ptr::from_mut(&mut m).cast())
+            };
+            crate::status_result(sys::Api::NvAPI_GPU_ClockCounterMeasureAvgFreq, st)
+                .map_err(crate::Error::from)?;
+            Ok((m.counter as u64, m.timestamp_ns))
+        }
+
+        let (c1, t1) = sample(self.0, domain_bit)?;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let (c2, t2) = sample(self.0, domain_bit)?;
+
+        let dt_ns = t2.saturating_sub(t1);
+        let dc = c2.saturating_sub(c1);
+        let freq_hz = if dt_ns > 0 {
+            (dc as f64 / dt_ns as f64) * 1e9
+        } else {
+            0.0
+        };
+
+        Ok(crate::clock::ClockDomainFreq {
+            domain: crate::clock::ClockDomainId::from_raw(domain_bit as i32)
+                .unwrap_or(crate::clock::ClockDomainId::Gpc),
+            freq_mhz: freq_hz / 1e6,
+        })
+    }
+
+    /// Write a signed kHz offset into one clock-domain's control record and
+    /// verify the driver retained it — the private ClockClient SET_CONTROL
+    /// (RM 0x2080d01c, ID 0xD14B69CF). DANGEROUS GPU clock write.
+    ///
+    /// Implements the article's mandated reversible recipe (xbar.txt:62-72):
+    /// snapshot the ENTIRE GetControl block → version/size gate (refuse if
+    /// the driver returned an unknown magic — only V2 0x261A4 is decoded for
+    /// the write path) → patch a copy with the offset → SET_CONTROL →
+    /// GET_CONTROL readback → verify retained → restore the snapshot on
+    /// mismatch. If `temporary`, the snapshot is written back and verified
+    /// restored before returning.
+    ///
+    /// `domain_bit` is the domain INDEX/mask-bit (XBAR=1). `slot` picks which
+    /// of the record's 8 value dwords to write (V2 rec+268+4*slot); slot
+    /// semantics are driver-opaque — per the article slot 0 is the signed
+    /// frequency offset (kHz), neighbors are range/voltage terms. The caller
+    /// owns range/offset policy (the article bounds XBAR ±60000 kHz on GB202).
+    pub fn set_clk_domain_offset(
+        &self,
+        domain_bit: u32,
+        offset_kHz: i32,
+        slot: u32,
+        temporary: bool,
+    ) -> crate::Result<crate::clock::ClkDomainControlEntry> {
+        #![allow(non_snake_case)]
+        trace!("gpu.set_clk_domain_offset({domain_bit}, {offset_kHz}, slot={slot}, temporary={temporary})");
+        use crate::sys::api::{NvAPI_GPU_ClockClkDomainsGetControl, NvAPI_GPU_ClockClkDomainsSetControl};
+        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2;
+
+        // GET_CONTROL is MASK-SEEDED: the caller writes the controllable mask
+        // at +8 to tell the driver which per-domain records to fill. Discover
+        // the TRUE controllable set with a broad seed first (bits whose records
+        // the driver actually fills, record type != 0), then use that real mask
+        // for every subsequent GET/SET — never submit a broad seed to SET_CONTROL
+        // (it would ask the driver to apply 32 records, most of them empty).
+        //
+        // V2 (magic 0x261A4) is the write path: it marshals the type-0x0A
+        // records this driver reports; V1 would silently drop them.
+        let mut probe = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2::default();
+        probe.set_mask(0xFF);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut probe).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // Step 1/2: version/size gate — refuse the write if the driver
+        // returned an unknown/mismatched magic. Only V2 (0x261A4) is
+        // layout-decoded for the write path.
+        if probe.version.data != 0x261A4 {
+            return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClockClkDomainsSetControl,
+                Status::NotSupported,
+            )));
+        }
+        if slot >= 8 {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let real_mask = probe.controllable_mask();
+        if domain_bit >= 32 || real_mask & (1 << domain_bit) == 0 {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        // Refuse record types the V2 protocol does not marshal (e.g. 0x02 —
+        // Disp bit 6): SET_CONTROL silently drops them and the readback can
+        // never match.
+        let entry_type = probe.record_type(domain_bit).unwrap_or(0);
+        if !crate::clock::ClkDomainControlEntry::v2_marshalable(entry_type) {
+            return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClockClkDomainsSetControl,
+                Status::NotSupported,
+            )));
+        }
+
+        // Step 3: GET_CONTROL snapshot with the REAL controllable mask —
+        // preserve the ENTIRE original block (every controllable record).
+        let mut snapshot = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2::default();
+        snapshot.set_mask(real_mask);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut snapshot).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // Step 4: patch a COPY (preserve every other byte + the real mask).
+        let mut modified = snapshot;
+        modified
+            .set_value(domain_bit, slot as usize, offset_kHz)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+
+        // Step 5: SET_CONTROL (full block, real controllable mask).
+        let st = unsafe {
+            NvAPI_GPU_ClockClkDomainsSetControl(self.0, ptr::from_ref(&modified).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsSetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // Step 6: GET_CONTROL readback + confirm the driver retained the value.
+        let mut verify = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2::default();
+        verify.set_mask(real_mask);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut verify).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st)
+            .map_err(crate::Error::from)?;
+        let retained = verify
+            .value(domain_bit, slot as usize)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        if retained != offset_kHz {
+            // driver did not retain — restore the original snapshot (best effort).
+            let _ = unsafe {
+                NvAPI_GPU_ClockClkDomainsSetControl(self.0, ptr::from_ref(&snapshot).cast())
+            };
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+
+        // Step 8 (temporary): write back the saved block + verify restored.
+        if temporary {
+            let st = unsafe {
+                NvAPI_GPU_ClockClkDomainsSetControl(self.0, ptr::from_ref(&snapshot).cast())
+            };
+            crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsSetControl, st)
+                .map_err(crate::Error::from)?;
+            let mut restored = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2::default();
+            restored.set_mask(real_mask);
+            let st = unsafe {
+                NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut restored).cast())
+            };
+            crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st)
+                .map_err(crate::Error::from)?;
+            let (after, orig) = (
+                restored.value(domain_bit, slot as usize).unwrap_or(0),
+                snapshot.value(domain_bit, slot as usize).unwrap_or(0),
+            );
+            if after != orig {
+                return Err(crate::Error::ArgumentRange(Default::default()));
+            }
+        }
+
+        let mut values_kHz = [0i32; 8];
+        for (i, v) in values_kHz.iter_mut().enumerate() {
+            *v = verify.value(domain_bit, i).unwrap_or(0);
+        }
+        values_kHz[slot as usize] = retained;
+        Ok(crate::clock::ClkDomainControlEntry {
+            bit: domain_bit,
+            entry_type: verify.record_type(domain_bit).unwrap_or(0),
+            // the SET guard above already refused non-marshalable types
+            values_valid: true,
+            values_kHz,
+        })
+    }
+
+    /// V/F curve points from the private ClockClient V/F-POINTS read path
+    /// (GetInfo 0x8895B510 → GetStatus 0x7FEE9032, RM 0x20809061/0x20809062
+    /// — the article's 127-point XBAR V/F table family). GetStatus's +4..+132
+    /// header is seeded from GetInfo's mask output (mandatory — zero seed
+    /// returns no records, garbage returns -1). Units live-calibrated against
+    /// the public GPC VFP curve; see [`crate::clock::ClkVfPointPrivate`].
+    pub fn clk_vf_points_private(&self) -> crate::Result<crate::clock::ClkVfPointsPrivate> {
+        #![allow(non_snake_case)]
+        trace!("gpu.clk_vf_points_private()");
+        use crate::sys::api::{NvAPI_GPU_ClockClkVfPointsGetInfo, NvAPI_GPU_ClockClkVfPointsGetStatus};
+        use clock::private::{
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE,
+        };
+
+        // NOTE: ~2.4 MB of zeroed buffers on the stack would overflow —
+        // box them.
+        let mut info = Box::new(
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default(),
+        );
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from)?;
+
+        let mut status = Box::new(
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE::default(),
+        );
+        info.seed_status_header(&mut status);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetStatus(self.0, ptr::from_mut(&mut *status).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetStatus, st)
+            .map_err(crate::Error::from)?;
+
+        // collapse the two 64-dword bank masks into 8 u64s
+        let mut masks = [0u64; 8];
+        for bank in 0..2usize {
+            for idx in 0..clock::private::clk_vfp_info::POINTS {
+                if info.point_present(bank, idx) == Some(true) {
+                    masks[bank * 4 + idx / 64] |= 1u64 << (idx % 64);
+                }
+            }
+        }
+
+        let mut points = Vec::new();
+        for bank in 0..2usize {
+            for idx in 0..clock::private::clk_vfp_info::POINTS {
+                if info.point_present(bank, idx) != Some(true) {
+                    continue;
+                }
+                let typ = match status.record_type(bank, idx) {
+                    Some(t) if t != 0 => t,
+                    _ => continue,
+                };
+                points.push(crate::clock::ClkVfPointPrivate {
+                    bank: bank as u8,
+                    index: idx as u16,
+                    record_type: typ,
+                    voltage_uV: status.voltage_uv(bank, idx).unwrap_or(0),
+                    freq_default_mhz: status.freq_default_mhz(bank, idx).unwrap_or(0),
+                    freq_current_mhz: status.freq_current_mhz(bank, idx).unwrap_or(0),
+                });
+            }
+        }
+
+        Ok(crate::clock::ClkVfPointsPrivate { masks, points })
+    }
+
     #[allow(unused_assignments)]
     pub fn power_usage<C: IntoIterator<Item = crate::clock::PowerTopologyChannelId>>(
         &self,
@@ -1601,8 +1955,15 @@ impl PhysicalGpu {
     pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> crate::NvapiResult<u32> {
         trace!("gpu.set_tgp_watt({} W, idx {})", watts, policy_index);
         // the ref tool's init stub calls the private lifecycle init 0xAD298D3F(1) at
-        // process startup before ANY power-control NVAPI call. Mirror that.
-        self.private_lifecycle_init()?;
+        // process startup before ANY power-control NVAPI call. Mirror that — but
+        // best-effort: on desktop Linux `libnvidia-api` does not implement the
+        // private lifecycle init (it resolves to no implementation), yet the TGP
+        // Get/Set endpoints are live. Swallow `NoImplementation` (done in
+        // [`private_lifecycle_init`]) and, for any other init error, log + continue
+        // so the SET — not the init — reports whether it can proceed.
+        if let Err(e) = self.private_lifecycle_init() {
+            warn!("set_tgp_watt: private_lifecycle_init failed ({:?}); attempting set anyway", e.status);
+        }
         // the ref tool's setTgpWatt runs AFTER queryPowerPolicy (GetInfoPrivate) has
         // populated the GPUHandle's policy state. Mirror that: call the private
         // GetInfo first so the driver's power-policy state is primed.
@@ -1636,8 +1997,21 @@ impl PhysicalGpu {
     /// Reset the GPU TGP to its rated/default value (the TGP slider's "Reset").
     /// Same read-modify-write as [`set_tgp_watt`], but writes the default mW
     /// reported by [`tgp_watt_range`] (or 0 if unavailable) into the entry.
+    ///
+    /// Calls the private lifecycle init first, mirroring [`set_tgp_watt`], but
+    /// treats it as best-effort: any failure is logged and the read-modify-write
+    /// proceeds regardless. On desktop Linux `libnvidia-api` does not implement
+    /// the private lifecycle init (the ID resolves to no implementation), yet the
+    /// TGP Get/Set endpoints are live — so the init is not necessary there and
+    /// must not abort the reset. The real TGP SET surfaces its own status if it
+    /// genuinely cannot proceed. (`set_tgp_watt`'s `private_lifecycle_init` already
+    /// swallows `NoImplementation` for the same reason; reset goes further and
+    /// tolerates any init error, since it is a recovery path.)
     pub fn reset_tgp_watt(&self, policy_index: usize) -> crate::NvapiResult<Option<u32>> {
         trace!("gpu.reset_tgp_watt(idx {})", policy_index);
+        if let Err(e) = self.private_lifecycle_init() {
+            warn!("reset_tgp_watt: private_lifecycle_init failed ({:?}); attempting reset anyway", e.status);
+        }
         let default_mw = self.tgp_watt_range()?.and_then(|r| r.default_mw);
         let mut buf: Vec<u8> =
             vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];

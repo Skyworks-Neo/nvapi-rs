@@ -666,4 +666,584 @@ pub mod private {
         /// P-State/frequency lock via 0x39442CFB.
         pub unsafe fn NvAPI_GPU_ClientRatedTdpControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_RATED_TDP_CONTROL) -> NvAPI_Status;
     }
+
+    // ------------------------------------------------------------------
+    // Blackwell XBar ClockClient clock-domain family
+    // (reverse/melonvolt/xbar.txt — Loong0x00 LACT #1147).
+    //
+    // Wraps the 4 NV2080 RM commands the article drives on Linux via
+    // /dev/nvidiactl NV20_SUBDEVICE_0:
+    //   CLK_CLK_DOMAINS_GET_INFO (0x20809019)  → NvAPI_GPU_ClockClkDomainsGetInfo
+    //   GET_CONTROL            (0x2080901b)  → NvAPI_GPU_ClockClkDomainsGetControl
+    //   SET_CONTROL            (0x2080d01c)  → NvAPI_GPU_ClockClkDomainsSetControl
+    //   CLK_MEASURE_FREQ        (0x20809006)  → NvAPI_GPU_ClockCounterMeasureAvgFreq
+    // IDA-confirmed: each impl handler (nvapi64_impl_live.dll R575.74) writes the
+    // article's exact RM cmd id into v6[13] and escapes via 0x07000109
+    // (sub_180389320/4A0 — same 0x0700_01xx private family as VoltRails 0x07000191).
+    // All 4 QI-resolve non-NULL; 3 GET paths live-verified on Ada 4060 Laptop.
+    //
+    // GetControl V1 (magic 0x10964) layout (IDA + live dump):
+    //   +0  NvVersion magic      +8  controllable_mask (u32)
+    //   +12..+99 opaque header (bytes/dwords)
+    //   +100 32×72B per-domain records, BIT-SPARSE (record for domain bit N
+    //        at +100+72*N). Each record: type u8 @+0 (live 0x0A), then 5 u32
+    //        @+44..+60: offset_kHz(i32), range_min, range_max, applied, extra.
+    // Live mask 0x000000FF = GPC(bit0)|XBAR(bit1)|SYS(bit2)|MCLK(bit4) —
+    // XBARCLK IS controllable on Ada 4060 Laptop, NOT Blackwell-only.
+    //
+    // MeasureFreq V1 (magic 0x10020): +8 cycle_counter (u32, read-modify-write,
+    // NOT direct kHz), +16 timestamp_ns (u64 QPC). Windows returns raw
+    // {counter,timestamp}; sample twice and compute freq = Δcounter/Δt_ns × 1e9.
+    // ------------------------------------------------------------------
+
+    /// Byte offsets into the bit-sparse per-domain records of
+    /// [`NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V1`] (all ABSOLUTE struct
+    /// offsets; `rest` begins at +4, so a `rest`-relative index is `abs - 4`).
+    pub mod clk_ctrl_entry {
+        /// controllable domain mask (u32) absolute offset
+        pub const MASK: usize = 8;
+        /// first per-domain record base (absolute)
+        pub const BASE: usize = 100;
+        /// per-domain record stride
+        pub const STRIDE: usize = 72;
+        /// record+0: u8 type discriminator (live 0x0A=10)
+        pub const TYPE: usize = 0;
+        /// record+44: signed kHz offset (i32)
+        pub const OFFSET_KHZ: usize = 44;
+        /// record+48: range minimum (i32 kHz)
+        pub const RANGE_MIN: usize = 48;
+        /// record+52: range maximum (i32 kHz)
+        pub const RANGE_MAX: usize = 52;
+        /// record+56: applied value (i32 kHz)
+        pub const APPLIED: usize = 56;
+    }
+
+    nvstruct! {
+        /// Opaque versioned control block for the private ClockClient
+        /// GetControl/SetControl (RM 0x2080901b / 0x2080d01c). Layout beyond
+        /// the version + mask is driver-firmware-interpreted; accessors use the
+        /// [`clk_ctrl_entry`] byte offsets. Total 0x964 = 2404 bytes.
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V1 {
+            pub version: NvVersion,
+            /// +4 .. +2404: mask@+8, header, 32×72B records @+100
+            pub rest: [u8; 2400],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V1(1) = 0x964 }
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL {
+        /// Controllable-domain bitmask (u32 @+8). This is BOTH the input mask
+        /// (which domains the caller asks the driver to fill records for) and
+        /// the echoed output. Seed it with a broad mask before GET_CONTROL so
+        /// the driver populates every controllable record; derive the TRUE
+        /// controllable mask from [record_type] != 0 rather than trusting this
+        /// echo (the driver echoes the seed, not the real controllable set).
+        pub fn mask(&self) -> u32 {
+            let off = clk_ctrl_entry::MASK - 4;
+            u32::from_le_bytes(self.rest[off..off + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        /// Seed the input mask at +8 (call before GET_CONTROL).
+        pub fn set_mask(&mut self, mask: u32) {
+            let off = clk_ctrl_entry::MASK - 4;
+            self.rest[off..off + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+
+        /// Read a u32 record field for `bit` at absolute offset `field_off`.
+        fn record_u32(&self, bit: u32, field_off: usize) -> Option<u32> {
+            let abs = clk_ctrl_entry::BASE
+                .checked_add((bit as usize).checked_mul(clk_ctrl_entry::STRIDE)?)?
+                .checked_add(field_off)?;
+            let off = abs.checked_sub(4)?;
+            let end = off.checked_add(4)?;
+            let raw = self.rest.get(off..end)?;
+            Some(u32::from_le_bytes(raw.try_into().ok()?))
+        }
+
+        /// Write a u32 record field for `bit` at absolute offset `field_off`.
+        fn set_record_u32(&mut self, bit: u32, field_off: usize, value: u32) -> Option<()> {
+            let abs = clk_ctrl_entry::BASE
+                .checked_add((bit as usize).checked_mul(clk_ctrl_entry::STRIDE)?)?
+                .checked_add(field_off)?;
+            let off = abs.checked_sub(4)?;
+            let end = off.checked_add(4)?;
+            let dst = self.rest.get_mut(off..end)?;
+            dst.copy_from_slice(&value.to_le_bytes());
+            Some(())
+        }
+
+        /// Record type byte (u8 @record+0) for domain `bit`.
+        pub fn record_type(&self, bit: u32) -> Option<u8> {
+            let abs = clk_ctrl_entry::BASE
+                .checked_add((bit as usize).checked_mul(clk_ctrl_entry::STRIDE)?)?
+                .checked_add(clk_ctrl_entry::TYPE)?;
+            self.rest.get(abs - 4).copied()
+        }
+
+        /// Signed kHz offset (i32 @record+44) for domain `bit`.
+        pub fn offset_khz(&self, bit: u32) -> Option<i32> {
+            self.record_u32(bit, clk_ctrl_entry::OFFSET_KHZ).map(|v| v as i32)
+        }
+
+        /// Range minimum (i32 @record+48) for domain `bit`.
+        pub fn range_min(&self, bit: u32) -> Option<i32> {
+            self.record_u32(bit, clk_ctrl_entry::RANGE_MIN).map(|v| v as i32)
+        }
+
+        /// Range maximum (i32 @record+52) for domain `bit`.
+        pub fn range_max(&self, bit: u32) -> Option<i32> {
+            self.record_u32(bit, clk_ctrl_entry::RANGE_MAX).map(|v| v as i32)
+        }
+
+        /// Applied value (i32 @record+56) for domain `bit`.
+        pub fn applied(&self, bit: u32) -> Option<i32> {
+            self.record_u32(bit, clk_ctrl_entry::APPLIED).map(|v| v as i32)
+        }
+
+        /// Write the signed kHz offset (i32 @record+44) for domain `bit`.
+        pub fn set_offset_khz(&mut self, bit: u32, offset_khz: i32) -> Option<()> {
+            self.set_record_u32(bit, clk_ctrl_entry::OFFSET_KHZ, offset_khz as u32)
+        }
+
+        /// Iterate (bit, type, offset_kHz, range_min, range_max, applied) for
+        /// every domain the driver actually filled a record for (record type
+        /// != 0). This derives the TRUE controllable set from filled records
+        /// rather than trusting the echoed +8 mask (which is just the seed).
+        pub fn entries(
+            &self,
+        ) -> impl Iterator<Item = (u32, u8, i32, i32, i32, i32)> + '_ {
+            let this = self;
+            (0..32u32).filter_map(move |bit| {
+                let typ = this.record_type(bit).filter(|&t| t != 0)?;
+                let off = this.offset_khz(bit).unwrap_or(0);
+                let rmin = this.range_min(bit).unwrap_or(0);
+                let rmax = this.range_max(bit).unwrap_or(0);
+                let appl = this.applied(bit).unwrap_or(0);
+                Some((bit, typ, off, rmin, rmax, appl))
+            })
+        }
+
+        /// The true controllable mask: OR of every bit whose record the driver
+        /// filled (record type != 0). Differs from [mask] when the seed was
+        /// broader than the real controllable set.
+        pub fn controllable_mask(&self) -> u32 {
+            let mut m = 0u32;
+            for bit in 0..32u32 {
+                if self.record_type(bit).filter(|&t| t != 0).is_some() {
+                    m |= 1 << bit;
+                }
+            }
+            m
+        }
+    }
+
+    nvstruct! {
+        /// Private ClockClient MEASURE_FREQ params (RM 0x20809006). The driver
+        /// returns a raw {counter, timestamp} pair — NOT a direct frequency.
+        /// Sample twice and compute freq = (c2-c1)/(t2-t1) × 1e9 Hz. Magic
+        /// 0x10020; +4 is the sequential domain INDEX (GPC=0, XBAR=1, SYS=2,
+        /// MCLK=4 — validated by sub_18017A680's idx→mask table).
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V1 {
+            pub version: NvVersion,
+            pub domain_index: u32,
+            /// +8 read-modify-write cycle counter (grows by freq×Δt)
+            pub counter: u32,
+            pub rsvd: u32,
+            /// +16 QPC nanosecond timestamp
+            pub timestamp_ns: u64,
+            pub rsvd2: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V1(1) = 0x20 }
+
+    /// Byte offsets into the bit-sparse per-domain records of
+    /// [`NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V2`] (absolute struct
+    /// offsets; `rest` begins at +4).
+    ///
+    /// V2 is the REAL read/write path for the record types modern drivers
+    /// report (protocol 0x0A — internal 0x0B via the sub_18015BB30/BD20
+    /// remap). The V1 handler's per-record switch only marshals internal
+    /// types {2,4,5,6,7,8,9,0xA}; internal 0x0B (protocol 0x0A) and 0x10
+    /// exist ONLY in the V2 switch — V1 silently drops those records (the
+    /// type dword is still written on GET, the value dwords never are).
+    ///
+    /// IDA (sub_1802091B0 GET / sub_18020BDF0 SET, nvapi64_impl R610.74):
+    /// records at +292+772*bit; type-0x0B records carry 8 value dwords at
+    /// rec+268..+296 (GET copies internal dwords[32..36,41..43] there; SET
+    /// copies the same 8 back). Verified live: 0xCC-prefill shows the driver
+    /// zeroing +268..299 for type-0x0A records while +260..267 and the
+    /// type-0x02 record stay untouched.
+    pub mod clk_ctrl_entry_v2 {
+        /// controllable domain mask (u32) absolute offset (seeded input)
+        pub const MASK: usize = 8;
+        /// first per-domain record base (absolute)
+        pub const BASE: usize = 292;
+        /// per-domain record stride
+        pub const STRIDE: usize = 772;
+        /// record+0: u32 type discriminator (low byte; live 0x0A)
+        pub const TYPE: usize = 0;
+        /// record+268: first of 8 value dwords (type-0x0A records)
+        pub const VALUES: usize = 268;
+        /// number of value dwords
+        pub const VALUE_COUNT: usize = 8;
+    }
+
+    nvstruct! {
+        /// V2 control block for the private ClockClient GetControl/SetControl.
+        /// Magic 0x261A4 = version 2 | size 0x61A4 = 24996 bytes. NOTE: an
+        /// earlier reverse-engineering pass mis-transcribed the magic as
+        /// 0x26154 — the handler's `cmp eax, 261A4h` (0x180209354) is
+        /// authoritative; 0x26154 returns -9.
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V2 {
+            pub version: NvVersion,
+            /// +4 .. +24996: mask@+8, header, 32×772B records @+292
+            pub rest: [u8; 24992],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2 NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V2(2) = 0x61a4 }
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V2 {
+        /// Seeded input mask (u32 @+8). GET_CONTROL reads it to decide which
+        /// records to fill and echoes it back.
+        pub fn mask(&self) -> u32 {
+            let off = clk_ctrl_entry_v2::MASK - 4;
+            u32::from_le_bytes(self.rest[off..off + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        /// Seed the input mask at +8 (call before GET_CONTROL). The driver
+        /// rejects u32::MAX; 0xFF is accepted.
+        pub fn set_mask(&mut self, mask: u32) {
+            let off = clk_ctrl_entry_v2::MASK - 4;
+            self.rest[off..off + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+
+        fn rec_off(&self, bit: u32, field_off: usize, len: usize) -> Option<usize> {
+            let abs = clk_ctrl_entry_v2::BASE
+                .checked_add((bit as usize).checked_mul(clk_ctrl_entry_v2::STRIDE)?)?
+                .checked_add(field_off)?;
+            let off = abs.checked_sub(4)?;
+            let end = off.checked_add(len)?;
+            if end <= self.rest.len() { Some(off) } else { None }
+        }
+
+        /// Record type low byte (u32 @rec+0) for domain `bit`.
+        pub fn record_type(&self, bit: u32) -> Option<u8> {
+            self.rec_off(bit, clk_ctrl_entry_v2::TYPE, 4)
+                .and_then(|off| self.rest.get(off).copied())
+        }
+
+        /// Value dword `i` (0..8, at rec+268+4*i) for domain `bit`.
+        pub fn value(&self, bit: u32, i: usize) -> Option<i32> {
+            if i >= clk_ctrl_entry_v2::VALUE_COUNT {
+                return None;
+            }
+            self.rec_off(bit, clk_ctrl_entry_v2::VALUES + 4 * i, 4).and_then(|off| {
+                self.rest
+                    .get(off..off + 4)
+                    .and_then(|s| s.try_into().ok())
+                    .map(u32::from_le_bytes)
+                    .map(|v| v as i32)
+            })
+        }
+
+        /// Write value dword `i` (0..8) for domain `bit`.
+        pub fn set_value(&mut self, bit: u32, i: usize, v: i32) -> Option<()> {
+            if i >= clk_ctrl_entry_v2::VALUE_COUNT {
+                return None;
+            }
+            let off = self.rec_off(bit, clk_ctrl_entry_v2::VALUES + 4 * i, 4)?;
+            self.rest[off..off + 4].copy_from_slice(&(v as u32).to_le_bytes());
+            Some(())
+        }
+
+        /// The true controllable mask: OR of bits whose record the driver
+        /// filled (record type != 0).
+        pub fn controllable_mask(&self) -> u32 {
+            let mut m = 0u32;
+            for bit in 0..32u32 {
+                if self.record_type(bit).filter(|&t| t != 0).is_some() {
+                    m |= 1 << bit;
+                }
+            }
+            m
+        }
+    }
+
+    nvstruct! {
+        /// Private ClockClient GET_INFO buffer (RM 0x20809019, the article's
+        /// discovery API). Best-effort: rejects all 5 IDA magics live on
+        /// R575.74 (-9 UNRESOLVED); discovery is routed through GetControl
+        /// (which exposes the mask + per-domain ranges) instead. Total
+        /// 0x9B8 = 2488 bytes; layout beyond the version opaque.
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_PRIVATE_V1 {
+            pub version: NvVersion,
+            pub rest: [u8; 2484],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_PRIVATE NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_PRIVATE_V1(1) = 0x9b8 }
+
+    nvapi! {
+        /// Private ClockClient GET_INFO (RM 0x20809019). Best-effort on
+        /// R575.74 (returns UNRESOLVED); GetControl supersedes it for
+        /// discovery. ID 0x57B5A5DF.
+        pub unsafe fn NvAPI_GPU_ClockClkDomainsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_PRIVATE) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private ClockClient GET_CONTROL (RM 0x2080901b, ID 0xF58938F5).
+        /// Returns the full controllable-domain block: mask + per-domain
+        /// type/range/offset. WORKS live on Ada 4060 Laptop (magic 0x10964).
+        pub unsafe fn NvAPI_GPU_ClockClkDomainsGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private ClockClient SET_CONTROL (RM 0x2080d01c, ID 0xD14B69CF).
+        /// DANGEROUS GPU clock write. Always snapshot via GetControl first,
+        /// version-gate (magic==0x10964), patch a COPY, SET, read back and
+        /// verify, restore the snapshot on mismatch. See medium-layer
+        /// `set_clk_domain_offset` for the mandated safety recipe.
+        pub unsafe fn NvAPI_GPU_ClockClkDomainsSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private ClockClient MEASURE_FREQ (RM 0x20809006, ID 0xFB8F61EC).
+        /// Returns {counter, timestamp}; sample twice and divide for physical
+        /// Hz. WORKS live on Ada 4060 Laptop.
+        pub unsafe fn NvAPI_GPU_ClockCounterMeasureAvgFreq(hPhysicalGPU: NvPhysicalGpuHandle, pMeasure: *mut NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE) -> NvAPI_Status;
+    }
+
+    /// Byte offsets into the private ClockClient V/F-POINTS GetInfo block
+    /// (ID 0x8895B510, RM 0x20809061 — the article's point-discovery API).
+    ///
+    /// IDA + live-verified on R610.74: the struct is a point DIRECTORY —
+    /// a 2048-bit point mask per bank, then 2048 descriptors of 104B (0x68)
+    /// per bank. Per-point descriptor: type via sub_1802021F0, rec+4=src[2],
+    /// rec+5=0xFF, rec+0x28 = WORD (types 2,5,10,15) or DWORD (types
+    /// 3,7,12,17) = src[4]. The mask bytes at +4.. are ALSO the seed the
+    /// GetStatus header (+4..+132) must be pre-filled from.
+    pub mod clk_vfp_info {
+        /// bank-1 point mask dwords (64 dwords = 2048 bits), absolute
+        pub const MASK1: usize = 4;
+        /// bank-1 descriptors base (absolute), stride 104 × 2048
+        pub const DESC1: usize = 772;
+        /// per-point descriptor stride
+        pub const DESC_STRIDE: usize = 104;
+        /// bank-2 point mask dwords (absolute) — exactly DESC1 + 104*2048
+        pub const MASK2: usize = 0x34304;
+        /// bank-2 descriptors base (absolute)
+        pub const DESC2: usize = 0x34604;
+        /// points per bank
+        pub const POINTS: usize = 2048;
+    }
+
+    nvstruct! {
+        /// Private ClockClient V/F-POINTS GET_INFO (ID 0x8895B510). Magic
+        /// 0x78604 = 493060 bytes. Returns the 2048-bit point masks + 104B
+        /// descriptors for both banks; its +4.. output is the seed the
+        /// GetStatus header requires. See [`clk_vfp_info`].
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1 {
+            pub version: NvVersion,
+            /// +4 .. +493060: masks + 2×2048 descriptors
+            pub rest: [u8; 493056],
+        }
+    }
+
+    // NOTE: unlike the sizeof-derived `nvversion!` magics, the V/F-points
+    // family's magic dwords are NOT `version<<16 | sizeof` (0x78604 and
+    // 0x1E8604 both exceed 16 size bits — the driver's own "size" field is
+    // just 0x8604). Stamp the raw literal the IDA handlers compare against.
+    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1;
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1 {
+        /// Literal magic dword the GetInfo handler accepts (live-verified).
+        pub const MAGIC: u32 = 0x78604;
+    }
+
+    impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1 {
+        fn default() -> Self {
+            Self { version: NvVersion::with_version(Self::MAGIC), rest: [0; 493056] }
+        }
+    }
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1 {
+        fn off(&self, abs: usize, len: usize) -> Option<usize> {
+            let off = abs.checked_sub(4)?;
+            let end = off.checked_add(len)?;
+            if end <= self.rest.len() { Some(off) } else { None }
+        }
+
+        fn u32_at(&self, abs: usize) -> Option<u32> {
+            let off = self.off(abs, 4)?;
+            self.rest
+                .get(off..off + 4)
+                .and_then(|s| s.try_into().ok())
+                .map(u32::from_le_bytes)
+        }
+
+        /// Is point `idx` (0..2048) present in bank `bank` (0 or 1)?
+        pub fn point_present(&self, bank: usize, idx: usize) -> Option<bool> {
+            if bank > 1 || idx >= clk_vfp_info::POINTS {
+                return None;
+            }
+            let mask_base = if bank == 0 { clk_vfp_info::MASK1 } else { clk_vfp_info::MASK2 };
+            let dword = self.u32_at(mask_base + 4 * (idx >> 5))?;
+            Some(dword & (1 << (idx & 31)) != 0)
+        }
+
+        /// Descriptor type byte (u8 @desc+0) for point `idx` in bank `bank`.
+        pub fn point_type(&self, bank: usize, idx: usize) -> Option<u8> {
+            if bank > 1 || idx >= clk_vfp_info::POINTS {
+                return None;
+            }
+            let base = if bank == 0 { clk_vfp_info::DESC1 } else { clk_vfp_info::DESC2 };
+            let off = self.off(base + clk_vfp_info::DESC_STRIDE * idx, 1)?;
+            self.rest.get(off).copied()
+        }
+
+        /// Copy the +4..+132 mask output into `status`' +4..+132 header —
+        /// GetStatus REQUIRES this seed (zero → no records, garbage → -1).
+        pub fn seed_status_header(&self, status: &mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1) {
+            let src = self.off(clk_vfp_info::MASK1, 128).unwrap_or(0);
+            let dst = status.off_mut(clk_vfp_info::MASK1, 128).unwrap_or(0);
+            let n = 128.min(self.rest.len() - src).min(status.rest.len() - dst);
+            status.rest[dst..dst + n].copy_from_slice(&self.rest[src..src + n]);
+        }
+    }
+
+    /// Byte offsets into the private ClockClient V/F-POINTS GetStatus
+    /// (ID 0x7FEE9032, RM 0x20809062). Two banks of up to 2048 records,
+    /// 488B each; the +4..+132 header MUST be seeded from GetInfo's mask
+    /// output first (see
+    /// [`NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1::seed_status_header`]).
+    ///
+    /// Record layout (type-08 = V/F curve points, live-CALIBRATED R610.74
+    /// against the public `get-vfp` GPC curve — records are INDEXED BY
+    /// VOLTAGE, and the "voltage" fields are actually frequencies):
+    /// - type u8 @rec+0
+    /// - voltage u32 µV @rec+0x58 (mirrored @+0x68): rec0=450000 µV =
+    ///   450 mV = public VFP point #0; the ascending voltage grid
+    /// - default frequency u32 MHz @rec+0x24 (public "default MHz" column:
+    ///   210 at points #0-3)
+    /// - current frequency u32 MHz @rec+0x64 (= default + applied delta:
+    ///   300 = 210 + 90 with a +90 MHz offset active; matches public
+    ///   current/default exactly)
+    pub mod clk_vfp_status {
+        /// record header end / records region base for bank 1 (absolute)
+        pub const REC1: usize = 772;
+        /// bank-2 records base (absolute) — REC1 + 488*2048 + 768
+        pub const REC2: usize = 1000964;
+        /// per-record stride (user-struct; internal RM stride is 152B = 0x98)
+        pub const STRIDE: usize = 488;
+        /// records per bank
+        pub const POINTS: usize = 2048;
+        /// type u8 @rec+0
+        pub const TYPE: usize = 0;
+        /// default frequency (u32 MHz) for the point's voltage
+        pub const FREQ_DEFAULT_MHZ: usize = 0x24;
+        /// point voltage (u32 µV; the V/F grid axis), mirrored @+0x68
+        pub const VOLTAGE_UV: usize = 0x58;
+        /// current/effective frequency (u32 MHz; = default + applied delta)
+        pub const FREQ_CURRENT_MHZ: usize = 0x64;
+    }
+
+    nvstruct! {
+        /// Private ClockClient V/F-POINTS GET_STATUS (ID 0x7FEE9032). Magic
+        /// 2000388 (0x1E8604) bytes. Records at +772 / +1000964, 488B stride.
+        /// Seed +4..+132 from GetInfo first. See [`clk_vfp_status`].
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1 {
+            pub version: NvVersion,
+            /// +4 .. +2000388: seeded header + 2×2048 records
+            pub rest: [u8; 2000384],
+        }
+    }
+
+    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1;
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1 {
+        /// Literal magic dword the GetStatus handler accepts: the largest of
+        /// {85016, 158200, 214652, 300164, 1525252, 2000388} — the full
+        /// 2×2048-record layout (live-verified).
+        pub const MAGIC: u32 = 2000388;
+    }
+
+    impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1 {
+        fn default() -> Self {
+            Self { version: NvVersion::with_version(Self::MAGIC), rest: [0; 2000384] }
+        }
+    }
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1 {
+        fn off(&self, abs: usize, len: usize) -> Option<usize> {
+            let off = abs.checked_sub(4)?;
+            let end = off.checked_add(len)?;
+            if end <= self.rest.len() { Some(off) } else { None }
+        }
+
+        fn off_mut(&mut self, abs: usize, len: usize) -> Option<usize> {
+            let off = abs.checked_sub(4)?;
+            let end = off.checked_add(len)?;
+            if end <= self.rest.len() { Some(off) } else { None }
+        }
+
+        fn u32_at(&self, abs: usize) -> Option<u32> {
+            let off = self.off(abs, 4)?;
+            self.rest
+                .get(off..off + 4)
+                .and_then(|s| s.try_into().ok())
+                .map(u32::from_le_bytes)
+        }
+
+        fn rec_base(bank: usize, idx: usize) -> Option<usize> {
+            if bank > 1 || idx >= clk_vfp_status::POINTS {
+                return None;
+            }
+            Some(if bank == 0 { clk_vfp_status::REC1 } else { clk_vfp_status::REC2 }
+                + clk_vfp_status::STRIDE * idx)
+        }
+
+        /// Record type byte (u8 @rec+0) for point `idx` in bank `bank`.
+        pub fn record_type(&self, bank: usize, idx: usize) -> Option<u8> {
+            let base = Self::rec_base(bank, idx)?;
+            let off = self.off(base + clk_vfp_status::TYPE, 1)?;
+            self.rest.get(off).copied()
+        }
+
+        /// Default frequency (u32 MHz @rec+0x24) at the point's voltage.
+        pub fn freq_default_mhz(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_status::FREQ_DEFAULT_MHZ)
+        }
+
+        /// Current/effective frequency (u32 MHz @rec+0x64; default + delta).
+        pub fn freq_current_mhz(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_status::FREQ_CURRENT_MHZ)
+        }
+
+        /// Point voltage (u32 µV @rec+0x58 — the V/F grid axis).
+        pub fn voltage_uv(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_status::VOLTAGE_UV)
+        }
+    }
+
+    nvapi! {
+        /// Private ClockClient V/F-POINTS GET_INFO (RM 0x20809061, ID
+        /// 0x8895B510). Returns the per-bank point masks + descriptors.
+        /// Its +4.. output seeds the GetStatus header. WORKS live (magic
+        /// 0x78604) on R610.74.
+        pub unsafe fn NvAPI_GPU_ClockClkVfPointsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private ClockClient V/F-POINTS GET_STATUS (RM 0x20809062, ID
+        /// 0x7FEE9032). Returns the per-bank 488B point records. The +4..+132
+        /// header MUST be seeded from GetInfo's mask output first. WORKS
+        /// live (magic 2000388) on R610.74.
+        pub unsafe fn NvAPI_GPU_ClockClkVfPointsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE) -> NvAPI_Status;
+    }
 }

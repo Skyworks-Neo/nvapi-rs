@@ -105,9 +105,18 @@ pub mod private {
     /// Indices 1/5 replace `handle_test_voltage_limits`' trial-and-error
     /// VFP-point locking as a direct µV source for the P0 bounds.
     ///
-    /// A **control** entry's payload has different semantics (type 3 on RTX
-    /// 5090 MSVDD = the µV offset melonVolt writes; type 0 on 4060 Laptop =
-    /// offset object unconfigured, all zeros).
+    /// A **control** entry's payload: `values[0]` is the µV offset melonVolt
+    /// writes (same role for all types). The TYPE field (+72) distinguishes
+    /// the VoltRails control/descriptor-format version — NOT writability and
+    /// NOT per-generation architecture (10/20/30/40-series all report type 0,
+    /// so type is not a generation marker). Type 0 = legacy format (Pascal→Ada,
+    /// 10–40 series); type 3 = Blackwell format (50 series); type 2 = unobserved
+    /// intermediate. All three are writable (IDA `sub_18015B6E0` SET encoder
+    /// returns success for 0/2/3). 4060 Laptop
+    /// type=0 values are all-zero only because stock offset = 0; the wall is
+    /// empirically raisable to 1.2V. `values[1..5]` are an opaque blob the
+    /// driver blind-copies (SET commit `sub_1801D2450`) with no per-type
+    /// dispatch — firmware-interpreted, not driver-interpreted.
     pub mod status_values {
         pub const CURRENT_UV: usize = 0;
         pub const TARGET_WALL_UV: usize = 1;
