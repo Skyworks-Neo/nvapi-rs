@@ -880,6 +880,96 @@ pub mod private {
 
     nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE2 NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V2(2) = 0x20 }
 
+    /// V3 batch MEASURE_FREQ (magic 196984 = 0x30038; IDA sub_18021DC90
+    /// V3 arm + disasm @0x18021DF03). One RM round-trip measures MANY
+    /// domains: header 16B (magic@+0, count u8@+11), then `count` packed
+    /// 24B entries from +16. Per entry the counter/timestamp qwords are
+    /// SEED inputs and new-value outputs (read-modify-write, same as the
+    /// single-domain forms); `extra` is output-only.
+    pub mod clk_measure_v3 {
+        /// magic 0x30178 (196984 decimal) = version 3 | size 0x178 = 376B
+        /// = 16B header + 24B × 15 entries — the driver's FIXED capacity.
+        pub const MAGIC: u32 = 0x30178;
+        /// count u8
+        pub const COUNT: usize = 11;
+        /// first 24B entry (absolute)
+        pub const ENTRIES: usize = 16;
+        /// per-entry stride
+        pub const STRIDE: usize = 24;
+        /// max entries the internal 0x98240 buffer accommodates (far above
+        /// any domain count in practice)
+        pub const MAX_ENTRIES: usize = 15;
+        /// entry+0: domain index u8
+        pub const DOMAIN: usize = 0;
+        /// entry+4: extra dword OUT
+        pub const EXTRA: usize = 4;
+        /// entry+8: cycle counter u64 (seed in / new value out)
+        pub const COUNTER: usize = 8;
+        /// entry+16: QPC timestamp ns u64 (seed in / new value out)
+        pub const TIMESTAMP: usize = 16;
+    }
+
+    nvstruct! {
+        /// V3 batch MEASURE_FREQ params — see [`clk_measure_v3`].
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V3 {
+            pub version: NvVersion,
+            /// +4 .. +16: reserved (count byte lives at +11)
+            pub header: [u8; 12],
+            /// +16 .. +376: 15 packed 24B entries
+            pub entries: [u8; 360],
+        }
+    }
+
+    // NOTE: no `= size` assert here — the magic's 0x38 is the DRIVER's
+    // baseline size (header + 1 entry); the actual struct is sized for 32
+    // entries and the handler validates only the magic dword.
+    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3 NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V3(3) = 0x178 }
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V3 {
+        fn ent_off(&self, i: usize, field_off: usize, len: usize) -> Option<usize> {
+            if i >= clk_measure_v3::MAX_ENTRIES {
+                return None;
+            }
+            let off = clk_measure_v3::ENTRIES + clk_measure_v3::STRIDE * i + field_off
+                - 4;
+            let end = off.checked_add(len)?;
+            if end <= self.entries.len() { Some(off) } else { None }
+        }
+
+        /// number of entries (u8 @+11)
+        pub fn count(&self) -> u8 {
+            // +11 absolute = header[7]
+            self.header[clk_measure_v3::COUNT - 4]
+        }
+
+        /// Set the entry count (u8 @+11).
+        pub fn set_count(&mut self, n: u8) {
+            self.header[clk_measure_v3::COUNT - 4] = n;
+        }
+
+        /// Program entry `i`: domain index + counter/timestamp seeds.
+        pub fn set_entry(&mut self, i: usize, domain: u32, counter: u64, timestamp_ns: u64) -> Option<()> {
+            let d = self.ent_off(i, clk_measure_v3::DOMAIN, 1)?;
+            self.entries[d] = domain as u8;
+            let c = self.ent_off(i, clk_measure_v3::COUNTER, 8)?;
+            self.entries[c..c + 8].copy_from_slice(&counter.to_le_bytes());
+            let t = self.ent_off(i, clk_measure_v3::TIMESTAMP, 8)?;
+            self.entries[t..t + 8].copy_from_slice(&timestamp_ns.to_le_bytes());
+            Some(())
+        }
+
+        /// Read entry `i`'s returned {counter, timestamp, extra}.
+        pub fn entry(&self, i: usize) -> Option<(u64, u64, u32)> {
+            let c = self.ent_off(i, clk_measure_v3::COUNTER, 8)?;
+            let counter = u64::from_le_bytes(self.entries[c..c + 8].try_into().ok()?);
+            let t = self.ent_off(i, clk_measure_v3::TIMESTAMP, 8)?;
+            let ts = u64::from_le_bytes(self.entries[t..t + 8].try_into().ok()?);
+            let e = self.ent_off(i, clk_measure_v3::EXTRA, 4)?;
+            let extra = u32::from_le_bytes(self.entries[e..e + 4].try_into().ok()?);
+            Some((counter, ts, extra))
+        }
+    }
+
     /// Byte offsets into the bit-sparse per-domain records of
     /// [`NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V2`] (absolute struct
     /// offsets; `rest` begins at +4).

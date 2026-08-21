@@ -1307,6 +1307,90 @@ impl PhysicalGpu {
         })
     }
 
+    /// Batch physical clocks for many domains in ONE RM round-trip family —
+    /// the V3 MEASURE_FREQ (magic 0x30038): up to 32 packed 24B entries,
+    /// each carrying its own {counter, timestamp} seed. Two calls ~50 ms
+    /// apart give every domain's Δcounter/Δtimestamp × 1e9 Hz. Falls back
+    /// per-domain to the V1/V2 single measure when the driver rejects the
+    /// batch form (Pascal observed).
+    pub fn clk_domain_freqs_batch(
+        &self,
+        domains: &[u32],
+    ) -> crate::Result<Vec<crate::clock::ClockDomainFreq>> {
+        trace!("gpu.clk_domain_freqs_batch({domains:?})");
+        use crate::sys::api::NvAPI_GPU_ClockCounterMeasureAvgFreq;
+        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3;
+
+        if domains.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n = domains.len().min(clock::private::clk_measure_v3::MAX_ENTRIES);
+
+        fn sample_batch(
+            gpu: sys::handles::NvPhysicalGpuHandle,
+            domains: &[u32],
+        ) -> crate::Result<NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3> {
+            let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3::default();
+            // stamp V3 magic 0x30038 (version 3, size 0x38)
+            m.version = sys::api::NvVersion::new(0x178, 3);
+            m.set_count(domains.len() as u8);
+            for (i, &d) in domains.iter().enumerate() {
+                m.set_entry(i, d, 0, 0)
+                    .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            }
+            let st = unsafe {
+                NvAPI_GPU_ClockCounterMeasureAvgFreq(gpu, ptr::from_mut(&mut m).cast())
+            };
+            crate::status_result(sys::Api::NvAPI_GPU_ClockCounterMeasureAvgFreq, st)
+                .map_err(crate::Error::from)?;
+            Ok(m)
+        }
+
+        let sample = |domains: &[u32]| -> crate::Result<Vec<(u64, u64)>> {
+            let m1 = sample_batch(self.0, domains)?;
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let m2 = sample_batch(self.0, domains)?;
+            Ok((0..domains.len())
+                .map(|i| {
+                    let (c1, t1, _) = m1.entry(i).unwrap_or((0, 0, 0));
+                    let (c2, t2, _) = m2.entry(i).unwrap_or((0, 0, 0));
+                    (c2.saturating_sub(c1), t2.saturating_sub(t1))
+                })
+                .collect())
+        };
+
+        match sample(&domains[..n]) {
+            // KNOWN OPEN ISSUE: on R610.74 the V3 call SUCCEEDS but returns
+            // a frozen snapshot — the per-entry outputs don't advance
+            // between samples (even with RMW seeding), so Δcounter/Δt is
+            // always 0. Detect that and fall back per-domain.
+            Ok(deltas) if deltas.iter().any(|&(dc, _)| dc > 0) => Ok(deltas
+                .iter()
+                .zip(&domains[..n])
+                .map(|(&(dc, dt), &bit)| {
+                    let freq_hz = if dt > 0 { (dc as f64 / dt as f64) * 1e9 } else { 0.0 };
+                    crate::clock::ClockDomainFreq {
+                        domain: crate::clock::ClockDomainId::from_raw(bit as i32)
+                            .unwrap_or(crate::clock::ClockDomainId::Gpc),
+                        freq_mhz: freq_hz / 1e6,
+                    }
+                })
+                .collect()),
+            // batch rejected OR frozen — fall back per-domain to V1/V2,
+            // skipping domains the driver refuses (e.g. Disp type 0x02,
+            // Pascal's RM-rejected gpc/xbar) instead of failing the set
+            _ => {
+                let mut out = Vec::new();
+                for &bit in &domains[..n] {
+                    if let Ok(f) = self.clk_domain_freq(bit) {
+                        out.push(f);
+                    }
+                }
+                Ok(out)
+            }
+        }
+    }
+
     /// Write a signed kHz offset into one clock-domain's control record and
     /// verify the driver retained it — the private ClockClient SET_CONTROL
     /// (RM 0x2080d01c, ID 0xD14B69CF). DANGEROUS GPU clock write.
