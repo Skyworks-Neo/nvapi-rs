@@ -1566,39 +1566,12 @@ impl PhysicalGpu {
                         p.freq_current_mhz as i32 - p.freq_default_mhz as i32;
                 }
                 _ => {
-                    let kind = if matches!(p.record_type, 1 | 8 | 13 | 18) {
-                        crate::clock::ClkVfSegmentKind::VfCurve
-                    } else {
-                        crate::clock::ClkVfSegmentKind::PstateBins
-                    };
-                    let ord = &mut (match kind {
-                        crate::clock::ClkVfSegmentKind::VfCurve => &mut vf_ordinal,
-                        crate::clock::ClkVfSegmentKind::PstateBins => &mut bins_ordinal,
-                    }[p.bank as usize]);
-                    let hint = match (kind, *ord) {
-                        (crate::clock::ClkVfSegmentKind::VfCurve, 0) => {
-                            crate::clock::ClkVfDomainHint::Gpc
-                        }
-                        (crate::clock::ClkVfSegmentKind::VfCurve, 1) => {
-                            crate::clock::ClkVfDomainHint::Xbar
-                        }
-                        (crate::clock::ClkVfSegmentKind::VfCurve, 2) => {
-                            crate::clock::ClkVfDomainHint::Host
-                        }
-                        (crate::clock::ClkVfSegmentKind::PstateBins, 0) => {
-                            crate::clock::ClkVfDomainHint::Mem
-                        }
-                        (crate::clock::ClkVfSegmentKind::PstateBins, 1) => {
-                            crate::clock::ClkVfDomainHint::Host
-                        }
-                        _ => crate::clock::ClkVfDomainHint::Unknown,
-                    };
-                    *ord += 1;
                     segments.push(crate::clock::ClkVfSegment {
                     bank: p.bank,
                     record_type: p.record_type,
-                    kind,
-                    domain_hint: hint,
+                    // provisional — re-classified after the runs are built
+                    kind: crate::clock::ClkVfSegmentKind::VfCurve,
+                    domain_hint: crate::clock::ClkVfDomainHint::Unknown,
                     start_index: p.index,
                     end_index: p.index,
                     count: 1,
@@ -1610,6 +1583,57 @@ impl PhysicalGpu {
                 })
                 }
             }
+        }
+
+        // CLASSIFY by voltage-axis SHAPE, not record type: a V/F curve
+        // spans a voltage range; a pstate-bin list sits at one constant
+        // voltage. Type-based classification mislabels generations —
+        // Turing's GPC curve records arrive as the same type Ada uses for
+        // pstate bins. When the whole run sits at voltage 0 (Pascal type-1
+        // records carry no voltage axis), fall back to the type set
+        // {1, 8, 13, 18} = curve.
+        for s in segments.iter_mut() {
+            let flat_nonzero =
+                s.voltage_uV_min == s.voltage_uV_max && s.voltage_uV_min != 0;
+            let zero_axis = s.voltage_uV_max == 0;
+            s.kind = if flat_nonzero {
+                crate::clock::ClkVfSegmentKind::PstateBins
+            } else if zero_axis {
+                if matches!(s.record_type, 1 | 8 | 13 | 18) {
+                    crate::clock::ClkVfSegmentKind::VfCurve
+                } else {
+                    crate::clock::ClkVfSegmentKind::PstateBins
+                }
+            } else {
+                crate::clock::ClkVfSegmentKind::VfCurve
+            };
+        }
+        for s in segments.iter_mut() {
+            let ord = &mut (match s.kind {
+                crate::clock::ClkVfSegmentKind::VfCurve => &mut vf_ordinal,
+                crate::clock::ClkVfSegmentKind::PstateBins => &mut bins_ordinal,
+            }[s.bank as usize]);
+            s.domain_hint = match (s.kind, *ord) {
+                (crate::clock::ClkVfSegmentKind::VfCurve, 0) => {
+                    crate::clock::ClkVfDomainHint::Gpc
+                }
+                (crate::clock::ClkVfSegmentKind::VfCurve, 1) => {
+                    crate::clock::ClkVfDomainHint::Xbar
+                }
+                (crate::clock::ClkVfSegmentKind::VfCurve, 2) => {
+                    crate::clock::ClkVfDomainHint::Host
+                }
+                (crate::clock::ClkVfSegmentKind::PstateBins, 0) => {
+                    crate::clock::ClkVfDomainHint::Mem
+                }
+                // 4060: host/disp pstate ceiling; Turing: unknown 5-bin
+                // list — pstate-family either way
+                (crate::clock::ClkVfSegmentKind::PstateBins, 1) => {
+                    crate::clock::ClkVfDomainHint::Host
+                }
+                _ => crate::clock::ClkVfDomainHint::Unknown,
+            };
+            *ord += 1;
         }
 
         Ok(crate::clock::ClkVfPointsPrivate {
