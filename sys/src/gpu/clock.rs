@@ -1379,8 +1379,10 @@ pub mod private {
     /// Per-record WRITE semantics (what the driver reads back from us):
     /// - rec+0: type dword (remapped via sub_180202580)
     /// - rec+36 (dword[9]): mode — 0 = absolute, 1 = delta
-    /// - rec+56: u32 value (mode 0) or i16 delta (mode 1); for bank-2
-    ///   type-8 records this is the V/F point's programmed value
+    /// - rec+56: value — mode 0 = kHz frequency offset (same as public
+    ///   VFP freqDeltaKHz); mode 1 = 0.1mV voltage-axis index (sets the
+    ///   point's target freq to the default freq at this_voltage +
+    ///   value*100µV; RM then re-interpolates to monotonically increasing)
     /// - rec+96 (byte): passthrough flag (bank-2 only)
     pub mod clk_vfp_control {
         /// canonical magic (accepted input and internal fill stamp)

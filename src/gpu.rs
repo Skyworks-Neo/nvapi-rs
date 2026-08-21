@@ -1789,8 +1789,10 @@ impl PhysicalGpu {
     ///
     /// `bank` is 0 (pstate-class records) or 1 (V/F curve points). `idx`
     /// is the point index (0..2048) within that bank. `absolute` selects
-    /// mode 0 (absolute u32 value) vs mode 1 (i16 delta). `value` is the
-    /// raw u32 to write (for delta mode, only the low i16 is used).
+    /// mode 0 (kHz frequency offset, same as public VFP freqDeltaKHz) vs
+    /// mode 1 (0.1mV voltage-axis index — sets target freq to the default
+    /// freq at this_voltage + value*100µV). `value` is the raw u32 to
+    /// write (for delta mode, only the low i16 is used).
     pub fn set_vfp_point_private(
         &self,
         bank: usize,
