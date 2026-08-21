@@ -1541,6 +1541,10 @@ pub mod private {
 
     impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE_V1 {
         fn default() -> Self {
+            // Avoid stack overflow: the 4MB rest[] would be allocated on
+            // the stack by Default then moved to heap by Box::new. Callers
+            // should use `unsafe { std::mem::zeroed() }` + set version
+            // instead, but we provide this for non-Box use cases.
             Self {
                 version: NvVersion::with_version(clk_vfp_control::MAGIC),
                 rest: [0; 4343296],

@@ -1820,8 +1820,14 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
             .map_err(crate::Error::from)?;
 
-        // 2. GetControl snapshot with seeded masks — the RMW source
-        let mut snapshot = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE::default());
+        // 2. GetControl snapshot with seeded masks — the RMW source.
+        // Use unsafe { zeroed() } not default() — the 4MB rest[] array
+        // would overflow the stack when Box::new moves it from stack to heap.
+        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
+            Box::new(unsafe { std::mem::zeroed() });
+        snapshot.version = sys::api::NvVersion::with_version(
+            clock::private::clk_vfp_control::MAGIC,
+        );
         snapshot.seed_masks_from_info(&info);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
@@ -1829,36 +1835,33 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
             .map_err(crate::Error::from)?;
 
-        // 3. Patch a copy: set mask bit + record type + mode/value.
-        // The CONTROL family's user type differs from GetStatus's:
-        //   bank 0: type 8 (→internal 12, mode/value variant)
-        //   bank 1: type 6 (→internal 8,  single-u32 variant)
-        // Both are V/F curve points, just different write semantics.
-        // We set the mask bit ourselves (the driver only processes
-        // masked points) and stamp the correct type (GetControl may
-        // return type 0 for un-populated records → -103 on SET).
-        let mut modified = snapshot.clone();
+        // 3. Patch the snapshot IN PLACE (no clone — the 4MB struct
+        // would overflow the stack if cloned). We restore it on mismatch.
         let user_type = if bank == 0 { 8 } else { 6 };
-        modified.set_mask_bit(bank, idx)
+        snapshot.set_mask_bit(bank, idx)
             .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
-        modified.set_record_type(bank, idx, user_type)
+        snapshot.set_record_type(bank, idx, user_type)
             .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
         if absolute {
-            modified.set_absolute(bank, idx, value)
+            snapshot.set_absolute(bank, idx, value)
         } else {
-            modified.set_delta(bank, idx, value as i16)
+            snapshot.set_delta(bank, idx, value as i16)
         }
         .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
 
-        // 5. SetControl
+        // 4. SetControl — pass the Box's inner pointer (not &Box)
         let st = unsafe {
-            NvAPI_GPU_ClockClkVfPointsSetControl(self.0, ptr::from_ref(&modified).cast())
+            NvAPI_GPU_ClockClkVfPointsSetControl(self.0, ptr::from_ref(&*snapshot).cast())
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl, st)
             .map_err(crate::Error::from)?;
 
-        // 6. Readback + verify
-        let mut verify = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE::default());
+        // 5. Readback + verify
+        let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
+            Box::new(unsafe { std::mem::zeroed() });
+        verify.version = sys::api::NvVersion::with_version(
+            clock::private::clk_vfp_control::MAGIC,
+        );
         verify.seed_masks_from_info(&info);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
@@ -1880,7 +1883,7 @@ impl PhysicalGpu {
         if !ok {
             // restore the original snapshot (best effort)
             let _ = unsafe {
-                NvAPI_GPU_ClockClkVfPointsSetControl(self.0, ptr::from_ref(&snapshot).cast())
+                NvAPI_GPU_ClockClkVfPointsSetControl(self.0, ptr::from_ref(&*snapshot).cast())
             };
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
