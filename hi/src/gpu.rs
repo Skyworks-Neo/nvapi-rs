@@ -707,6 +707,27 @@ impl Gpu {
         }
     }
 
+    /// Detailed single-domain measure — frequency plus the second sample's
+    /// raw {counter, timestamp, extra} and the accepted protocol form.
+    /// `Ok(None)` where the driver refuses the domain.
+    pub fn clk_domain_freq_detail(
+        &self,
+        domain_bit: u32,
+    ) -> nvapi::Result<Option<nvapi::ClockDomainFreqDetail>> {
+        match self.gpu.clk_domain_freq_detail(domain_bit) {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Batch physical clocks for many domains via the V3 MEASURE_FREQ
     /// (magic 0x30038) — one RM round-trip per sample instead of one per
     /// domain. Per-domain V1/V2 fallback when the driver rejects the batch

@@ -377,6 +377,26 @@ pub struct ClockDomainFreq {
     pub freq_mhz: f64,
 }
 
+/// Detailed single-domain MEASURE_FREQ result — the raw protocol fields of
+/// the SECOND sample alongside the computed frequency, for counter-scaling
+/// calibration (Pascal's M counter unit ≠ cycles) and protocol forensics.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct ClockDomainFreqDetail {
+    pub domain: ClockDomainId,
+    /// physical frequency in MHz (two-sample Δcounter/Δt)
+    pub freq_mhz: f64,
+    /// which protocol form succeeded: 1 = V1 magic 0x10020 (u32 counter),
+    /// 2 = V2 magic 0x20020 (u64 counter)
+    pub protocol: u8,
+    /// second sample's raw cycle counter (read-modify-write value)
+    pub counter: u64,
+    /// second sample's raw QPC nanosecond timestamp
+    pub timestamp_ns: u64,
+    /// second sample's extra dword (+24 out; semantics driver-opaque)
+    pub extra: u32,
+}
+
 /// One V/F curve point from the private ClockClient V/F-POINTS GetStatus
 /// (RM 0x20809062, ID 0x7FEE9032, 488B type-08 records). Records are
 /// INDEXED BY VOLTAGE; units live-calibrated against the public GPC VFP

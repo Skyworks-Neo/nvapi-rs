@@ -1264,7 +1264,7 @@ impl PhysicalGpu {
         fn sample(
             gpu: sys::handles::NvPhysicalGpuHandle,
             domain_bit: u32,
-        ) -> crate::Result<(u64, u64)> {
+        ) -> crate::Result<(u64, u64, u32, u8)> {
             let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE::default();
             // stamp V1 magic 0x10020 (version 1, size 0x20)
             m.version = sys::api::NvVersion::new(0x20, 1);
@@ -1273,7 +1273,7 @@ impl PhysicalGpu {
                 NvAPI_GPU_ClockCounterMeasureAvgFreq(gpu, ptr::from_mut(&mut m).cast())
             };
             if crate::status_result(sys::Api::NvAPI_GPU_ClockCounterMeasureAvgFreq, st).is_ok() {
-                return Ok((m.counter as u64, m.timestamp_ns));
+                return Ok((m.counter as u64, m.timestamp_ns, m.rsvd2, 1));
             }
             // V1 rejected (Pascal observed: some domains fail with a raw RM
             // error) — retry the V2 form (magic 0x20020, u64 counter).
@@ -1285,12 +1285,12 @@ impl PhysicalGpu {
             };
             crate::status_result(sys::Api::NvAPI_GPU_ClockCounterMeasureAvgFreq, st)
                 .map_err(crate::Error::from)?;
-            Ok((m2.counter, m2.timestamp_ns))
+            Ok((m2.counter, m2.timestamp_ns, m2.extra, 2))
         }
 
-        let (c1, t1) = sample(self.0, domain_bit)?;
+        let (c1, t1, _, _) = sample(self.0, domain_bit)?;
         std::thread::sleep(std::time::Duration::from_millis(50));
-        let (c2, t2) = sample(self.0, domain_bit)?;
+        let (c2, t2, extra, protocol) = sample(self.0, domain_bit)?;
 
         let dt_ns = t2.saturating_sub(t1);
         let dc = c2.saturating_sub(c1);
@@ -1304,6 +1304,67 @@ impl PhysicalGpu {
             domain: crate::clock::ClockDomainId::from_raw(domain_bit as i32)
                 .unwrap_or(crate::clock::ClockDomainId::Gpc),
             freq_mhz: freq_hz / 1e6,
+        })
+    }
+
+    /// Detailed single-domain measure — the computed frequency PLUS the
+    /// second sample's raw {counter, timestamp, extra} and which protocol
+    /// form (V1 0x10020 / V2 0x20020) the driver accepted. For counter
+    /// unit calibration (Pascal M) and protocol forensics.
+    pub fn clk_domain_freq_detail(
+        &self,
+        domain_bit: u32,
+    ) -> crate::Result<crate::clock::ClockDomainFreqDetail> {
+        trace!("gpu.clk_domain_freq_detail({domain_bit})");
+        use crate::sys::api::NvAPI_GPU_ClockCounterMeasureAvgFreq;
+        use clock::private::{
+            NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE, NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE2,
+        };
+
+        fn sample(
+            gpu: sys::handles::NvPhysicalGpuHandle,
+            domain_bit: u32,
+        ) -> crate::Result<(u64, u64, u32, u8)> {
+            let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE::default();
+            m.version = sys::api::NvVersion::new(0x20, 1);
+            m.domain_index = domain_bit;
+            let st = unsafe {
+                NvAPI_GPU_ClockCounterMeasureAvgFreq(gpu, ptr::from_mut(&mut m).cast())
+            };
+            if crate::status_result(sys::Api::NvAPI_GPU_ClockCounterMeasureAvgFreq, st).is_ok() {
+                return Ok((m.counter as u64, m.timestamp_ns, m.rsvd2, 1));
+            }
+            let mut m2 = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE2::default();
+            m2.version = sys::api::NvVersion::new(0x20, 2);
+            m2.domain_index = domain_bit;
+            let st = unsafe {
+                NvAPI_GPU_ClockCounterMeasureAvgFreq(gpu, ptr::from_mut(&mut m2).cast())
+            };
+            crate::status_result(sys::Api::NvAPI_GPU_ClockCounterMeasureAvgFreq, st)
+                .map_err(crate::Error::from)?;
+            Ok((m2.counter, m2.timestamp_ns, m2.extra, 2))
+        }
+
+        let (c1, t1, _, _) = sample(self.0, domain_bit)?;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let (c2, t2, extra, protocol) = sample(self.0, domain_bit)?;
+
+        let dt_ns = t2.saturating_sub(t1);
+        let dc = c2.saturating_sub(c1);
+        let freq_hz = if dt_ns > 0 {
+            (dc as f64 / dt_ns as f64) * 1e9
+        } else {
+            0.0
+        };
+
+        Ok(crate::clock::ClockDomainFreqDetail {
+            domain: crate::clock::ClockDomainId::from_raw(domain_bit as i32)
+                .unwrap_or(crate::clock::ClockDomainId::Gpc),
+            freq_mhz: freq_hz / 1e6,
+            protocol,
+            counter: c2,
+            timestamp_ns: t2,
+            extra,
         })
     }
 
