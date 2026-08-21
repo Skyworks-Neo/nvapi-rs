@@ -1195,10 +1195,10 @@ impl PhysicalGpu {
             let entries = (0..32u32)
                 .filter_map(|bit| {
                     let typ = v2.record_type(bit).filter(|&t| t != 0)?;
-                    let values_valid =
+                    let value_modifiable =
                         crate::clock::ClkDomainControlEntry::v2_marshalable(typ);
                     let mut values_kHz = [0i32; 8];
-                    if values_valid {
+                    if value_modifiable {
                         for (i, v) in values_kHz.iter_mut().enumerate() {
                             *v = v2.value(bit, i).unwrap_or(0);
                         }
@@ -1206,7 +1206,7 @@ impl PhysicalGpu {
                     Some(crate::clock::ClkDomainControlEntry {
                         bit,
                         entry_type: typ,
-                        values_valid,
+                        value_modifiable,
                         values_kHz,
                     })
                 })
@@ -1227,10 +1227,10 @@ impl PhysicalGpu {
         let entries = control
             .entries()
             .map(|(bit, typ, off, rmin, rmax, appl)| {
-                let values_valid =
+                let value_modifiable =
                     crate::clock::ClkDomainControlEntry::v1_marshalable(typ);
                 let mut values_kHz = [0i32; 8];
-                if values_valid {
+                if value_modifiable {
                     values_kHz[0] = off;
                     values_kHz[1] = rmin;
                     values_kHz[2] = rmax;
@@ -1239,7 +1239,7 @@ impl PhysicalGpu {
                 crate::clock::ClkDomainControlEntry {
                     bit,
                     entry_type: typ,
-                    values_valid,
+                    value_modifiable,
                     values_kHz,
                 }
             })
@@ -1454,7 +1454,7 @@ impl PhysicalGpu {
             bit: domain_bit,
             entry_type: verify.record_type(domain_bit).unwrap_or(0),
             // the SET guard above already refused non-marshalable types
-            values_valid: true,
+            value_modifiable: true,
             values_kHz,
         })
     }

@@ -305,13 +305,19 @@ pub struct ClkDomainControlEntry {
     pub bit: u32,
     /// record type byte (live 0x0A=10 on GPC/XBAR/SYS/MCLK on Ada 4060 Laptop)
     pub entry_type: u8,
-    /// Whether the protocol marshals this record's value dwords at all.
-    /// The driver-side remap (sub_18015BB30/BD20) maps protocol ↔ internal
-    /// types and the per-record switch only copies value dwords for a fixed
-    /// internal-type set: V2 (magic 0x261A4) handles {1..=10, 15}, V1
-    /// (magic 0x10964) only {1,3,4,5,6,7,8,9}. Type 0x02 (e.g. Disp bit 6)
-    /// is marshalled by NEITHER — its values are not driver data.
-    pub values_valid: bool,
+    /// Whether an offset can be WRITTEN to this domain through the
+    /// SetControl family — derived purely from the record TYPE byte, NOT
+    /// a driver capability bit, and says NOTHING about readability: the
+    /// driver-side remap (sub_18015BB30/BD20) maps protocol ↔ internal
+    /// types and the per-record switch only copies value dwords for a
+    /// fixed internal-type set (V2 magic 0x261A4 → protocol {1,3..=10,15};
+    /// V1 0x10964 → {1,3..=9}). Type 0x02 (Disp/Host on several
+    /// generations, M on A100) is marshalled by NEITHER — SetControl
+    /// silently drops it — yet those clocks may still be READABLE via
+    /// MEASURE_FREQ/GetAllClocks (A100 M reads fine; conversely Pascal has
+    /// marshalled domains whose measure is RM-rejected). Readability and
+    /// writability are independent per domain.
+    pub value_modifiable: bool,
     /// The record's value dwords. V2 reads them from rec+268..296 (8
     /// dwords); the V1 fallback fills slots 0..4 from rec+44..60. Slot
     /// semantics are driver-opaque — per the article slot 0 is the signed
