@@ -1891,6 +1891,96 @@ impl PhysicalGpu {
         Ok(retained_value)
     }
 
+    /// Write a RANGE of V/F curve points with the same delta — the
+    /// private-path analogue of the public `set_vfp_range_delta_mhz`.
+    /// Patches every point in `[start, end]` (inclusive) on `bank` in a
+    /// single RMW cycle (one GetControl → patch N → SetControl), then
+    /// readbacks the first and last point to verify.
+    pub fn set_vfp_range_private(
+        &self,
+        bank: usize,
+        start: usize,
+        end: usize,
+        delta_mhz: i16,
+    ) -> crate::Result<()> {
+        trace!("gpu.set_vfp_range_private(bank={bank}, {start}..={end}, delta={delta_mhz})");
+        use crate::sys::api::{
+            NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
+            NvAPI_GPU_ClockClkVfPointsSetControl,
+        };
+        use clock::private::{
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
+        };
+
+        if bank > 1 || start > end || end >= clock::private::clk_vfp_control::POINTS {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+
+        // 1. GetInfo → seed masks
+        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from)?;
+
+        // 2. GetControl snapshot (on heap, zeroed to avoid stack overflow)
+        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
+            Box::new(unsafe { std::mem::zeroed() });
+        snapshot.version = sys::api::NvVersion::with_version(
+            clock::private::clk_vfp_control::MAGIC,
+        );
+        snapshot.seed_masks_from_info(&info);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // 3. Patch every point in [start, end] in-place
+        let user_type = if bank == 0 { 8 } else { 6 };
+        for idx in start..=end {
+            snapshot.set_mask_bit(bank, idx)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            snapshot.set_record_type(bank, idx, user_type)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            snapshot.set_delta(bank, idx, delta_mhz)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        }
+
+        // 4. SetControl
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsSetControl(self.0, ptr::from_ref(&*snapshot).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // 5. Readback first + last point's mode to verify SET succeeded
+        let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
+            Box::new(unsafe { std::mem::zeroed() });
+        verify.version = sys::api::NvVersion::with_version(
+            clock::private::clk_vfp_control::MAGIC,
+        );
+        verify.seed_masks_from_info(&info);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // verify that at least the first point has mode=1 (delta)
+        let mode = verify.mode(bank, start).unwrap_or(0);
+        if mode != 1 {
+            return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl,
+                Status::NotSupported,
+            )));
+        }
+
+        Ok(())
+    }
+
     #[allow(unused_assignments)]
     pub fn power_usage<C: IntoIterator<Item = crate::clock::PowerTopologyChannelId>>(
         &self,

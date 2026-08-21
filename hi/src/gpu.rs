@@ -755,6 +755,31 @@ impl Gpu {
         }
     }
 
+    /// Write a RANGE of V/F curve points with the same delta via the
+    /// private SetControl — the analogue of the public
+    /// `set-vfp-range-delta-mhz`. Patches `[start, end]` on `bank` in a
+    /// single RMW cycle. `Ok(None)` where the family is absent.
+    pub fn set_vfp_range_private(
+        &self,
+        bank: usize,
+        start: usize,
+        end: usize,
+        delta_mhz: i16,
+    ) -> nvapi::Result<Option<()>> {
+        match self.gpu.set_vfp_range_private(bank, start, end, delta_mhz) {
+            Ok(()) => Ok(Some(())),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Batch physical clocks for many domains via the V3 MEASURE_FREQ
     /// (magic 0x30038) — one RM round-trip per sample instead of one per
     /// domain. Per-domain V1/V2 fallback when the driver rejects the batch
