@@ -858,6 +858,28 @@ pub mod private {
 
     nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V1(1) = 0x20 }
 
+    nvstruct! {
+        /// V2 of the MEASURE_FREQ params (magic 131104 = 0x20020). Same
+        /// call, but the cycle counter is a u64 (IDA sub_18021DC90: output
+        /// writes a qword at +8). Older GPUs (Pascal observed) reject the
+        /// V1 measure for some domains — the V2 form is the fallback.
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V2 {
+            pub version: NvVersion,
+            /// sequential domain INDEX (GPC=0, XBAR=1, SYS=2, MCLK=4);
+            /// the u64 counter output overwrites this slot's upper half on
+            /// return (IDA sub_18021DC90 V2 arm writes a qword at +8)
+            pub domain_index: u32,
+            /// +8 read-modify-write cycle counter (u64 on V2)
+            pub counter: u64,
+            /// +16 QPC nanosecond timestamp
+            pub timestamp_ns: u64,
+            /// +24 extra dword out
+            pub extra: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE2 NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V2(2) = 0x20 }
+
     /// Byte offsets into the bit-sparse per-domain records of
     /// [`NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V2`] (absolute struct
     /// offsets; `rest` begins at +4).

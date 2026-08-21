@@ -1257,7 +1257,9 @@ impl PhysicalGpu {
     pub fn clk_domain_freq(&self, domain_bit: u32) -> crate::Result<crate::clock::ClockDomainFreq> {
         trace!("gpu.clk_domain_freq({domain_bit})");
         use crate::sys::api::NvAPI_GPU_ClockCounterMeasureAvgFreq;
-        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE;
+        use clock::private::{
+            NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE, NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE2,
+        };
 
         fn sample(
             gpu: sys::handles::NvPhysicalGpuHandle,
@@ -1270,9 +1272,20 @@ impl PhysicalGpu {
             let st = unsafe {
                 NvAPI_GPU_ClockCounterMeasureAvgFreq(gpu, ptr::from_mut(&mut m).cast())
             };
+            if crate::status_result(sys::Api::NvAPI_GPU_ClockCounterMeasureAvgFreq, st).is_ok() {
+                return Ok((m.counter as u64, m.timestamp_ns));
+            }
+            // V1 rejected (Pascal observed: some domains fail with a raw RM
+            // error) — retry the V2 form (magic 0x20020, u64 counter).
+            let mut m2 = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE2::default();
+            m2.version = sys::api::NvVersion::new(0x20, 2);
+            m2.domain_index = domain_bit;
+            let st = unsafe {
+                NvAPI_GPU_ClockCounterMeasureAvgFreq(gpu, ptr::from_mut(&mut m2).cast())
+            };
             crate::status_result(sys::Api::NvAPI_GPU_ClockCounterMeasureAvgFreq, st)
                 .map_err(crate::Error::from)?;
-            Ok((m.counter as u64, m.timestamp_ns))
+            Ok((m2.counter, m2.timestamp_ns))
         }
 
         let (c1, t1) = sample(self.0, domain_bit)?;
