@@ -1510,6 +1510,33 @@ pub mod private {
             self.rest[v..v + 2].copy_from_slice(&delta.to_le_bytes());
             Some(())
         }
+
+        /// Set the record type byte (rec+0) — the CONTROL family's user
+        /// type, NOT the GetStatus type (the two families use different
+        /// type numbering). Bank 0 accepts user types {0,1,3,4,7,8,12,13};
+        /// bank 1 accepts {6,10,14}. Use 8 for bank-0 V/F points (mode/
+        /// value variant), 6 for bank-1 V/F points (single-u32 variant).
+        pub fn set_record_type(&mut self, bank: usize, idx: usize, ty: u8) -> Option<()> {
+            let base = Self::rec_base(bank, idx)?;
+            let off = self.off_mut(base + clk_vfp_control::TYPE, 1)?;
+            self.rest[off] = ty;
+            Some(())
+        }
+
+        /// Set a bit in the bank mask (enables the point for SET processing).
+        pub fn set_mask_bit(&mut self, bank: usize, idx: usize) -> Option<()> {
+            if bank > 1 || idx >= clk_vfp_control::POINTS {
+                return None;
+            }
+            let mask_base = if bank == 0 { clk_vfp_control::MASK1 } else { clk_vfp_control::MASK2 };
+            let dword_idx = idx >> 5;
+            let bit_idx = idx & 31;
+            let off = self.off_mut(mask_base + 4 * dword_idx, 4)?;
+            let mut dword = u32::from_le_bytes(self.rest[off..off + 4].try_into().ok()?);
+            dword |= 1u32 << bit_idx;
+            self.rest[off..off + 4].copy_from_slice(&dword.to_le_bytes());
+            Some(())
+        }
     }
 
     impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE_V1 {

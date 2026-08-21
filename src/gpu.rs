@@ -1829,16 +1829,20 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
             .map_err(crate::Error::from)?;
 
-        // 3. Gate: verify the point is present in the mask + has a valid type
-        if info.point_present(bank, idx) != Some(true) {
-            return Err(crate::Error::Nvapi(crate::NvapiError::new(
-                sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl,
-                Status::NotSupported,
-            )));
-        }
-
-        // 4. Patch a copy
+        // 3. Patch a copy: set mask bit + record type + mode/value.
+        // The CONTROL family's user type differs from GetStatus's:
+        //   bank 0: type 8 (→internal 12, mode/value variant)
+        //   bank 1: type 6 (→internal 8,  single-u32 variant)
+        // Both are V/F curve points, just different write semantics.
+        // We set the mask bit ourselves (the driver only processes
+        // masked points) and stamp the correct type (GetControl may
+        // return type 0 for un-populated records → -103 on SET).
         let mut modified = snapshot.clone();
+        let user_type = if bank == 0 { 8 } else { 6 };
+        modified.set_mask_bit(bank, idx)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        modified.set_record_type(bank, idx, user_type)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
         if absolute {
             modified.set_absolute(bank, idx, value)
         } else {
