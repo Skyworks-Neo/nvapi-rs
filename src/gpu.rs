@@ -1781,14 +1781,14 @@ impl PhysicalGpu {
     /// SetControl (RM 0x20809062→0x07000109, ID 0xFEC00D04). DANGEROUS V/F
     /// curve write — the per-point analogue of the public `set_vfp_table`,
     /// but covering ALL fabric domains (GPC/XBAR/HOST/...) and supporting
-    /// absolute mode (mode=0) which the public path cannot do.
+    /// freq-offset mode (mode=0) which the public path cannot do.
     ///
     /// Implements the mandated RMW recipe (mirrors `set_clk_domain_offset`):
     /// GetInfo → seed bank masks → GetControl snapshot → patch one record →
     /// SetControl → GetControl readback → verify → restore on mismatch.
     ///
     /// `bank` is 0 (pstate-class records) or 1 (V/F curve points). `idx`
-    /// is the point index (0..2048) within that bank. `absolute` selects
+    /// is the point index (0..2048) within that bank. `freq_mode` selects
     /// mode 0 (kHz frequency offset, same as public VFP freqDeltaKHz) vs
     /// mode 1 (0.1mV voltage-axis index — sets target freq to the default
     /// freq at this_voltage + value*100µV). `value` is the raw u32 to
@@ -1797,10 +1797,10 @@ impl PhysicalGpu {
         &self,
         bank: usize,
         idx: usize,
-        absolute: bool,
+        freq_mode: bool,
         value: u32,
     ) -> crate::Result<u32> {
-        trace!("gpu.set_vfp_point_private(bank={bank}, idx={idx}, absolute={absolute}, value={value})");
+        trace!("gpu.set_vfp_point_private(bank={bank}, idx={idx}, freq_mode={freq_mode}, value={value})");
         use crate::sys::api::{
             NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
             NvAPI_GPU_ClockClkVfPointsSetControl,
@@ -1844,7 +1844,7 @@ impl PhysicalGpu {
             .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
         snapshot.set_record_type(bank, idx, user_type)
             .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
-        if absolute {
+        if freq_mode {
             snapshot.set_absolute(bank, idx, value)
         } else {
             snapshot.set_delta(bank, idx, value as i16)
@@ -1876,7 +1876,7 @@ impl PhysicalGpu {
 
         // For mode 0: value must match exactly
         // For mode 1: low i16 must match
-        let ok = if absolute {
+        let ok = if freq_mode {
             retained_mode == 0 && retained_value == value
         } else {
             retained_mode == 1 && (retained_value as i16) == (value as i16)
