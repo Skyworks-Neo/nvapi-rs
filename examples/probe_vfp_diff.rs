@@ -104,9 +104,14 @@ fn main() {
             match curve.points.get(&nvapi::ClockDomain::Graphics) {
                 Some(entries) => match entries.iter().find(|(i, _)| *i == idx) {
                     Some((i, e)) => {
-                        volt_uv = e.default.voltage.0 as u32;
-                        def_pub = e.default.frequency.0 as f64 / 1000.0;
-                        println!("public VFP[{i}]: default {}mV / {:.0}MHz",
+                        // `configured()` = the effective point (default is
+                        // EMPTY on Pascal — reading it was the 0mV bug;
+                        // get_voltage_by_point / set-vfp-voltage-lock use
+                        // this same field)
+                        let p = e.configured();
+                        volt_uv = p.voltage.0 as u32;
+                        def_pub = p.frequency.0 as f64 / 1000.0;
+                        println!("public VFP[{i}]: configured {}mV / {:.0}MHz",
                             volt_uv / 1000, def_pub);
                     }
                     None => println!("public VFP has no idx {idx} (table 0..79)"),
