@@ -66,8 +66,8 @@ fn main() {
         volt_to_freq.push((v, idx, f));
     }
 
-    // Target voltages: 450, 500, 550, 600, 650, 700 mV
-    let target_mvs = [450, 500, 550, 600, 650, 700];
+    // Target voltages: 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000, 1050, 1100, 1150, 1200 mV
+    let target_mvs = [450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000, 1050, 1100, 1150, 1200];
 
     eprintln!("=== reverse-volt delta scan: delta={delta} ===");
     eprintln!("src_mV,src_idx,src_def,cur_after,effect_mHz,target_freq,lookup_mV,lookup_idx,lookup_def,voltage_shift_mV,delta_per_mV");
