@@ -68,43 +68,40 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
     a
 }
 
-/// Staircase fit: samples (d, E) with E>0 (ascending d, saturation-trimmed).
-/// Returns (C, C_lo, C_hi, D0, B_mid). Constraint form with B = C*D0:
+/// Exact staircase fit: samples (d, E), saturation-trimmed. Constraint form
+/// with B = C*D0:
 ///   E_i <= C*d_i - B < E_i + Q
-/// => B in ( max_i(C*d_i - E_i - Q), min_i(C*d_i - E_i) ]
+/// Pairwise subtraction eliminates B and gives EXACT rational bounds on C:
+///   C*(d_i - d_j) in (E_i - E_j - Q, E_i - E_j + Q)
+/// C_lo/C_hi = tightest pairwise bounds (no grid quantization). Point
+/// estimate = interval midpoint, snapped to the nearest k/400 multiple when
+/// that lies inside the interval — every true C observed on CMP 170HX and
+/// RTX 4060 is k/400 (0.3, 0.3375, 0.625, 0.28, 0.4525, ...), strongly
+/// suggesting RM stores C as a /400 fixed-point.
 fn stair_fit(pts: &[(i64, i64)], q: f64) -> Option<(f64, f64, f64, f64)> {
     if pts.len() < 2 { return None; }
-    // grid-scan C; track widest contiguous feasible interval
-    let mut best: (f64, f64) = (0.0, 0.0); // a_lo, a_hi
-    let mut cur_lo: Option<f64> = None;
-    let a_min = 0.02;
-    let a_max = 1.50;
-    let steps = 2961; // 0.0005 resolution
-    for k in 0..=steps {
-        let a = a_min + (a_max - a_min) * k as f64 / steps as f64;
-        let mut b_hi = f64::MAX; // min_i(a*di - Ei)   (inclusive upper)
-        let mut b_lo = f64::MIN; // max_i(a*di - Ei - Q) (exclusive lower)
-        for &(d, e) in pts {
-            let x = a * d as f64 - e as f64;
-            b_hi = b_hi.min(x);
-            b_lo = b_lo.max(x - q);
-        }
-        let feasible = b_lo < b_hi;
-        if feasible {
-            match cur_lo {
-                None => cur_lo = Some(a),
-                Some(_) => {}
+    let mut lo = 0.0f64;
+    let mut hi = f64::INFINITY;
+    for i in 0..pts.len() {
+        for j in 0..pts.len() {
+            if i == j { continue; }
+            let (di, ei) = pts[i];
+            let (dj, ej) = pts[j];
+            let dd = (di - dj) as f64;
+            let de = (ei - ej) as f64;
+            if dd > 0.0 {
+                lo = lo.max((de - q) / dd);
+                hi = hi.min((de + q) / dd);
+            } else if dd < 0.0 {
+                lo = lo.max((de + q) / dd);
+                hi = hi.min((de - q) / dd);
             }
-        } else if let Some(lo) = cur_lo.take() {
-            if a - lo > best.1 - best.0 { best = (lo, a); }
         }
     }
-    if let Some(lo) = cur_lo {
-        if a_max - lo > best.1 - best.0 { best = (lo, a_max); }
-    }
-    if best.1 <= best.0 { return None; }
-    let c = (best.0 + best.1) / 2.0;
-    // tightest B at this C
+    if !(lo < hi) { return None; }
+    let mut c = (lo + hi) / 2.0;
+    let snapped = (c * 400.0).round() / 400.0;
+    if snapped >= lo && snapped <= hi { c = snapped; }
     let mut b_hi = f64::MAX;
     let mut b_lo = f64::MIN;
     for &(d, e) in pts {
@@ -112,9 +109,9 @@ fn stair_fit(pts: &[(i64, i64)], q: f64) -> Option<(f64, f64, f64, f64)> {
         b_hi = b_hi.min(x);
         b_lo = b_lo.max(x - q);
     }
+    if !(b_lo < b_hi) { return None; }
     let b = (b_lo + b_hi) / 2.0;
-    let d0 = b / c;
-    Some((c, best.0, best.1, d0))
+    Some((c, lo, hi, b / c))
 }
 
 fn main() {
