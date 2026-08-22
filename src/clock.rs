@@ -680,7 +680,20 @@ pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
             .iter()
             .find(|e| def_mhz >= e.def_mhz_lo && def_mhz <= e.def_mhz_hi)
             .map(|e| (e.c_mhz_per_delta, e.d0_delta))
-            .unwrap_or((def_mhz as f64 / 4000.0, 0.0)),
+            .unwrap_or_else(|| {
+                // piecewise refinement of the rule (fit over all exact
+                // bands): K = def − 4000C flips sign near def 1250 —
+                // high band (def−72)/4000 (≈0.96·def/4000), low band
+                // (def+30)/4000, mid zone plain def/4000 (the def≈1200
+                // dip sits inside measured bands anyway)
+                if def_mhz >= 1450 {
+                    ((def_mhz - 72) as f64 / 4000.0, 0.0)
+                } else if def_mhz <= 1100 {
+                    ((def_mhz + 30) as f64 / 4000.0, 0.0)
+                } else {
+                    (def_mhz as f64 / 4000.0, 0.0)
+                }
+            }),
     )
 }
 
@@ -1490,9 +1503,9 @@ mod tests {
         assert!((c - 0.3375).abs() < 1e-9);
         let (c, _) = clk_vf_g_prior(1050).unwrap();
         assert!((c - 0.30).abs() < 1e-9);
-        // outside the measured table: first-order rule C ≈ def/4000
+        // outside the measured table: piecewise first-order rule
         let (c, d0) = clk_vf_g_prior(340).unwrap();
-        assert!((c - 0.085).abs() < 1e-9);
+        assert!((c - 0.0925).abs() < 1e-9); // (340+30)/4000
         assert!(d0.abs() < 1e-9);
         assert!(clk_vf_g_prior(100).is_none()); // below any real curve
 
