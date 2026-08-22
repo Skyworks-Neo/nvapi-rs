@@ -177,6 +177,18 @@ fn main() {
             eprintln!("{idx},{},{},CLAMPED (flat across ladder)", volt / 1000, def);
             continue;
         }
+        // require a real staircase: >=3 distinct effect levels (top-of-curve
+        // points pinned at the P0 ceiling respond flat-zero — real info, but
+        // not a C; a 2-sample zero fit is pure noise)
+        let mut levels: Vec<i64> = Vec::new();
+        for &(_, e) in &samples {
+            if levels.last() != Some(&e) { levels.push(e); }
+        }
+        if levels.len() < 3 {
+            eprintln!("{idx},{},{},NO-RESPONSE (flat E={}),pinned/clamped",
+                volt / 1000, def, samples.first().map(|&(_, e)| e).unwrap_or(0));
+            continue;
+        }
         // Q = GCD of nonzero |effects|
         let mut q_gcd = 0i64;
         for &(_, e) in &samples { if e != 0 { q_gcd = gcd(q_gcd, e.abs()); } }
