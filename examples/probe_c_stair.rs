@@ -149,8 +149,21 @@ fn main() {
     while row < present.len() {
         let idx = present[row];
         row += pt_step;
+        // Pascal-generation decode: type-1 records report frequency terms
+        // DOUBLED (live-observed on a 10-series) — mirror the middle layer's
+        // ÷2. Type 8/13/18 (Ada+) are plain MHz.
+        let typ = baseline.record_type(0, idx).unwrap_or(0);
+        let div: i64 = if typ == 1 { 2 } else { 1 };
         let volt = baseline.voltage_uv(0, idx).unwrap_or(0);
-        let def = baseline.freq_default_mhz(0, idx).unwrap_or(0) as i64;
+        let def = baseline.freq_default_mhz(0, idx).unwrap_or(0) as i64 / div;
+        // Some Pascal points lack current/voltage fields entirely (cur=0) —
+        // skip with diagnostics instead of feeding E = -def into the fit
+        let base_cur = baseline.freq_current_mhz(0, idx).unwrap_or(0) as i64 / div;
+        if base_cur == 0 || def == 0 {
+            eprintln!("{idx},{},{},CUR-ABSENT t={typ} def={def} cur0={base_cur} volt={}",
+                volt / 1000, def, baseline.voltage_uv(0, idx).unwrap_or(0));
+            continue;
+        }
 
         // walk the ladder ascending (negatives first); collect (d, E)
         let mut samples: Vec<(i64, i64)> = Vec::new();
@@ -158,7 +171,7 @@ fn main() {
         let mut flat_from_start = 0usize;
         for &d in &ladder {
             write_point(gpu, idx, false, d as u32, &info);
-            let cur = get_status(gpu, &info).freq_current_mhz(0, idx).unwrap_or(0) as i64;
+            let cur = get_status(gpu, &info).freq_current_mhz(0, idx).unwrap_or(0) as i64 / div;
             let e = cur - def; // may be negative — allowed in the fit
             match first_e {
                 None => { first_e = Some(e); flat_from_start = 1; }
