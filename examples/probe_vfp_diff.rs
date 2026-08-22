@@ -91,11 +91,38 @@ fn main() {
     let baseline = get_status(gpu, &info);
     let typ = baseline.record_type(0, idx).unwrap_or(0);
     let div: u32 = if typ == 1 { 2 } else { 1 };
-    let volt_uv = baseline.voltage_uv(0, idx).unwrap_or(0);
     let def = baseline.freq_default_mhz(0, idx).unwrap_or(0) / div;
+
+    // Pascal: private V/F records carry NO voltage — reading it yields 0,
+    // and locking 0µV was the earlier bug ("全锁到0点"). Take the voltage
+    // from the PUBLIC VFP curve at the SAME idx (10-series public/private
+    // tables both span 0..79 and align point-for-point).
+    let mut volt_uv: u32 = baseline.voltage_uv(0, idx).unwrap_or(0);
+    let mut def_pub = def as f64;
+    match pgpu.vfp_info().and_then(|vi| pgpu.vfp_curve(&vi)) {
+        Ok(curve) => {
+            match curve.points.get(&nvapi::ClockDomain::Graphics) {
+                Some(entries) => match entries.iter().find(|(i, _)| *i == idx) {
+                    Some((i, e)) => {
+                        volt_uv = e.default.voltage.0 as u32;
+                        def_pub = e.default.frequency.0 as f64 / 1000.0;
+                        println!("public VFP[{i}]: default {}mV / {:.0}MHz",
+                            volt_uv / 1000, def_pub);
+                    }
+                    None => println!("public VFP has no idx {idx} (table 0..79)"),
+                },
+                None => println!("public VFP has no Graphics domain"),
+            }
+        }
+        Err(e) => println!("public vfp_curve failed: {e:?}"),
+    }
     println!("=== Pascal locked-voltage mode-1 calibration ===");
-    println!("idx={idx} type={typ} V={}mV def={}MHz (Pascal div {div})",
-        volt_uv / 1000, def);
+    println!("idx={idx} type={typ} V={}mV def_priv={}MHz def_pub={:.0}MHz (div {div})",
+        volt_uv / 1000, def, def_pub);
+    if volt_uv == 0 {
+        println!("voltage still 0 — refusing to lock 0µV; abort");
+        return;
+    }
 
     // live GPC clock, two-level public fallback: GetAllClocks V2 Gpc →
     // (Pascal) classic GetAllClockFrequencies Graphics ("Clocks: Graphics"
@@ -112,29 +139,51 @@ fn main() {
             .map(|khz| khz.0 as f64 / 1000.0)
     };
 
-    // 1. lock the operating voltage at this point (public PerfClientLimits)
-    let lock = nvapi::ClockLockEntry {
+    // 1. pin P0 (set_pstate_native, ref-tool setPState path) — without it
+    //    the GPU idles far off the curve and the live clock is garbage
+    // 2. voltage-lock from the public curve value
+    // Both go through PerfClientLimits and MAY overwrite each other's
+    // entries (each call sends its own count) — read BOTH back and report.
+    let volt_lock = nvapi::ClockLockEntry {
         limit: nvapi::PerfLimitId::Voltage,
         lock_value: Some(nvapi::ClockLockValue::Voltage(nvapi::Microvolts(volt_uv))),
         clock: nvapi::ClockDomain::Graphics,
     };
-    if let Err(e) = pgpu.set_vfp_locks([lock]) {
+    let volt_unlock = nvapi::ClockLockEntry {
+        limit: nvapi::PerfLimitId::Voltage,
+        lock_value: None,
+        clock: nvapi::ClockDomain::Graphics,
+    };
+    if let Err(e) = pgpu.set_pstate_native(nvapi::PStateNativeLock::PstateOnly { pstate: 0 }) {
+        println!("P0 pin FAILED ({e:?}) — continuing without it (live clock may idle)");
+    } else {
+        println!("P0 pin applied");
+    }
+    if let Err(e) = pgpu.set_vfp_locks([volt_lock]) {
         println!("voltage lock FAILED ({e:?}) — P0-only; pick a P0-segment idx");
+        let _ = pgpu.set_pstate_native(nvapi::PStateNativeLock::Reset);
         return;
     }
-    println!("voltage locked @ {}mV", volt_uv / 1000);
+    println!("voltage lock applied @ {}mV", volt_uv / 1000);
+    // readbacks: did both survive, or did the second call wipe the first?
+    match pgpu.vfp_locks([nvapi::PerfLimitId::Voltage]) {
+        Ok(l) => println!("voltage lock readback: {l:?}"),
+        Err(e) => println!("voltage lock readback failed: {e:?}"),
+    }
+    match pgpu.pstate_lock_status() {
+        Ok(Some(v)) => println!("pstate lock readback: {v:?}"),
+        Ok(None) => println!("pstate lock readback: none (wiped by the voltage call?)"),
+        Err(e) => println!("pstate lock readback failed: {e:?}"),
+    }
     std::thread::sleep(std::time::Duration::from_millis(200));
     let Some(live0) = live(&pgpu) else {
-        println!("GetAllClocks returned no GPC clock — abort");
-        let _ = pgpu.set_vfp_locks([nvapi::ClockLockEntry {
-            limit: nvapi::PerfLimitId::Voltage,
-            lock_value: None,
-            clock: nvapi::ClockDomain::Graphics,
-        }]);
+        println!("no live GPC clock — abort");
+        let _ = pgpu.set_vfp_locks([volt_unlock]);
+        let _ = pgpu.set_pstate_native(nvapi::PStateNativeLock::Reset);
         return;
     };
-    println!("baseline live GPC = {live0:.1} MHz (def={def} — offset {:.1})",
-        live0 - def as f64);
+    println!("baseline live GPC = {live0:.1} MHz (def_pub={def_pub:.0} — offset {:+.1})",
+        live0 - def_pub);
 
     // 2. ladder: write mode-1 delta → read live clock
     let ladder: Vec<i64> = (0..=dmax).step_by(d_step as usize).collect();
@@ -149,13 +198,10 @@ fn main() {
         samples.push((d, e.round() as i64));
     }
 
-    // 3. restore + unlock
+    // 3. restore + unlock + release P0
     write_point(gpu, idx, true, 0, &info);
-    let _ = pgpu.set_vfp_locks([nvapi::ClockLockEntry {
-        limit: nvapi::PerfLimitId::Voltage,
-        lock_value: None,
-        clock: nvapi::ClockDomain::Graphics,
-    }]);
+    let _ = pgpu.set_vfp_locks([volt_unlock]);
+    let _ = pgpu.set_pstate_native(nvapi::PStateNativeLock::Reset);
     std::thread::sleep(std::time::Duration::from_millis(200));
     println!("\nrestored+unlocked; live GPC = {:?}", live(&pgpu));
 
