@@ -67,10 +67,7 @@ fn write_point(gpu: NvPhysicalGpuHandle, idx: usize, freq_mode: bool, value: u32
     unsafe { NvAPI_GPU_ClockClkVfPointsSetControl(gpu, ptr::from_ref(&*snap).cast()) };
 }
 
-fn gcd(mut a: i64, mut b: i64) -> i64 {
-    while b != 0 { let t = a % b; a = b; b = t; }
-    a
-}
+
 
 /// Exact staircase fit: samples (d, E), saturation-trimmed. Constraint form
 /// with B = C*D0:
