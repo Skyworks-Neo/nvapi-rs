@@ -1419,9 +1419,12 @@ mod tests {
 
     /// Synthetic CMP-shaped staircase (C=0.30, D0=25, Q=15): the exact
     /// pairwise fit must recover 0.30 with the true value inside [lo, hi].
+    /// Ladder starts at d=50 — below D0 the effect clamps to 0, and the
+    /// real calibrator trims that leading flat before fitting (a clamped
+    /// (0,0) sample would contradict the pure-floor constraint model).
     #[test]
     fn clk_vf_stair_fit_recovers_exact_c() {
-        let samples: Vec<ClkVfStairSample> = [0i64, 50, 100, 150, 200, 250, 300, 350, 400]
+        let samples: Vec<ClkVfStairSample> = [50i64, 100, 150, 200, 250, 300, 350, 400]
             .iter()
             .map(|&d| {
                 let x = 0.30 * (d as f64 - 25.0);
