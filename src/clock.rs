@@ -662,14 +662,26 @@ pub const CLK_VF_FABRIC_OVERRIDES: &[ClkVfGPrior] = &[
 ];
 
 /// Look up the universal mode-1 prior (C, D0) for a point with this
-/// default frequency. Pure — no driver IO. Uses the GPC base table; for
-/// XBAR/HOST points prefer [`clk_vf_g_prior_class`] with
+/// default frequency. Pure — no driver IO. Measured bands first; def
+/// values outside the table fall back to the first-order rule
+/// **C ≈ def/4000** (live-observed across Pascal–Ada: 999 MHz → 0.25,
+/// 1822 → 0.4587, 1890 → 0.4526; the k/400 grid implies k ≈ def/10),
+/// accurate to ~±10% — refine with a sparse sweep. D0 prior is 0: at
+/// stock it measures ≈0 on every generation; a large fitted |D0| means
+/// the curve already carried offsets when calibrated (calibrate from
+/// stock). For XBAR/HOST points prefer [`clk_vf_g_prior_class`] with
 /// [`ClkVfDomainClass::Fabric`].
 pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
-    CLK_VF_G_PRIOR
-        .iter()
-        .find(|e| def_mhz >= e.def_mhz_lo && def_mhz <= e.def_mhz_hi)
-        .map(|e| (e.c_mhz_per_delta, e.d0_delta))
+    if def_mhz < 200 {
+        return None;
+    }
+    Some(
+        CLK_VF_G_PRIOR
+            .iter()
+            .find(|e| def_mhz >= e.def_mhz_lo && def_mhz <= e.def_mhz_hi)
+            .map(|e| (e.c_mhz_per_delta, e.d0_delta))
+            .unwrap_or((def_mhz as f64 / 4000.0, 0.0)),
+    )
 }
 
 /// Class-aware prior: fabric domains (XBAR/HOST) take overrides from
@@ -1478,7 +1490,11 @@ mod tests {
         assert!((c - 0.3375).abs() < 1e-9);
         let (c, _) = clk_vf_g_prior(1050).unwrap();
         assert!((c - 0.30).abs() < 1e-9);
-        assert!(clk_vf_g_prior(340).is_none()); // never-observed gap band
+        // outside the measured table: first-order rule C ≈ def/4000
+        let (c, d0) = clk_vf_g_prior(340).unwrap();
+        assert!((c - 0.085).abs() < 1e-9);
+        assert!(d0.abs() < 1e-9);
+        assert!(clk_vf_g_prior(100).is_none()); // below any real curve
 
         // fabric overrides: def 840 is 0.24 for XBAR/HOST (base 0.2025)
         let (g, _) = clk_vf_g_prior_class(840, ClkVfDomainClass::Graphics).unwrap();
@@ -1493,7 +1509,8 @@ mod tests {
         let e = clk_vf_effect_for_delta(1300, d, ClkVfDomainClass::Graphics).unwrap();
         assert!((e - 90.0).abs() <= 15.0 * 1.01, "round-trip {e}");
         assert!(clk_vf_delta_for_target(1300, -5.0, ClkVfDomainClass::Graphics).is_none());
-        assert!(clk_vf_delta_for_target(340, 90.0, ClkVfDomainClass::Graphics).is_none());
+        // fallback-rule prediction also yields a delta now
+        assert!(clk_vf_delta_for_target(340, 90.0, ClkVfDomainClass::Graphics).is_some());
     }
 
     /// Synthetic CMP-shaped staircase (C=0.30, D0=25, Q=15): the exact
