@@ -192,6 +192,12 @@ fn main() {
         while samples.len() > 2 && samples[samples.len() - 1].1 == samples[samples.len() - 2].1 {
             samples.pop();
         }
+        // monotone filter: drop driver-lag artifacts (E dipping below the
+        // running max contradicts the staircase within any small Q)
+        {
+            let mut max_e = i64::MIN;
+            samples.retain(|&(_, e)| if e >= max_e { max_e = e; true } else { false });
+        }
 
         if samples.len() < 2 {
             eprintln!("{idx},{},{},CLAMPED (flat across ladder)", volt / 1000, def);
@@ -209,18 +215,47 @@ fn main() {
                 volt / 1000, def, samples.first().map(|&(_, e)| e).unwrap_or(0));
             continue;
         }
-        // Q = GCD of nonzero |effects|
-        let mut q_gcd = 0i64;
-        for &(_, e) in &samples { if e != 0 { q_gcd = gcd(q_gcd, e.abs()); } }
-        let q = if q_gcd > 0 { q_gcd as f64 } else { 15.0 };
+        // grid pick by MIN SNAP ERROR in HALF-MHz units, not GCD: GA102 is
+        // suspected to use a 7.5 MHz grid (unrepresentable in whole MHz;
+        // alternating 7/8 gaps alone degenerate the GCD to 1), and +-1-2
+        // MHz cur noise starves the exact fit of slack either way
+        let mut samples2: Vec<(i64, i64)> =
+            samples.iter().map(|&(d, e)| (d, e * 2)).collect();
+        let mut g_best = 30i64; // half-MHz units (= 15 MHz)
+        let mut best_err = i64::MAX;
+        // candidates in half-MHz units = 7.5, 10, 13, 14, 15, 20, 25, 30 MHz
+        for &g in &[15i64, 20, 26, 28, 30, 40, 50, 60] {
+            let err: i64 = samples2
+                .iter()
+                .map(|&(_, e)| {
+                    let snapped = ((e as f64) / g as f64).round() as i64 * g;
+                    (e - snapped).abs()
+                })
+                .sum();
+            if err < best_err {
+                best_err = err;
+                g_best = g;
+            }
+        }
+        let mut r_max = 0i64;
+        for s in &mut samples2 {
+            let snapped = ((s.1 as f64) / g_best as f64).round() as i64 * g_best;
+            r_max = r_max.max((s.1 - snapped).abs());
+            s.1 = snapped;
+        }
+        // widen the constraint window by the snap residual (noise margin)
+        let q = (g_best + 2 * r_max) as f64;
 
-        match stair_fit(&samples, q) {
-            Some((c, lo, hi, d0)) => {
+        match stair_fit(&samples2, q) {
+            Some((c2, lo2, hi2, d0)) => {
+                // C/interval came out in half-MHz effect units — halve back
+                let (c, lo, hi) = (c2 / 2.0, lo2 / 2.0, hi2 / 2.0);
                 results.push((volt as f64 / 1000.0, c));
-                let (emin, emax) = samples.iter().fold((i64::MAX, i64::MIN),
+                let (emin, emax) = samples2.iter().fold((i64::MAX, i64::MIN),
                     |(a, b), &(_, e)| (a.min(e), b.max(e)));
-                eprintln!("{idx},{},{},{},{},{:.4},{:.4},{:.4},{:.0},E[{emin},{emax}]",
-                    volt / 1000, def, q, samples.len(), c, lo, hi, d0);
+                eprintln!("{idx},{},{},{:.1},{},{:.4},{:.4},{:.4},{:.0},E[{:.0},{:.0}]",
+                    volt / 1000, def, q / 2.0, samples2.len(), c, lo, hi, d0,
+                    emin as f64 / 2.0, emax as f64 / 2.0);
             }
             None => {
                 eprintln!("{idx},{},{},{},{},FIT-FAILED (inconsistent staircase)",
