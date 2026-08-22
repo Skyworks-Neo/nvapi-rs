@@ -1,27 +1,25 @@
-//! Pascal (10-series) mode-1 calibration via PUBLIC voltage lock + clock
-//! read. On Pascal the modern read paths are unusable for effects (STATUS
-//! current field empty on type-1 records; ClockClient MEASURE_FREQ returns
-//! NotSupported) — but:
-//!   * the mode-1 private WRITE works (P100-verified),
-//!   * the public PerfClientLimits lock (`set_vfp_locks`,
-//!     PerfLimitId::Voltage + ClockLockMode::ManualVoltage) can pin the
-//!     operating voltage to a point inside the P0 segment (voltage locks
-//!     only hold within P0 — the driver refuses outside; P0 is enough),
-//!   * GetAllClocks V2 (public, Pascal-native) reads the live GPC clock.
+//! Pascal (10-series) BATCH mode-1 calibration — public voltage lock +
+//! classic clock read. Confirmed working on a P100:
 //!
-//! With the voltage pinned at point idx's V, the live GPC clock IS that
-//! point's effective curve value: write mode-1 deltas along a ladder, read
-//! the live clock, effect = live − baseline, fit C/D0 with the exact
-//! staircase fit (`nvapi::clk_vf_stair_fit`).
+//!   * voltage lock via set_vfp_locks(Voltage) pins the operating point
+//!     EXACTLY on the curve (baseline live == def_pub, offset +0.0);
+//!     P0 pstate pin is NOT needed (PrivateLifecycleInit even fails with
+//!     NvidiaDeviceNotFound there) — removed.
+//!   * live GPC clock from classic GetAllClockFrequencies[Graphics]
+//!     (GetAllClocks V2 has no Gpc key on Pascal; ClockClient MEASURE is
+//!     NotSupported; private STATUS cur is empty on type-1 records).
+//!   * the classic clock has ±0.5 MHz noise on a 12.5 MHz grid — samples
+//!     are taken in HALF-MHz integer units, the grid is auto-detected as
+//!     the minimum positive gap, E is snapped to it, then the exact
+//!     staircase fit runs (result C halved back to MHz).
 //!
-//! Usage: cargo run --release --example probe_vfp_diff -- [idx] [dmax] [d_step]
-//!   defaults: idx = a mid-P0 present point, dmax 400, d_step 50
-//! Run as admin. Point restored (mode-0 0) and lock released on exit.
+//! Usage: cargo run --release --example probe_vfp_diff -- [idx_lo] [idx_hi] [pt_step] [dmax] [d_step]
+//!   defaults: 0 79 4 600 50   (10-series public/private tables span 0..79)
+//! Run as admin. Every point: lock → ladder → restore (mode-0 0) → unlock.
 use nvapi::initialize;
 use nvapi::sys::api::{
     NvAPI_EnumPhysicalGPUs, NvAPI_GPU_ClockClkVfPointsGetControl,
-    NvAPI_GPU_ClockClkVfPointsGetInfo, NvAPI_GPU_ClockClkVfPointsGetStatus,
-    NvAPI_GPU_ClockClkVfPointsSetControl,
+    NvAPI_GPU_ClockClkVfPointsGetInfo, NvAPI_GPU_ClockClkVfPointsSetControl,
 };
 use nvapi::sys::gpu::clock::private::*;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
@@ -33,14 +31,6 @@ fn get_info(gpu: NvPhysicalGpuHandle) -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_I
     let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1::default());
     unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(gpu, ptr::from_mut(&mut *info).cast()) };
     info
-}
-
-fn get_status(gpu: NvPhysicalGpuHandle, info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1)
-    -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1> {
-    let mut s = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1::default());
-    info.seed_status_header(&mut s);
-    unsafe { NvAPI_GPU_ClockClkVfPointsGetStatus(gpu, ptr::from_mut(&mut *s).cast()) };
-    s
 }
 
 fn write_point(gpu: NvPhysicalGpuHandle, idx: usize, freq_mode: bool, value: u32,
@@ -64,11 +54,14 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let idx_arg: Option<usize> = args.next().and_then(|s| s.parse().ok());
-    let dmax: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(400);
+    let idx_lo: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let idx_hi: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(79);
+    let pt_step: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(4).max(1);
+    let dmax: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(600);
     let d_step: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(50);
 
     let _ = initialize();
+    // GPU 0 throughout (multi-GPU: lock/measure/write all target handles[0])
     let mut h = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
     let mut n = 0u32;
     unsafe { NvAPI_EnumPhysicalGPUs(&mut h, &mut n) };
@@ -78,60 +71,18 @@ fn main() {
         .and_then(|g| g.into_iter().next())
         .expect("no PhysicalGpu");
 
+    // public VFP curve (voltage source; `configured()` — default is EMPTY
+    // on Pascal, and get_voltage_by_point/set-vfp-voltage-lock use this)
+    let curve = pgpu
+        .vfp_info()
+        .and_then(|vi| pgpu.vfp_curve(&vi))
+        .expect("public vfp_curve failed");
+    let entries = curve
+        .points
+        .get(&nvapi::ClockDomain::Graphics)
+        .expect("public VFP has no Graphics domain");
+
     let info = get_info(gpu);
-    let idx = idx_arg.unwrap_or_else(|| {
-        // mid-P0 default: the present point closest to the middle of bank 0
-        let present: Vec<usize> = (0..clk_vfp_info::POINTS)
-            .filter(|&i| info.point_present(0, i) == Some(true))
-            .collect();
-        present.get(present.len() / 2).copied().unwrap_or(0)
-    });
-    assert!(info.point_present(0, idx) == Some(true), "idx {idx} not present");
-
-    let baseline = get_status(gpu, &info);
-    let typ = baseline.record_type(0, idx).unwrap_or(0);
-    let div: u32 = if typ == 1 { 2 } else { 1 };
-    let def = baseline.freq_default_mhz(0, idx).unwrap_or(0) / div;
-
-    // Pascal: private V/F records carry NO voltage — reading it yields 0,
-    // and locking 0µV was the earlier bug ("全锁到0点"). Take the voltage
-    // from the PUBLIC VFP curve at the SAME idx (10-series public/private
-    // tables both span 0..79 and align point-for-point).
-    let mut volt_uv: u32 = baseline.voltage_uv(0, idx).unwrap_or(0);
-    let mut def_pub = def as f64;
-    match pgpu.vfp_info().and_then(|vi| pgpu.vfp_curve(&vi)) {
-        Ok(curve) => {
-            match curve.points.get(&nvapi::ClockDomain::Graphics) {
-                Some(entries) => match entries.iter().find(|(i, _)| *i == idx) {
-                    Some((i, e)) => {
-                        // `configured()` = the effective point (default is
-                        // EMPTY on Pascal — reading it was the 0mV bug;
-                        // get_voltage_by_point / set-vfp-voltage-lock use
-                        // this same field)
-                        let p = e.configured();
-                        volt_uv = p.voltage.0 as u32;
-                        def_pub = p.frequency.0 as f64 / 1000.0;
-                        println!("public VFP[{i}]: configured {}mV / {:.0}MHz",
-                            volt_uv / 1000, def_pub);
-                    }
-                    None => println!("public VFP has no idx {idx} (table 0..79)"),
-                },
-                None => println!("public VFP has no Graphics domain"),
-            }
-        }
-        Err(e) => println!("public vfp_curve failed: {e:?}"),
-    }
-    println!("=== Pascal locked-voltage mode-1 calibration ===");
-    println!("idx={idx} type={typ} V={}mV def_priv={}MHz def_pub={:.0}MHz (div {div})",
-        volt_uv / 1000, def, def_pub);
-    if volt_uv == 0 {
-        println!("voltage still 0 — refusing to lock 0µV; abort");
-        return;
-    }
-
-    // live GPC clock, two-level public fallback: GetAllClocks V2 Gpc →
-    // (Pascal) classic GetAllClockFrequencies Graphics ("Clocks: Graphics"
-    // in get-status — Pascal's V2 map has no Gpc key, only Gpc2/fabric)
     let live = |pgpu: &nvapi::PhysicalGpu| -> Option<f64> {
         if let Some(map) = pgpu.all_clocks().ok() {
             if let Some(khz) = map.get(&nvapi::ClockDomainId::Gpc) {
@@ -144,85 +95,104 @@ fn main() {
             .map(|khz| khz.0 as f64 / 1000.0)
     };
 
-    // 1. pin P0 (set_pstate_native, ref-tool setPState path) — without it
-    //    the GPU idles far off the curve and the live clock is garbage
-    // 2. voltage-lock from the public curve value
-    // Both go through PerfClientLimits and MAY overwrite each other's
-    // entries (each call sends its own count) — read BOTH back and report.
-    let volt_lock = nvapi::ClockLockEntry {
-        limit: nvapi::PerfLimitId::Voltage,
-        lock_value: Some(nvapi::ClockLockValue::Voltage(nvapi::Microvolts(volt_uv))),
-        clock: nvapi::ClockDomain::Graphics,
+    let volt_lock = |uv: Option<u32>| {
+        pgpu.set_vfp_locks([nvapi::ClockLockEntry {
+            limit: nvapi::PerfLimitId::Voltage,
+            lock_value: uv.map(|v| nvapi::ClockLockValue::Voltage(nvapi::Microvolts(v))),
+            clock: nvapi::ClockDomain::Graphics,
+        }])
     };
-    let volt_unlock = nvapi::ClockLockEntry {
-        limit: nvapi::PerfLimitId::Voltage,
-        lock_value: None,
-        clock: nvapi::ClockDomain::Graphics,
-    };
-    if let Err(e) = pgpu.set_pstate_native(nvapi::PStateNativeLock::PstateOnly { pstate: 0 }) {
-        println!("P0 pin FAILED ({e:?}) — continuing without it (live clock may idle)");
-    } else {
-        println!("P0 pin applied");
-    }
-    if let Err(e) = pgpu.set_vfp_locks([volt_lock]) {
-        println!("voltage lock FAILED ({e:?}) — P0-only; pick a P0-segment idx");
-        let _ = pgpu.set_pstate_native(nvapi::PStateNativeLock::Reset);
-        return;
-    }
-    println!("voltage lock applied @ {}mV", volt_uv / 1000);
-    // readbacks: did both survive, or did the second call wipe the first?
-    match pgpu.vfp_locks([nvapi::PerfLimitId::Voltage]) {
-        Ok(l) => println!("voltage lock readback: {l:?}"),
-        Err(e) => println!("voltage lock readback failed: {e:?}"),
-    }
-    match pgpu.pstate_lock_status() {
-        Ok(Some(v)) => println!("pstate lock readback: {v:?}"),
-        Ok(None) => println!("pstate lock readback: none (wiped by the voltage call?)"),
-        Err(e) => println!("pstate lock readback failed: {e:?}"),
-    }
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    let Some(live0) = live(&pgpu) else {
-        println!("no live GPC clock — abort");
-        let _ = pgpu.set_vfp_locks([volt_unlock]);
-        let _ = pgpu.set_pstate_native(nvapi::PStateNativeLock::Reset);
-        return;
-    };
-    println!("baseline live GPC = {live0:.1} MHz (def_pub={def_pub:.0} — offset {:+.1})",
-        live0 - def_pub);
 
-    // 2. ladder: write mode-1 delta → read live clock
     let ladder: Vec<i64> = (0..=dmax).step_by(d_step as usize).collect();
-    println!("\ndelta,live_mHz,effect_mHz");
-    let mut samples: Vec<nvapi::ClkVfStairSample> = Vec::new();
-    for &d in &ladder {
-        write_point(gpu, idx, false, d as u32, &info);
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        let l = live(&pgpu).unwrap_or(f64::NAN);
-        let e = l - live0;
-        println!("{d},{:.1},{:.1}", l, e);
-        samples.push((d, e.round() as i64));
-    }
+    println!("=== Pascal batch locked-voltage calibration: idx {idx_lo}..{idx_hi} every {pt_step}, ladder 0..={dmax} step {d_step} ===");
+    println!("idx,volt_mV,def_mHz,C,C_lo,C_hi,D0,prior_C,dev");
 
-    // 3. restore + unlock + release P0
-    write_point(gpu, idx, true, 0, &info);
-    let _ = pgpu.set_vfp_locks([volt_unlock]);
-    let _ = pgpu.set_pstate_native(nvapi::PStateNativeLock::Reset);
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    println!("\nrestored+unlocked; live GPC = {:?}", live(&pgpu));
+    let mut row = 0usize;
+    for idx in idx_lo..=idx_hi {
+        let Some((_, e)) = entries.iter().find(|(i, _)| *i == idx) else { continue };
+        if info.point_present(0, idx) != Some(true) { continue; }
+        row += 1;
+        if (row - 1) % pt_step != 0 { continue; }
 
-    // 4. staircase fit (same math as the calibrator)
-    let mut q_gcd = 0i64;
-    for &(_, e) in &samples { if e != 0 { q_gcd = gcd(q_gcd, e.abs()); } }
-    let q = if q_gcd > 0 { q_gcd } else { 15 };
-    match nvapi::clk_vf_stair_fit(&samples, q) {
-        Some(fit) => {
-            println!("\nFIT: C={:.4} [{:.4},{:.4}] D0={:.0} (Q={q}MHz, n={})",
-                fit.c, fit.c_lo, fit.c_hi, fit.d0, samples.len());
-            if let Some((pc, _)) = nvapi::clk_vf_g_prior(def) {
-                println!("prior(def={def}) C={pc:.4} -> deviation {:+.4}",
-                    fit.c - pc);
-            }
+        let p = e.configured();
+        let volt_uv = p.voltage.0 as u32;
+        let def_pub = p.frequency.0 as f64 / 1000.0;
+        if volt_uv == 0 || def_pub == 0.0 {
+            println!("{idx},,,,MISSING public point");
+            continue;
         }
-        None => println!("\nFIT FAILED (inconsistent staircase)"),
+
+        // lock → baseline (offset must be small: the lock pins the op point)
+        if let Err(err) = volt_lock(Some(volt_uv)) {
+            println!("{idx},{},{},LOCK-FAILED {err:?}", volt_uv / 1000, def_pub as i64);
+            continue;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let Some(live0) = live(&pgpu) else {
+            let _ = volt_lock(None);
+            println!("{idx},,,,NO-LIVE");
+            continue;
+        };
+        if (live0 - def_pub).abs() > 100.0 {
+            println!("{idx},{},{},UNPINNED off={:+.0}", volt_uv / 1000, def_pub as i64,
+                live0 - def_pub);
+            let _ = volt_lock(None);
+            continue;
+        }
+
+        // ladder — samples in HALF-MHz integer units (classic clock has
+        // ±0.5 MHz noise; the half-unit keeps the grid integral)
+        let mut samples: Vec<(i64, i64)> = Vec::new();
+        for &d in &ladder {
+            write_point(gpu, idx, false, d as u32, &info);
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            let e2 = ((live(&pgpu).unwrap_or(live0) - live0) * 2.0).round() as i64;
+            samples.push((d, e2));
+        }
+        write_point(gpu, idx, true, 0, &info); // restore
+        let _ = volt_lock(None);
+
+        // trim clamped flats at both ends, then require >=3 levels
+        while samples.len() > 2 && samples[0].1 == samples[1].1 { samples.remove(0); }
+        while samples.len() > 2
+            && samples[samples.len() - 1].1 == samples[samples.len() - 2].1
+        {
+            samples.pop();
+        }
+        let mut levels: Vec<i64> = Vec::new();
+        for &(_, e) in &samples {
+            if levels.last() != Some(&e) { levels.push(e); }
+        }
+        if levels.len() < 3 {
+            println!("{idx},{},{},PINNED flat={}", volt_uv / 1000, def_pub as i64,
+                samples.first().map(|&(_, e)| e).unwrap_or(0));
+            continue;
+        }
+
+        // grid = min positive gap between distinct levels (half-MHz units);
+        // snap E onto it so ±1 half-MHz noise cannot break the exact fit
+        let mut g = 0i64;
+        for w in levels.windows(2) { g = gcd(g, (w[1] - w[0]).abs()); }
+        let q2 = g.clamp(5, 60); // 2.5..30 MHz sanity window
+        for s in &mut samples { s.1 = ((s.1 as f64) / q2 as f64).round() as i64 * q2; }
+
+        match nvapi::clk_vf_stair_fit(&samples, q2) {
+            // C came out in half-MHz effect units — halve back
+            Some(f) => {
+                let c = f.c / 2.0;
+                let lo = f.c_lo / 2.0;
+                let hi = f.c_hi / 2.0;
+                let d0 = f.d0; // invariant under uniform E scaling
+                let prior = nvapi::clk_vf_g_prior(def_pub as u32)
+                    .map(|(pc, _)| pc)
+                    .unwrap_or(f64::NAN);
+                println!("{idx},{},{},{:.4},{:.4},{:.4},{:.0},{:.4},{:+.4}",
+                    volt_uv / 1000, def_pub as i64, c, lo, hi, d0, prior, c - prior);
+            }
+            None => println!("{idx},{},{},FIT-FAILED n={}", volt_uv / 1000, def_pub as i64,
+                samples.len()),
+        }
     }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    println!("\nfinal live GPC = {:?}", live(&pgpu));
 }
