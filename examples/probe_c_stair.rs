@@ -162,7 +162,11 @@ fn main() {
                 Some(fe) if e == fe => flat_from_start += 1,
                 _ => flat_from_start = 0,
             }
-            if flat_from_start >= 5 { break; } // fully clamped point (no staircase at all)
+            // early-exit ONLY on the positive side: a flat leading run is
+            // normal with a negative ladder (most points clamp to -15/0
+            // downward within one grid step) — break only if still flat at
+            // d >= +200 (genuinely dead point)
+            if flat_from_start >= 5 && d >= 200 { break; }
             samples.push((d, e));
         }
         write_point(gpu, idx, true, 0, &info); // restore
