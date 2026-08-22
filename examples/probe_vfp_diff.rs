@@ -140,7 +140,7 @@ fn main() {
         let mut samples: Vec<(i64, i64)> = Vec::new();
         for &d in &ladder {
             write_point(gpu, idx, false, d as u32, &info);
-            std::thread::sleep(std::time::Duration::from_millis(120));
+            std::thread::sleep(std::time::Duration::from_millis(150));
             let e2 = ((live(&pgpu).unwrap_or(live0) - live0) * 2.0).round() as i64;
             samples.push((d, e2));
         }
@@ -161,6 +161,14 @@ fn main() {
         if levels.len() < 3 {
             println!("{idx},{},{},PINNED flat={}", volt_uv / 1000, def_pub as i64,
                 samples.first().map(|&(_, e)| e).unwrap_or(0));
+            continue;
+        }
+        // saturation guard: near-ceiling points cap early and the trimmed
+        // remnant fits a FAKE small C (observed: def 1987 -> "0.25")
+        let span = *levels.last().unwrap() - *levels.first().unwrap();
+        if span < 4 * 25 {
+            println!("{idx},{},{},SATURATED span={:.0}MHz", volt_uv / 1000, def_pub as i64,
+                span as f64 / 2.0);
             continue;
         }
 
