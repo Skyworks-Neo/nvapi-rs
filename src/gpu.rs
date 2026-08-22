@@ -1787,7 +1787,7 @@ impl PhysicalGpu {
     /// GetInfo → seed bank masks → GetControl snapshot → patch one record →
     /// SetControl → GetControl readback → verify → restore on mismatch.
     ///
-    /// `bank` is 0 (pstate-class records) or 1 (V/F curve points). `idx`
+    /// `bank` is 0 (V/F curve points) or 1 (pstate-class records). `idx`
     /// is the point index (0..2048) within that bank. `freq_mode` selects
     /// mode 0 (kHz frequency OFFSET, same as public VFP freqDeltaKHz,
     /// max clamp ~990 MHz) vs mode 1 (reverse-volt lookup: delta → voltage

@@ -727,19 +727,19 @@ pub fn clk_vf_effect_for_delta(
 }
 
 /// Mode-1 `delta` that lifts a point with this default frequency by
-/// `target_mhz`, per the prior for `class`. `target_mhz = 0` is valid and
-/// yields the delta that zeroes the effect (≈ D0) — the "return to stock"
-/// case. Negative targets are rejected: single-point negative offsets are
-/// clamped by the backward slope cap and need range writes instead. Refine
-/// with a measured table from
-/// [`crate::gpu::PhysicalGpu::clk_vf_calibrate_private`] when the prior is
-/// off (new silicon, unmeasured def bands).
+/// `target_mhz`, per the prior for `class`. Any finite target (including 0
+/// and negatives) is faithfully translated: the caller's intent is respected
+/// even if RM's backward slope cap will later clamp a negative single-point
+/// offset (range writes bypass the cap). `target_mhz = 0` yields the delta
+/// that zeroes the effect (≈ D0) — the "return to stock" case. Refine with
+/// a measured table from [`crate::gpu::PhysicalGpu::clk_vf_calibrate_private`]
+/// when the prior is off (new silicon, unmeasured def bands).
 pub fn clk_vf_delta_for_target(
     def_mhz: u32,
     target_mhz: f64,
     class: ClkVfDomainClass,
 ) -> Option<i32> {
-    if !(target_mhz.is_finite() && target_mhz >= 0.0) {
+    if !target_mhz.is_finite() {
         return None;
     }
     let (c, d0) = clk_vf_g_prior_class(def_mhz, class)?;
@@ -747,7 +747,7 @@ pub fn clk_vf_delta_for_target(
         return None;
     }
     let delta = target_mhz / c + d0;
-    Some(delta.clamp(0.0, 1000.0) as i32)
+    Some(delta.clamp(-1000.0, 1000.0) as i32)
 }
 
 /// One staircase-calibration sample: (mode-1 delta, measured effect MHz),
@@ -1523,9 +1523,11 @@ mod tests {
         let d = clk_vf_delta_for_target(1300, 90.0, ClkVfDomainClass::Graphics).unwrap();
         let e = clk_vf_effect_for_delta(1300, d, ClkVfDomainClass::Graphics).unwrap();
         assert!((e - 90.0).abs() <= 15.0 * 1.01, "round-trip {e}");
-        assert!(clk_vf_delta_for_target(1300, -5.0, ClkVfDomainClass::Graphics).is_none());
-        // target 0 = "return to stock": valid, yields D0
+        // negative targets are faithfully translated (RM may cap, but the
+        // caller's intent is preserved); only NaN/inf rejected
+        assert!(clk_vf_delta_for_target(1300, -5.0, ClkVfDomainClass::Graphics).is_some());
         assert!(clk_vf_delta_for_target(1300, 0.0, ClkVfDomainClass::Graphics).is_some());
+        assert!(clk_vf_delta_for_target(1300, f64::NAN, ClkVfDomainClass::Graphics).is_none());
         // fallback-rule prediction also yields a delta now
         assert!(clk_vf_delta_for_target(340, 90.0, ClkVfDomainClass::Graphics).is_some());
     }
