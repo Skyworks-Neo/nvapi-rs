@@ -1895,6 +1895,178 @@ impl PhysicalGpu {
         Ok(retained_value)
     }
 
+    /// Sparse mode-1 (reverse-volt) calibration over ONE domain segment of
+    /// the private V/F-points table (bank 0). For every `pt_step`-th
+    /// present point in `idx_lo..=idx_hi` — pass one DOMAIN per call:
+    /// GPC 0-127, XBAR 128-255, HOST 256+ — walks an ascending mode-1
+    /// delta ladder (0..=`dmax` step `d_step`), reads the per-point effect
+    /// from the STATUS current-frequency field, restores the point
+    /// (mode-0 value 0) and fits the exact staircase
+    /// ([`crate::clock::clk_vf_stair_fit`]).
+    ///
+    /// Purpose: validate the universal prior ([`crate::clock::clk_vf_g_prior`])
+    /// or measure per-domain modulation (XBAR runs ~+20% hot below ~900
+    /// MHz def). Cache the results per GPU + driver version; a handful of
+    /// points (`pt_step` 16-32) confirms alignment.
+    ///
+    /// Pascal: type-1 records leave the STATUS current field empty — such
+    /// points return [`crate::clock::ClkVfCalKind::CurAbsent`] (mode-1 writes DO
+    /// take effect there; a MEASURE_FREQ effect source is a future
+    /// extension behind the same ladder loop).
+    pub fn clk_vf_calibrate_private(
+        &self,
+        idx_lo: usize,
+        idx_hi: usize,
+        pt_step: usize,
+        d_step: i64,
+        dmax: i64,
+    ) -> crate::Result<Vec<crate::clock::ClkVfCalPoint>> {
+        trace!("gpu.clk_vf_calibrate_private({idx_lo}..={idx_hi}, pt_step={pt_step}, d_step={d_step}, dmax={dmax})");
+        use crate::sys::api::{
+            NvAPI_GPU_ClockClkVfPointsGetInfo, NvAPI_GPU_ClockClkVfPointsGetStatus,
+        };
+        use clock::private::{
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE,
+        };
+
+        fn gcd(mut a: i64, mut b: i64) -> i64 {
+            while b != 0 {
+                let t = a % b;
+                a = b;
+                b = t;
+            }
+            a
+        }
+
+        const BANK: usize = 0;
+        let idx_hi = idx_hi.min(clock::private::clk_vfp_info::POINTS - 1);
+        let pt_step = pt_step.max(1);
+        let d_step = d_step.clamp(10, 500);
+        let dmax = dmax.clamp(200, 1000);
+
+        // baseline: info + seeded status read (the ladder reuses `info` to
+        // re-read status after each write)
+        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from)?;
+        let read_status = |info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE| {
+            let mut s = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE::default());
+            info.seed_status_header(&mut s);
+            let st = unsafe {
+                NvAPI_GPU_ClockClkVfPointsGetStatus(self.0, ptr::from_mut(&mut *s).cast())
+            };
+            crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetStatus, st)
+                .map_err(crate::Error::from)
+                .map(|_| s)
+        };
+        let baseline = read_status(&info)?;
+
+        let ladder: Vec<i64> = (0..=dmax).step_by(d_step as usize).collect();
+        let mut out = Vec::new();
+        let mut n = 0usize;
+        for idx in idx_lo..=idx_hi {
+            if info.point_present(BANK, idx) != Some(true) {
+                continue;
+            }
+            n += 1;
+            if (n - 1) % pt_step != 0 {
+                continue;
+            }
+
+            // Pascal type-1 decode: frequency terms are doubled
+            let typ = baseline.record_type(BANK, idx).unwrap_or(0);
+            let div: i64 = if typ == 1 { 2 } else { 1 };
+            let def = baseline.freq_default_mhz(BANK, idx).unwrap_or(0) as i64 / div;
+            let volt_mv = (baseline.voltage_uv(BANK, idx).unwrap_or(0) / 1000) as u32;
+            let base_cur = baseline.freq_current_mhz(BANK, idx).unwrap_or(0) as i64 / div;
+            let push = |out: &mut Vec<crate::clock::ClkVfCalPoint>, kind: crate::clock::ClkVfCalKind| {
+                out.push(crate::clock::ClkVfCalPoint {
+                    bank: BANK as u8,
+                    idx: idx as u16,
+                    def_mhz: def as u32,
+                    volt_mv,
+                    kind,
+                });
+            };
+            if base_cur == 0 || def == 0 {
+                push(&mut out, crate::clock::ClkVfCalKind::CurAbsent);
+                continue;
+            }
+
+            // ladder: write mode-1 delta → read effect; early-exit only on
+            // the positive side (a flat NEGATIVE head is normal — the
+            // backward slope cap clamps it within one grid step)
+            let mut samples: Vec<crate::clock::ClkVfStairSample> = Vec::new();
+            let mut first_e: Option<i64> = None;
+            let mut flat_from_start = 0usize;
+            for &d in &ladder {
+                self.set_vfp_point_private(BANK, idx, false, d as u32)?;
+                let s = read_status(&info)?;
+                let cur = s.freq_current_mhz(BANK, idx).unwrap_or(0) as i64 / div;
+                let e = cur - def;
+                match first_e {
+                    None => {
+                        first_e = Some(e);
+                        flat_from_start = 1;
+                    }
+                    Some(fe) if e == fe => flat_from_start += 1,
+                    _ => flat_from_start = 0,
+                }
+                if flat_from_start >= 5 && d >= 200 {
+                    break; // genuinely dead point (still flat at +200)
+                }
+                samples.push((d, e));
+            }
+            self.set_vfp_point_private(BANK, idx, true, 0)?; // restore
+
+            // trim floor/flatten-clamped flats at both ends
+            while samples.len() > 2 && samples[0].1 == samples[1].1 {
+                samples.remove(0);
+            }
+            while samples.len() > 2
+                && samples[samples.len() - 1].1 == samples[samples.len() - 2].1
+            {
+                samples.pop();
+            }
+            // >=3 distinct effect levels required (2-level fits are noise)
+            let mut levels: Vec<i64> = Vec::new();
+            for &(_, e) in &samples {
+                if levels.last() != Some(&e) {
+                    levels.push(e);
+                }
+            }
+            if levels.len() < 3 {
+                push(
+                    &mut out,
+                    crate::clock::ClkVfCalKind::Pinned {
+                        flat_effect_mhz: samples.first().map(|&(_, e)| e).unwrap_or(0),
+                    },
+                );
+                continue;
+            }
+            // Q = GCD of nonzero |effects|
+            let mut q_gcd = 0i64;
+            for &(_, e) in &samples {
+                if e != 0 {
+                    q_gcd = gcd(q_gcd, e.abs());
+                }
+            }
+            let q = if q_gcd > 0 { q_gcd } else { 15 };
+            match crate::clock::clk_vf_stair_fit(&samples, q) {
+                Some(fit) => push(
+                    &mut out,
+                    crate::clock::ClkVfCalKind::Fitted { fit, q_mhz: q, n_used: samples.len() },
+                ),
+                None => push(&mut out, crate::clock::ClkVfCalKind::Unstable),
+            }
+        }
+        Ok(out)
+    }
+
     /// Write a RANGE of V/F curve points with the same delta — the
     /// private-path analogue of the public `set_vfp_range_delta_mhz`.
     /// Patches every point in `[start, end]` (inclusive) on `bank` in a

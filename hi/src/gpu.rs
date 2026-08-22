@@ -853,6 +853,36 @@ impl Gpu {
         }
     }
 
+    /// Sparse mode-1 (reverse-volt) V/F calibration over one domain segment
+    /// of the private table — see the middle layer for the full contract
+    /// (one DOMAIN per call: GPC 0-127, XBAR 128-255, …; every `pt_step`-th
+    /// present point gets a mode-1 delta ladder, exact staircase fit,
+    /// per-point restore). Compare results against the universal prior
+    /// `nvapi::clk_vf_g_prior(def_mhz)`; cache per GPU + driver version.
+    /// `Ok(None)` where the driver doesn't expose the private interface.
+    #[allow(clippy::too_many_arguments)]
+    pub fn clk_vf_calibrate_private(
+        &self,
+        idx_lo: usize,
+        idx_hi: usize,
+        pt_step: usize,
+        d_step: i64,
+        dmax: i64,
+    ) -> nvapi::Result<Option<Vec<nvapi::ClkVfCalPoint>>> {
+        match self.gpu.clk_vf_calibrate_private(idx_lo, idx_hi, pt_step, d_step, dmax) {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// P-State level table (present pstates + per-pstate min/max clock in kHz
     /// for the given clock-domain) from the private PerfPstatesGetInfo (NDA
     /// 0x7B30AE0D). Source of the ref tool's `-pstate` GET listing. `domain` selects

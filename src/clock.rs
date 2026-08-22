@@ -531,6 +531,240 @@ pub enum ClkVfSegmentKind {
     PstateBins,
 }
 
+// ---------------------------------------------------------------------------
+// Mode-1 (reverse-volt) scaling model: effect = C(def) × (delta − D0)
+//
+// Empirically established by staircase calibration (probe_c_stair) on three
+// live datasets — CMP 170HX (A100 core) GPC, RTX 4060 Laptop GPC, RTX 4060
+// Laptop XBAR — see memory/vfp-mode1-c-calibration. Key facts:
+//
+// * C is NOT a function of voltage or SKU: it is keyed to the point's
+//   DEFAULT FREQUENCY and near-universal across generations and domains
+//   (def 1470 MHz → C 0.3375 on all three datasets; the D0 +25/−25 flip at
+//   def≈1200 and the def≈1200 dip reproduce everywhere).
+// * All true C are exact k/400 (RM appears to store C as /400 fixed-point).
+// * Effects quantize to the curve grid Q (15 MHz, doubling to 30 MHz at
+//   each domain's P0 ceiling).
+// * XBAR deviates ~+20% from the GPC prior in the 500–900 MHz def band
+//   (per-domain modulation below ~900); the table below is GPC.
+// * Single-point NEGATIVE offsets are clamped by the backward slope cap
+//   (60 MHz/point on Ada) — the same applies to the public kHz offset;
+//   real negative moves need range writes.
+// ---------------------------------------------------------------------------
+
+/// One band of the universal mode-1 prior g(def). Bands are inclusive on
+/// both ends and cover the union of observed default frequencies; gaps
+/// between bands were never observed live.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct ClkVfGPrior {
+    /// inclusive default-frequency band lower bound (MHz)
+    pub def_mhz_lo: u32,
+    /// inclusive default-frequency band upper bound (MHz)
+    pub def_mhz_hi: u32,
+    /// slope C: MHz of curve lift per mode-1 delta unit (exact k/400)
+    pub c_mhz_per_delta: f64,
+    /// deadzone D0 in delta units (negative = immediate response)
+    pub d0_delta: f64,
+}
+
+/// Universal GPC prior g(def), merged from the CMP-170HX/4060 GPC datasets
+/// (they agree at every shared def). Below ~900 MHz XBAR runs ~+20% hot;
+/// validate with [`crate::gpu::PhysicalGpu::clk_vf_calibrate_private`].
+pub const CLK_VF_G_PRIOR: &[ClkVfGPrior] = &[
+    // def_lo def_hi  C        D0
+    ClkVfGPrior { def_mhz_lo: 200, def_mhz_hi: 330, c_mhz_per_delta: 0.0800, d0_delta: -8.0 },
+    ClkVfGPrior { def_mhz_lo: 345, def_mhz_hi: 480, c_mhz_per_delta: 0.1125, d0_delta: 0.0 },
+    ClkVfGPrior { def_mhz_lo: 495, def_mhz_hi: 510, c_mhz_per_delta: 0.1250, d0_delta: 0.0 },
+    ClkVfGPrior { def_mhz_lo: 540, def_mhz_hi: 570, c_mhz_per_delta: 0.1600, d0_delta: 20.0 },
+    ClkVfGPrior { def_mhz_lo: 600, def_mhz_hi: 690, c_mhz_per_delta: 0.1550, d0_delta: -17.0 },
+    ClkVfGPrior { def_mhz_lo: 720, def_mhz_hi: 750, c_mhz_per_delta: 0.1750, d0_delta: 0.0 },
+    ClkVfGPrior { def_mhz_lo: 765, def_mhz_hi: 870, c_mhz_per_delta: 0.2025, d0_delta: -9.0 },
+    ClkVfGPrior { def_mhz_lo: 915, def_mhz_hi: 915, c_mhz_per_delta: 0.2500, d0_delta: 15.0 },
+    ClkVfGPrior { def_mhz_lo: 930, def_mhz_hi: 945, c_mhz_per_delta: 0.2575, d0_delta: 21.0 },
+    ClkVfGPrior { def_mhz_lo: 975, def_mhz_hi: 1005, c_mhz_per_delta: 0.2625, d0_delta: 18.0 },
+    ClkVfGPrior { def_mhz_lo: 1020, def_mhz_hi: 1040, c_mhz_per_delta: 0.2700, d0_delta: 19.0 },
+    // main OC band: long 0.30 plateau, D0 +25
+    ClkVfGPrior { def_mhz_lo: 1050, def_mhz_hi: 1185, c_mhz_per_delta: 0.3000, d0_delta: 25.0 },
+    // reproducible dip (all datasets)
+    ClkVfGPrior { def_mhz_lo: 1200, def_mhz_hi: 1215, c_mhz_per_delta: 0.2700, d0_delta: -14.0 },
+    // 0.30 again, D0 flips to −25
+    ClkVfGPrior { def_mhz_lo: 1230, def_mhz_hi: 1365, c_mhz_per_delta: 0.3000, d0_delta: -25.0 },
+    ClkVfGPrior { def_mhz_lo: 1380, def_mhz_hi: 1395, c_mhz_per_delta: 0.3225, d0_delta: -20.0 },
+    ClkVfGPrior { def_mhz_lo: 1410, def_mhz_hi: 1410, c_mhz_per_delta: 0.3250, d0_delta: -21.0 },
+    ClkVfGPrior { def_mhz_lo: 1440, def_mhz_hi: 1440, c_mhz_per_delta: 0.3300, d0_delta: -20.0 },
+    // def 1470 → 0.3375: identical on CMP 170HX, 4060 GPC and 4060 XBAR
+    ClkVfGPrior { def_mhz_lo: 1470, def_mhz_hi: 1530, c_mhz_per_delta: 0.3375, d0_delta: -19.0 },
+    ClkVfGPrior { def_mhz_lo: 1545, def_mhz_hi: 1620, c_mhz_per_delta: 0.3875, d0_delta: -7.0 },
+    ClkVfGPrior { def_mhz_lo: 1635, def_mhz_hi: 1665, c_mhz_per_delta: 0.3950, d0_delta: -9.0 },
+    ClkVfGPrior { def_mhz_lo: 1710, def_mhz_hi: 1710, c_mhz_per_delta: 0.4100, d0_delta: -4.0 },
+    ClkVfGPrior { def_mhz_lo: 1725, def_mhz_hi: 1740, c_mhz_per_delta: 0.4150, d0_delta: -6.0 },
+    ClkVfGPrior { def_mhz_lo: 1755, def_mhz_hi: 1830, c_mhz_per_delta: 0.4350, d0_delta: -8.0 },
+    ClkVfGPrior { def_mhz_lo: 1845, def_mhz_hi: 1920, c_mhz_per_delta: 0.4500, d0_delta: -8.0 },
+    ClkVfGPrior { def_mhz_lo: 1950, def_mhz_hi: 1950, c_mhz_per_delta: 0.4650, d0_delta: -6.0 },
+    ClkVfGPrior { def_mhz_lo: 1965, def_mhz_hi: 1980, c_mhz_per_delta: 0.4700, d0_delta: -7.0 },
+    ClkVfGPrior { def_mhz_lo: 1995, def_mhz_hi: 2025, c_mhz_per_delta: 0.4900, d0_delta: -2.0 },
+    ClkVfGPrior { def_mhz_lo: 2040, def_mhz_hi: 2055, c_mhz_per_delta: 0.4850, d0_delta: -7.0 },
+    ClkVfGPrior { def_mhz_lo: 2070, def_mhz_hi: 2100, c_mhz_per_delta: 0.4975, d0_delta: -6.0 },
+    ClkVfGPrior { def_mhz_lo: 2115, def_mhz_hi: 2145, c_mhz_per_delta: 0.5125, d0_delta: -3.0 },
+    ClkVfGPrior { def_mhz_lo: 2160, def_mhz_hi: 2175, c_mhz_per_delta: 0.5275, d0_delta: -3.0 },
+    ClkVfGPrior { def_mhz_lo: 2205, def_mhz_hi: 2235, c_mhz_per_delta: 0.5375, d0_delta: -3.0 },
+    ClkVfGPrior { def_mhz_lo: 2265, def_mhz_hi: 2265, c_mhz_per_delta: 0.5475, d0_delta: -3.0 },
+    ClkVfGPrior { def_mhz_lo: 2280, def_mhz_hi: 2340, c_mhz_per_delta: 0.5575, d0_delta: -2.0 },
+    ClkVfGPrior { def_mhz_lo: 2355, def_mhz_hi: 2415, c_mhz_per_delta: 0.5775, d0_delta: -1.0 },
+    ClkVfGPrior { def_mhz_lo: 2430, def_mhz_hi: 2445, c_mhz_per_delta: 0.5625, d0_delta: -5.0 },
+    // domain-ceiling band: Q doubles to 30 MHz here (observed on both the
+    // 4060 GPC ceiling 2640 and XBAR ceiling 2490)
+    ClkVfGPrior { def_mhz_lo: 2460, def_mhz_hi: 2595, c_mhz_per_delta: 0.6000, d0_delta: -25.0 },
+    ClkVfGPrior { def_mhz_lo: 2600, def_mhz_hi: 2700, c_mhz_per_delta: 0.6250, d0_delta: -11.0 },
+];
+
+/// Look up the universal mode-1 prior (C, D0) for a point with this
+/// default frequency. Pure — no driver IO.
+pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
+    CLK_VF_G_PRIOR
+        .iter()
+        .find(|e| def_mhz >= e.def_mhz_lo && def_mhz <= e.def_mhz_hi)
+        .map(|e| (e.c_mhz_per_delta, e.d0_delta))
+}
+
+/// Predicted curve lift (MHz) of a mode-1 `delta` at this default
+/// frequency, per the universal prior. Negative results clamp to 0
+/// (backward moves are slope-capped anyway).
+pub fn clk_vf_effect_for_delta(def_mhz: u32, delta: i32) -> Option<f64> {
+    let (c, d0) = clk_vf_g_prior(def_mhz)?;
+    Some(((delta as f64 - d0) * c).max(0.0))
+}
+
+/// Mode-1 `delta` that lifts a point with this default frequency by
+/// `target_mhz`, per the universal prior. Positive targets only — negative
+/// single-point offsets are clamped by the backward slope cap and need
+/// range writes instead. Refine with a measured table from
+/// [`crate::gpu::PhysicalGpu::clk_vf_calibrate_private`] when the prior is
+/// off (per-domain modulation, new silicon).
+pub fn clk_vf_delta_for_target(def_mhz: u32, target_mhz: f64) -> Option<i32> {
+    if !(target_mhz.is_finite() && target_mhz > 0.0) {
+        return None;
+    }
+    let (c, d0) = clk_vf_g_prior(def_mhz)?;
+    if c <= 0.0 {
+        return None;
+    }
+    let delta = target_mhz / c + d0;
+    Some(delta.clamp(0.0, 1000.0) as i32)
+}
+
+/// One staircase-calibration sample: (mode-1 delta, measured effect MHz),
+/// where effect = STATUS current MHz − default MHz.
+pub type ClkVfStairSample = (i64, i64);
+
+/// Result of the exact staircase fit.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct ClkVfStairFit {
+    /// slope C (MHz per delta unit); snapped to the nearest k/400 inside
+    /// the feasible interval when one exists
+    pub c: f64,
+    /// exact feasible lower bound on C
+    pub c_lo: f64,
+    /// exact feasible upper bound on C
+    pub c_hi: f64,
+    /// deadzone D0 in delta units (B/C); negative = immediate response
+    pub d0: f64,
+}
+
+/// Exact staircase fit over saturation-trimmed samples. Each sample gives
+/// the linear constraint `E_i ≤ C·d_i − B < E_i + Q` (B = C·D0); pairwise
+/// subtraction eliminates B and yields exact rational bounds on C:
+/// `C·(d_i − d_j) ∈ (E_i − E_j − Q, E_i − E_j + Q)`. The point estimate is
+/// the interval midpoint, snapped to the nearest k/400 inside the interval
+/// (every true C observed so far is k/400). Returns `None` when no (C, B)
+/// satisfies all samples (inconsistent staircase — usually load flutter).
+pub fn clk_vf_stair_fit(samples: &[ClkVfStairSample], q_mhz: i64) -> Option<ClkVfStairFit> {
+    if samples.len() < 2 {
+        return None;
+    }
+    let q = q_mhz as f64;
+    let mut lo = 0.0f64;
+    let mut hi = f64::INFINITY;
+    for i in 0..samples.len() {
+        for j in 0..samples.len() {
+            if i == j {
+                continue;
+            }
+            let (di, ei) = samples[i];
+            let (dj, ej) = samples[j];
+            let dd = (di - dj) as f64;
+            let de = (ei - ej) as f64;
+            if dd > 0.0 {
+                lo = lo.max((de - q) / dd);
+                hi = hi.min((de + q) / dd);
+            } else if dd < 0.0 {
+                lo = lo.max((de + q) / dd);
+                hi = hi.min((de - q) / dd);
+            }
+        }
+    }
+    if !(lo < hi) {
+        return None;
+    }
+    let mut c = (lo + hi) / 2.0;
+    let snapped = (c * 400.0).round() / 400.0;
+    if snapped >= lo && snapped <= hi {
+        c = snapped;
+    }
+    let mut b_hi = f64::MAX;
+    let mut b_lo = f64::MIN;
+    for &(d, e) in samples {
+        let x = c * d as f64 - e as f64;
+        b_hi = b_hi.min(x);
+        b_lo = b_lo.max(x - q);
+    }
+    if !(b_lo < b_hi) {
+        return None;
+    }
+    Some(ClkVfStairFit { c, c_lo: lo, c_hi: hi, d0: (b_lo + b_hi) / 2.0 / c })
+}
+
+/// Per-point outcome of a sparse mode-1 calibration sweep.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClkVfCalPoint {
+    /// 0 or 1
+    pub bank: u8,
+    /// point index within the bank
+    pub idx: u16,
+    /// default frequency (MHz, Pascal type-1 already halved)
+    pub def_mhz: u32,
+    /// grid voltage (mV; 0 when the record lacks the field)
+    pub volt_mv: u32,
+    pub kind: ClkVfCalKind,
+}
+
+/// What the ladder measured at one point.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClkVfCalKind {
+    /// staircase fit succeeded; compare `fit.c` against
+    /// [`clk_vf_g_prior`] to validate the prior or measure domain modulation
+    Fitted {
+        fit: ClkVfStairFit,
+        /// detected effect quantum (15 MHz, or 30 at domain ceilings)
+        q_mhz: i64,
+        /// samples used after trimming
+        n_used: usize,
+    },
+    /// flat response across the ladder — pinned at the P0 ceiling or below
+    /// the pstate floor (real information, but not a C)
+    Pinned { flat_effect_mhz: i64 },
+    /// STATUS current-frequency field empty (all Pascal type-1 records):
+    /// mode-1 writes DO take effect there, but the effect must be measured
+    /// (MEASURE_FREQ) rather than read from STATUS — source not yet wired
+    CurAbsent,
+    /// samples mutually inconsistent (load flutter mid-ladder)
+    Unstable,
+}
+
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Default, Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
 pub struct VfPoint<T> {
@@ -1164,6 +1398,43 @@ impl RawConversion for power::private::NV_VOLT_STATUS {
 mod tests {
     use super::*;
     use crate::sys::gpu::clock::private::NV_GPU_CLOCK_INFO_V2;
+
+    /// Universal prior: def 1470 → C 0.3375 must hold (identical on all
+    /// three live datasets), gaps between bands return None, and the
+    /// delta→effect→delta prediction round-trips within one grid step.
+    #[test]
+    fn clk_vf_prior_lookup_and_prediction() {
+        let (c, _) = clk_vf_g_prior(1470).unwrap();
+        assert!((c - 0.3375).abs() < 1e-9);
+        let (c, _) = clk_vf_g_prior(1050).unwrap();
+        assert!((c - 0.30).abs() < 1e-9);
+        assert!(clk_vf_g_prior(340).is_none()); // never-observed gap band
+
+        let d = clk_vf_delta_for_target(1300, 90.0).unwrap();
+        let e = clk_vf_effect_for_delta(1300, d).unwrap();
+        assert!((e - 90.0).abs() <= 15.0 * 1.01, "round-trip {e}");
+        assert!(clk_vf_delta_for_target(1300, -5.0).is_none()); // no negative targets
+        assert!(clk_vf_delta_for_target(340, 90.0).is_none()); // no prior band
+    }
+
+    /// Synthetic CMP-shaped staircase (C=0.30, D0=25, Q=15): the exact
+    /// pairwise fit must recover 0.30 with the true value inside [lo, hi].
+    #[test]
+    fn clk_vf_stair_fit_recovers_exact_c() {
+        let samples: Vec<ClkVfStairSample> = [0i64, 50, 100, 150, 200, 250, 300, 350, 400]
+            .iter()
+            .map(|&d| {
+                let x = 0.30 * (d as f64 - 25.0);
+                (d, 15 * (x.max(0.0) / 15.0).floor() as i64)
+            })
+            .collect();
+        let fit = clk_vf_stair_fit(&samples, 15).unwrap();
+        assert!((fit.c - 0.30).abs() < 1e-9, "c={}", fit.c);
+        assert!(fit.c_lo <= 0.30 && fit.c_hi >= 0.30);
+        assert!((fit.d0 - 25.0).abs() <= 25.0, "d0={}", fit.d0);
+        // inconsistent samples must fail closed
+        assert!(clk_vf_stair_fit(&[(0, 0), (100, 90), (200, 0)], 15).is_none());
+    }
 
     /// Build a GetAllClocks V2 buffer with a fabricated per-domain frequency
     /// map, then confirm `all_clocks_from_raw` surfaces every present (non-zero)
