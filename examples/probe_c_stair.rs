@@ -12,9 +12,16 @@
 //! Q is auto-detected as the GCD of nonzero effects (fallback 15). Samples
 //! past forward-flattening saturation (E stops rising) are excluded.
 //!
-//! Usage: cargo run --release --example probe_c_stair -- [pt_step] [d_step] [dmax]
+//! Negative deltas are included (safe: they only lower the point; points
+//! that cannot drop show a floor-clamped flat which is trimmed). Negative
+//! effects join the fit as constraints — the downward half of the staircase
+//! pins C/D0 far tighter than a one-sided positive ladder. A negative fit
+//! D0 just means the point responds immediately (crossing left of d=0).
+//!
+//! Usage: cargo run --release --example probe_c_stair -- [pt_step] [d_step] [dmax] [dmin]
 //!   pt_step: sample every Nth present point (default 16)
-//!   d_step / dmax: delta ladder 50..=dmax step d_step (defaults 50 600)
+//!   d_step / dmax / dmin: delta ladder dmin..=dmax step d_step
+//!   (defaults 50 600 -600)
 //! Run as admin; every point restored (mode-0 value 0) after its ladder.
 use nvapi::initialize;
 use nvapi::sys::api::{
@@ -82,7 +89,7 @@ fn stair_fit(pts: &[(i64, i64)], q: f64) -> Option<(f64, f64, f64, f64)> {
             b_hi = b_hi.min(x);
             b_lo = b_lo.max(x - q);
         }
-        let feasible = b_lo < b_hi && b_hi > 0.0;
+        let feasible = b_lo < b_hi;
         if feasible {
             match cur_lo {
                 None => cur_lo = Some(a),
@@ -115,6 +122,7 @@ fn main() {
     let pt_step: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(16).max(1);
     let d_step: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(50).max(10);
     let dmax: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(600);
+    let dmin: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(-dmax).min(0);
 
     let _ = initialize();
     let mut h = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
@@ -125,13 +133,13 @@ fn main() {
     let info = get_info(gpu);
     let baseline = get_status(gpu, &info);
 
-    let ladder: Vec<i64> = (50..=dmax).step_by(d_step as usize).collect();
+    let ladder: Vec<i64> = (dmin..=dmax).step_by(d_step as usize).collect();
     let present: Vec<usize> = (0..clk_vfp_info::POINTS)
         .filter(|&i| info.point_present(0, i) == Some(true))
         .collect();
     eprintln!("=== staircase C fit: {} pts, every {pt_step}, ladder {:?} ===",
         present.len(), &ladder[..ladder.len().min(6)]);
-    eprintln!("idx,volt_mV,def_mHz,Q,n_used,C,C_lo,C_hi,D0,sat_at");
+    eprintln!("idx,volt_mV,def_mHz,Q,n_used,C,C_lo,C_hi,D0,E_range");
 
     let mut results: Vec<(f64, f64)> = Vec::new(); // (volt_mV, C)
     let mut row = 0usize;
@@ -141,53 +149,50 @@ fn main() {
         let volt = baseline.voltage_uv(0, idx).unwrap_or(0);
         let def = baseline.freq_default_mhz(0, idx).unwrap_or(0) as i64;
 
-        // walk the ladder ascending; collect (d, E)
+        // walk the ladder ascending (negatives first); collect (d, E)
         let mut samples: Vec<(i64, i64)> = Vec::new();
-        let mut last_e: i64 = -1;
-        let mut flat_run = 0usize;
-        let mut sat_at: i64 = 0;
-        let mut zero_run = 0usize;
+        let mut first_e: Option<i64> = None;
+        let mut flat_from_start = 0usize;
         for &d in &ladder {
             write_point(gpu, idx, false, d as u32, &info);
             let cur = get_status(gpu, &info).freq_current_mhz(0, idx).unwrap_or(0) as i64;
-            let e = (cur - def).max(0);
-            if e == 0 {
-                zero_run += 1;
-                if zero_run >= 4 && d >= 200 { break; } // D0 huge — dead point, save IO
-            } else {
-                samples.push((d, e));
-                if e == last_e {
-                    flat_run += 1;
-                    if flat_run >= 2 && sat_at == 0 { sat_at = d - d_step * 2; }
-                } else {
-                    flat_run = 0;
-                }
-                last_e = e;
+            let e = cur - def; // may be negative — allowed in the fit
+            match first_e {
+                None => { first_e = Some(e); flat_from_start = 1; }
+                Some(fe) if e == fe => flat_from_start += 1,
+                _ => flat_from_start = 0,
             }
+            if flat_from_start >= 5 { break; } // fully clamped point (no staircase at all)
+            samples.push((d, e));
         }
         write_point(gpu, idx, true, 0, &info); // restore
 
-        if samples.is_empty() {
-            eprintln!("{idx},{},{},{},,,,,D0>{dmax} (no lift)", volt / 1000, def, 0);
+        // trim floor/flatten-clamped flats at both ends (E stops changing)
+        while samples.len() > 2 && samples[0].1 == samples[1].1 { samples.remove(0); }
+        while samples.len() > 2 && samples[samples.len() - 1].1 == samples[samples.len() - 2].1 {
+            samples.pop();
+        }
+
+        if samples.len() < 2 {
+            eprintln!("{idx},{},{},CLAMPED (flat across ladder)", volt / 1000, def);
             continue;
         }
-        // saturation-trim: keep only samples up to sat_at
-        let used: Vec<(i64, i64)> = if sat_at > 0 {
-            samples.iter().filter(|&&(d, _)| d <= sat_at).copied().collect()
-        } else { samples.clone() };
-        // Q = GCD of nonzero effects
+        // Q = GCD of nonzero |effects|
         let mut q_gcd = 0i64;
-        for &(_, e) in &used { q_gcd = gcd(q_gcd, e); }
+        for &(_, e) in &samples { if e != 0 { q_gcd = gcd(q_gcd, e.abs()); } }
         let q = if q_gcd > 0 { q_gcd as f64 } else { 15.0 };
 
-        match stair_fit(&used, q) {
+        match stair_fit(&samples, q) {
             Some((c, lo, hi, d0)) => {
                 results.push((volt as f64 / 1000.0, c));
-                eprintln!("{idx},{},{},{},{},{:.4},{:.4},{:.4},{:.0},{}",
-                    volt / 1000, def, q, used.len(), c, lo, hi, d0, sat_at);
+                let (emin, emax) = samples.iter().fold((i64::MAX, i64::MIN),
+                    |(a, b), &(_, e)| (a.min(e), b.max(e)));
+                eprintln!("{idx},{},{},{},{},{:.4},{:.4},{:.4},{:.0},E[{emin},{emax}]",
+                    volt / 1000, def, q, samples.len(), c, lo, hi, d0);
             }
             None => {
-                eprintln!("{idx},{},{},{},{},FIT-FAILED (inconsistent staircase)", volt / 1000, def, q, used.len());
+                eprintln!("{idx},{},{},{},{},FIT-FAILED (inconsistent staircase)",
+                    volt / 1000, def, q, samples.len());
             }
         }
     }
