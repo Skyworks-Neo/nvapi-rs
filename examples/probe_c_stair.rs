@@ -18,10 +18,14 @@
 //! pins C/D0 far tighter than a one-sided positive ladder. A negative fit
 //! D0 just means the point responds immediately (crossing left of d=0).
 //!
-//! Usage: cargo run --release --example probe_c_stair -- [pt_step] [d_step] [dmax] [dmin]
+//! Usage: cargo run --release --example probe_c_stair -- [pt_step] [d_step] [dmax] [dmin] [idx_lo] [idx_hi]
 //!   pt_step: sample every Nth present point (default 16)
 //!   d_step / dmax / dmin: delta ladder dmin..=dmax step d_step
 //!   (defaults 50 600 -600)
+//!   idx_lo..idx_hi: curve-point index range, INCLUSIVE (default 0 127).
+//!   One DOMAIN per run — the 2048-point space is segmented (GPC 0-127,
+//!   XBAR 128-255, HOST 256+ ...); mixing domains into one C table is
+//!   meaningless since each domain has its own scaling.
 //! Run as admin; every point restored (mode-0 value 0) after its ladder.
 use nvapi::initialize;
 use nvapi::sys::api::{
@@ -120,6 +124,8 @@ fn main() {
     let d_step: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(50).max(10);
     let dmax: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(600);
     let dmin: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(-dmax).min(0);
+    let idx_lo: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let idx_hi: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(127).max(idx_lo);
 
     let _ = initialize();
     let mut h = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
@@ -131,10 +137,10 @@ fn main() {
     let baseline = get_status(gpu, &info);
 
     let ladder: Vec<i64> = (dmin..=dmax).step_by(d_step as usize).collect();
-    let present: Vec<usize> = (0..clk_vfp_info::POINTS)
+    let present: Vec<usize> = (idx_lo..=idx_hi.min(clk_vfp_info::POINTS - 1))
         .filter(|&i| info.point_present(0, i) == Some(true))
         .collect();
-    eprintln!("=== staircase C fit: {} pts, every {pt_step}, ladder {:?} ===",
+    eprintln!("=== staircase C fit: idx {idx_lo}..{idx_hi} ({} present), every {pt_step}, ladder {:?} ===",
         present.len(), &ladder[..ladder.len().min(6)]);
     eprintln!("idx,volt_mV,def_mHz,Q,n_used,C,C_lo,C_hi,D0,E_range");
 
