@@ -619,8 +619,43 @@ pub const CLK_VF_G_PRIOR: &[ClkVfGPrior] = &[
     ClkVfGPrior { def_mhz_lo: 2600, def_mhz_hi: 2700, c_mhz_per_delta: 0.6250, d0_delta: -11.0 },
 ];
 
+/// Domain family for the mode-1 prior: the skeleton is universal, but the
+/// 500–1830 MHz def band has family-specific values — GPC (graphics)
+/// differs from the fabric domains, and XBAR and HOST track each other
+/// point-for-point (live-verified on a 4060: XBAR idx128-255 and HOST
+/// idx259-385 agree at every shared def, including the 0.4125 dip at 1830).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub enum ClkVfDomainClass {
+    /// GPC (graphics) — the base [`CLK_VF_G_PRIOR`] table
+    #[default]
+    Graphics,
+    /// XBAR / HOST (fabric) — overrides from [`CLK_VF_FABRIC_OVERRIDES`]
+    /// where measured, base table elsewhere
+    Fabric,
+}
+
+/// Fabric-family overrides on top of the base table (XBAR+HOST agree
+/// point-for-point; bands absent here fall through to [`CLK_VF_G_PRIOR`]).
+pub const CLK_VF_FABRIC_OVERRIDES: &[ClkVfGPrior] = &[
+    // def_lo def_hi  C        D0
+    ClkVfGPrior { def_mhz_lo: 510, def_mhz_hi: 570, c_mhz_per_delta: 0.2000, d0_delta: 62.0 },
+    ClkVfGPrior { def_mhz_lo: 765, def_mhz_hi: 795, c_mhz_per_delta: 0.2250, d0_delta: 25.0 },
+    ClkVfGPrior { def_mhz_lo: 825, def_mhz_hi: 900, c_mhz_per_delta: 0.2400, d0_delta: 19.0 },
+    ClkVfGPrior { def_mhz_lo: 915, def_mhz_hi: 945, c_mhz_per_delta: 0.2500, d0_delta: 15.0 },
+    ClkVfGPrior { def_mhz_lo: 1530, def_mhz_hi: 1620, c_mhz_per_delta: 0.3500, d0_delta: -18.0 },
+    ClkVfGPrior { def_mhz_lo: 1635, def_mhz_hi: 1710, c_mhz_per_delta: 0.3975, d0_delta: -8.0 },
+    ClkVfGPrior { def_mhz_lo: 1725, def_mhz_hi: 1825, c_mhz_per_delta: 0.4250, d0_delta: -3.0 },
+    // reproducible fabric dip at 1830 (both XBAR and HOST)
+    ClkVfGPrior { def_mhz_lo: 1830, def_mhz_hi: 1840, c_mhz_per_delta: 0.4125, d0_delta: -14.0 },
+    // HOST ceiling 2250 (Q stays 15 there — no ceiling doubling on HOST)
+    ClkVfGPrior { def_mhz_lo: 2250, def_mhz_hi: 2320, c_mhz_per_delta: 0.5700, d0_delta: -1.0 },
+];
+
 /// Look up the universal mode-1 prior (C, D0) for a point with this
-/// default frequency. Pure — no driver IO.
+/// default frequency. Pure — no driver IO. Uses the GPC base table; for
+/// XBAR/HOST points prefer [`clk_vf_g_prior_class`] with
+/// [`ClkVfDomainClass::Fabric`].
 pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
     CLK_VF_G_PRIOR
         .iter()
@@ -628,25 +663,50 @@ pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
         .map(|e| (e.c_mhz_per_delta, e.d0_delta))
 }
 
+/// Class-aware prior: fabric domains (XBAR/HOST) take overrides from
+/// [`CLK_VF_FABRIC_OVERRIDES`] first, then fall through to the base table.
+pub fn clk_vf_g_prior_class(
+    def_mhz: u32,
+    class: ClkVfDomainClass,
+) -> Option<(f64, f64)> {
+    match class {
+        ClkVfDomainClass::Graphics => clk_vf_g_prior(def_mhz),
+        ClkVfDomainClass::Fabric => CLK_VF_FABRIC_OVERRIDES
+            .iter()
+            .chain(CLK_VF_G_PRIOR.iter())
+            .find(|e| def_mhz >= e.def_mhz_lo && def_mhz <= e.def_mhz_hi)
+            .map(|e| (e.c_mhz_per_delta, e.d0_delta)),
+    }
+}
+
 /// Predicted curve lift (MHz) of a mode-1 `delta` at this default
-/// frequency, per the universal prior. Negative results clamp to 0
-/// (backward moves are slope-capped anyway).
-pub fn clk_vf_effect_for_delta(def_mhz: u32, delta: i32) -> Option<f64> {
-    let (c, d0) = clk_vf_g_prior(def_mhz)?;
+/// frequency, per the prior for `class` (Graphics for GPC, Fabric for
+/// XBAR/HOST). Negative results clamp to 0 (backward moves are
+/// slope-capped anyway).
+pub fn clk_vf_effect_for_delta(
+    def_mhz: u32,
+    delta: i32,
+    class: ClkVfDomainClass,
+) -> Option<f64> {
+    let (c, d0) = clk_vf_g_prior_class(def_mhz, class)?;
     Some(((delta as f64 - d0) * c).max(0.0))
 }
 
 /// Mode-1 `delta` that lifts a point with this default frequency by
-/// `target_mhz`, per the universal prior. Positive targets only — negative
-/// single-point offsets are clamped by the backward slope cap and need
-/// range writes instead. Refine with a measured table from
+/// `target_mhz`, per the prior for `class`. Positive targets only —
+/// negative single-point offsets are clamped by the backward slope cap and
+/// need range writes instead. Refine with a measured table from
 /// [`crate::gpu::PhysicalGpu::clk_vf_calibrate_private`] when the prior is
-/// off (per-domain modulation, new silicon).
-pub fn clk_vf_delta_for_target(def_mhz: u32, target_mhz: f64) -> Option<i32> {
+/// off (new silicon, unmeasured def bands).
+pub fn clk_vf_delta_for_target(
+    def_mhz: u32,
+    target_mhz: f64,
+    class: ClkVfDomainClass,
+) -> Option<i32> {
     if !(target_mhz.is_finite() && target_mhz > 0.0) {
         return None;
     }
-    let (c, d0) = clk_vf_g_prior(def_mhz)?;
+    let (c, d0) = clk_vf_g_prior_class(def_mhz, class)?;
     if c <= 0.0 {
         return None;
     }
@@ -1400,8 +1460,9 @@ mod tests {
     use crate::sys::gpu::clock::private::NV_GPU_CLOCK_INFO_V2;
 
     /// Universal prior: def 1470 → C 0.3375 must hold (identical on all
-    /// three live datasets), gaps between bands return None, and the
-    /// delta→effect→delta prediction round-trips within one grid step.
+    /// live datasets), gaps between bands return None, fabric overrides
+    /// take precedence in their bands, and the delta→effect→delta
+    /// prediction round-trips within one grid step.
     #[test]
     fn clk_vf_prior_lookup_and_prediction() {
         let (c, _) = clk_vf_g_prior(1470).unwrap();
@@ -1410,11 +1471,20 @@ mod tests {
         assert!((c - 0.30).abs() < 1e-9);
         assert!(clk_vf_g_prior(340).is_none()); // never-observed gap band
 
-        let d = clk_vf_delta_for_target(1300, 90.0).unwrap();
-        let e = clk_vf_effect_for_delta(1300, d).unwrap();
+        // fabric overrides: def 840 is 0.24 for XBAR/HOST (base 0.2025)
+        let (g, _) = clk_vf_g_prior_class(840, ClkVfDomainClass::Graphics).unwrap();
+        let (f, _) = clk_vf_g_prior_class(840, ClkVfDomainClass::Fabric).unwrap();
+        assert!((g - 0.2025).abs() < 1e-9);
+        assert!((f - 0.2400).abs() < 1e-9);
+        // outside override bands fabric falls through to the base table
+        let (f, _) = clk_vf_g_prior_class(1470, ClkVfDomainClass::Fabric).unwrap();
+        assert!((f - 0.3375).abs() < 1e-9);
+
+        let d = clk_vf_delta_for_target(1300, 90.0, ClkVfDomainClass::Graphics).unwrap();
+        let e = clk_vf_effect_for_delta(1300, d, ClkVfDomainClass::Graphics).unwrap();
         assert!((e - 90.0).abs() <= 15.0 * 1.01, "round-trip {e}");
-        assert!(clk_vf_delta_for_target(1300, -5.0).is_none()); // no negative targets
-        assert!(clk_vf_delta_for_target(340, 90.0).is_none()); // no prior band
+        assert!(clk_vf_delta_for_target(1300, -5.0, ClkVfDomainClass::Graphics).is_none());
+        assert!(clk_vf_delta_for_target(340, 90.0, ClkVfDomainClass::Graphics).is_none());
     }
 
     /// Synthetic CMP-shaped staircase (C=0.30, D0=25, Q=15): the exact
