@@ -47,11 +47,6 @@ fn write_point(gpu: NvPhysicalGpuHandle, idx: usize, freq_mode: bool, value: u32
     unsafe { NvAPI_GPU_ClockClkVfPointsSetControl(gpu, ptr::from_ref(&*snap).cast()) };
 }
 
-fn gcd(mut a: i64, mut b: i64) -> i64 {
-    while b != 0 { let t = a % b; a = b; b = t; }
-    a
-}
-
 fn main() {
     let mut args = std::env::args().skip(1);
     let idx_lo: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -169,11 +164,24 @@ fn main() {
             continue;
         }
 
-        // grid = min positive gap between distinct levels (half-MHz units);
-        // snap E onto it so ±1 half-MHz noise cannot break the exact fit
-        let mut g = 0i64;
-        for w in levels.windows(2) { g = gcd(g, (w[1] - w[0]).abs()); }
-        let q2 = g.clamp(5, 60); // 2.5..30 MHz sanity window
+        // grid selection: classic-clock noise (±1 half-MHz) breaks a GCD
+        // (gaps mix 25/26/51 -> gcd 1); instead pick the candidate grid
+        // minimizing total snap error (candidates = 5..25 MHz)
+        let mut q2 = 25i64;
+        let mut best_err = i64::MAX;
+        for &g in &[10i64, 15, 20, 25, 30, 50] {
+            let err: i64 = samples
+                .iter()
+                .map(|&(_, e)| {
+                    let snapped = ((e as f64) / g as f64).round() as i64 * g;
+                    (e - snapped).abs()
+                })
+                .sum();
+            if err < best_err {
+                best_err = err;
+                q2 = g;
+            }
+        }
         for s in &mut samples { s.1 = ((s.1 as f64) / q2 as f64).round() as i64 * q2; }
 
         match nvapi::clk_vf_stair_fit(&samples, q2) {
