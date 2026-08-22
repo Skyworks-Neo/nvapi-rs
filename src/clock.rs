@@ -727,9 +727,11 @@ pub fn clk_vf_effect_for_delta(
 }
 
 /// Mode-1 `delta` that lifts a point with this default frequency by
-/// `target_mhz`, per the prior for `class`. Positive targets only —
-/// negative single-point offsets are clamped by the backward slope cap and
-/// need range writes instead. Refine with a measured table from
+/// `target_mhz`, per the prior for `class`. `target_mhz = 0` is valid and
+/// yields the delta that zeroes the effect (≈ D0) — the "return to stock"
+/// case. Negative targets are rejected: single-point negative offsets are
+/// clamped by the backward slope cap and need range writes instead. Refine
+/// with a measured table from
 /// [`crate::gpu::PhysicalGpu::clk_vf_calibrate_private`] when the prior is
 /// off (new silicon, unmeasured def bands).
 pub fn clk_vf_delta_for_target(
@@ -737,7 +739,7 @@ pub fn clk_vf_delta_for_target(
     target_mhz: f64,
     class: ClkVfDomainClass,
 ) -> Option<i32> {
-    if !(target_mhz.is_finite() && target_mhz > 0.0) {
+    if !(target_mhz.is_finite() && target_mhz >= 0.0) {
         return None;
     }
     let (c, d0) = clk_vf_g_prior_class(def_mhz, class)?;
@@ -1522,6 +1524,8 @@ mod tests {
         let e = clk_vf_effect_for_delta(1300, d, ClkVfDomainClass::Graphics).unwrap();
         assert!((e - 90.0).abs() <= 15.0 * 1.01, "round-trip {e}");
         assert!(clk_vf_delta_for_target(1300, -5.0, ClkVfDomainClass::Graphics).is_none());
+        // target 0 = "return to stock": valid, yields D0
+        assert!(clk_vf_delta_for_target(1300, 0.0, ClkVfDomainClass::Graphics).is_some());
         // fallback-rule prediction also yields a delta now
         assert!(clk_vf_delta_for_target(340, 90.0, ClkVfDomainClass::Graphics).is_some());
     }
