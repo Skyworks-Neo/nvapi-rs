@@ -97,9 +97,19 @@ fn main() {
     println!("idx={idx} type={typ} V={}mV def={}MHz (Pascal div {div})",
         volt_uv / 1000, def);
 
-    // live GPC clock via public GetAllClocks V2 (MEASURE NotSupported here)
+    // live GPC clock, two-level public fallback: GetAllClocks V2 Gpc →
+    // (Pascal) classic GetAllClockFrequencies Graphics ("Clocks: Graphics"
+    // in get-status — Pascal's V2 map has no Gpc key, only Gpc2/fabric)
     let live = |pgpu: &nvapi::PhysicalGpu| -> Option<f64> {
-        pgpu.all_clocks().ok()?.get(&nvapi::ClockDomainId::Gpc).map(|khz| khz.0 as f64 / 1000.0)
+        if let Some(map) = pgpu.all_clocks().ok() {
+            if let Some(khz) = map.get(&nvapi::ClockDomainId::Gpc) {
+                return Some(khz.0 as f64 / 1000.0);
+            }
+        }
+        pgpu.clock_frequencies(nvapi::sys::gpu::clock::ClockFrequencyType::Current)
+            .ok()?
+            .get(&nvapi::ClockDomain::Graphics)
+            .map(|khz| khz.0 as f64 / 1000.0)
     };
 
     // 1. lock the operating voltage at this point (public PerfClientLimits)
