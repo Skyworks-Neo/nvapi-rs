@@ -568,9 +568,16 @@ pub struct ClkVfGPrior {
     pub d0_delta: f64,
 }
 
-/// Universal GPC prior g(def), merged from the CMP-170HX/4060 GPC datasets
-/// (they agree at every shared def). Below ~900 MHz XBAR runs ~+20% hot;
-/// validate with [`crate::gpu::PhysicalGpu::clk_vf_calibrate_private`].
+/// Universal GPC prior g(def), merged from the CMP-170HX/4060/TU104 GPC
+/// datasets (~20 def bands match exactly across Turing/Ampere/Ada,
+/// including the 0.275 dip at 1200). C is generation-stable; **D0 is
+/// generation-specific** — Turing's stock curve sits ~45 MHz below the
+/// delta-0 baseline (D0 ≈ −75..−400), so treat prior D0 as an
+/// Ada/Ampere approximation and refine per GPU. Two ±1-grid generation
+/// deviations exist (def 1755-1830: Ada 0.435 vs Turing 0.44; def 1845:
+/// 0.45 vs 0.46). Below ~900 MHz XBAR/HOST run hot — see
+/// [`CLK_VF_FABRIC_OVERRIDES`]; validate with
+/// [`crate::gpu::PhysicalGpu::clk_vf_calibrate_private`].
 pub const CLK_VF_G_PRIOR: &[ClkVfGPrior] = &[
     // def_lo def_hi  C        D0
     ClkVfGPrior { def_mhz_lo: 200, def_mhz_hi: 330, c_mhz_per_delta: 0.0800, d0_delta: -8.0 },
@@ -578,7 +585,9 @@ pub const CLK_VF_G_PRIOR: &[ClkVfGPrior] = &[
     ClkVfGPrior { def_mhz_lo: 495, def_mhz_hi: 510, c_mhz_per_delta: 0.1250, d0_delta: 0.0 },
     ClkVfGPrior { def_mhz_lo: 540, def_mhz_hi: 570, c_mhz_per_delta: 0.1600, d0_delta: 20.0 },
     ClkVfGPrior { def_mhz_lo: 600, def_mhz_hi: 690, c_mhz_per_delta: 0.1550, d0_delta: -17.0 },
-    ClkVfGPrior { def_mhz_lo: 720, def_mhz_hi: 750, c_mhz_per_delta: 0.1750, d0_delta: 0.0 },
+    ClkVfGPrior { def_mhz_lo: 720, def_mhz_hi: 745, c_mhz_per_delta: 0.1750, d0_delta: 0.0 },
+    // TU104-observed band
+    ClkVfGPrior { def_mhz_lo: 750, def_mhz_hi: 765, c_mhz_per_delta: 0.1875, d0_delta: -240.0 },
     ClkVfGPrior { def_mhz_lo: 765, def_mhz_hi: 870, c_mhz_per_delta: 0.2025, d0_delta: -9.0 },
     ClkVfGPrior { def_mhz_lo: 915, def_mhz_hi: 915, c_mhz_per_delta: 0.2500, d0_delta: 15.0 },
     ClkVfGPrior { def_mhz_lo: 930, def_mhz_hi: 945, c_mhz_per_delta: 0.2575, d0_delta: 21.0 },
