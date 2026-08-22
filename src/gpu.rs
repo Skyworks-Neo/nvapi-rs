@@ -2157,6 +2157,91 @@ impl PhysicalGpu {
         Ok(())
     }
 
+    /// Like [`set_vfp_range_private`] but writes a DIFFERENT raw mode-1
+    /// value per point (one RMW cycle, per-point patch). `deltas` must
+    /// contain exactly `end - start + 1` entries in index order. Used by
+    /// the CLI `--raw-converted` path, which translates a single MHz
+    /// target through each point's own g(def) prior (C/D0 vary with def).
+    pub fn set_vfp_range_per_point_private(
+        &self,
+        bank: usize,
+        start: usize,
+        end: usize,
+        deltas: &[i16],
+    ) -> crate::Result<()> {
+        trace!("gpu.set_vfp_range_per_point_private(bank={bank}, {start}..={end}, {} pts)", deltas.len());
+        use crate::sys::api::{
+            NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
+            NvAPI_GPU_ClockClkVfPointsSetControl,
+        };
+        use clock::private::{
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
+        };
+
+        if bank > 1 || start > end || end >= clock::private::clk_vfp_control::POINTS {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        if deltas.len() != end - start + 1 {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+
+        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from)?;
+
+        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
+            Box::new(unsafe { std::mem::zeroed() });
+        snapshot.version = sys::api::NvVersion::with_version(
+            clock::private::clk_vfp_control::MAGIC,
+        );
+        snapshot.seed_masks_from_info(&info);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        let user_type = if bank == 0 { 8 } else { 6 };
+        for (offset, idx) in (start..=end).enumerate() {
+            snapshot.set_mask_bit(bank, idx)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            snapshot.set_record_type(bank, idx, user_type)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            snapshot.set_delta(bank, idx, deltas[offset])
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        }
+
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsSetControl(self.0, ptr::from_ref(&*snapshot).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // verify the first point took mode=1
+        let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
+            Box::new(unsafe { std::mem::zeroed() });
+        verify.version = sys::api::NvVersion::with_version(
+            clock::private::clk_vfp_control::MAGIC,
+        );
+        verify.seed_masks_from_info(&info);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+            .map_err(crate::Error::from)?;
+        if verify.mode(bank, start).unwrap_or(0) != 1 {
+            return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl,
+                Status::NotSupported,
+            )));
+        }
+        Ok(())
+    }
+
     #[allow(unused_assignments)]
     pub fn power_usage<C: IntoIterator<Item = crate::clock::PowerTopologyChannelId>>(
         &self,

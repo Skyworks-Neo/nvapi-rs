@@ -782,6 +782,30 @@ impl Gpu {
         }
     }
 
+    /// Like [`set_vfp_range_private`] but writes a per-point raw mode-1
+    /// value (one RMW cycle). `deltas.len()` must equal `end - start + 1`.
+    /// `Ok(None)` where the driver doesn't expose the private interface.
+    pub fn set_vfp_range_per_point_private(
+        &self,
+        bank: usize,
+        start: usize,
+        end: usize,
+        deltas: &[i16],
+    ) -> nvapi::Result<Option<()>> {
+        match self.gpu.set_vfp_range_per_point_private(bank, start, end, deltas) {
+            Ok(()) => Ok(Some(())),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Batch physical clocks for many domains via the V3 MEASURE_FREQ
     /// (magic 0x30038) — one RM round-trip per sample instead of one per
     /// domain. Per-domain V1/V2 fallback when the driver rejects the batch
