@@ -732,7 +732,9 @@ impl Gpu {
     /// SetControl (ID 0xFEC00D04). DANGEROUS: snapshots the full control
     /// block, patches one record, SETs, readbacks, restores on mismatch.
     /// `bank` 0 = pstate-class, 1 = V/F curve points; `idx` 0..2048.
-    /// `freq_mode` = mode 0 (kHz offset) vs mode 1 (reverse-volt lookup). Returns the
+    /// `freq_mode` = mode 0 (kHz freq OFFSET, max ~990 MHz) vs mode 1
+    /// (reverse-volt lookup: delta → voltage shift → default freq lookup).
+    /// Both modes produce identical curves after RM interpolation. Returns the
     /// retained value, or `Ok(None)` where the family is absent.
     pub fn set_vfp_point_private(
         &self,
