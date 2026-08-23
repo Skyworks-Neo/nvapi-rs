@@ -2765,6 +2765,28 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_ClientGetLastOcScannerResults, st)
     }
 
+    /// Force the GPU into a given P-State (NDA 0x025BFB10, private).
+    /// `setType` semantics from nvapioc: 2 = force until released (the
+    /// working value used by nvapioc's `-pstate` path). Pass 0 to release.
+    /// Sibling SetForcePstateEx 0xE7B1198D is not wrapped.
+    pub fn set_force_pstate(&self, pstate: u32, set_type: u32) -> crate::NvapiResult<()> {
+        trace!("gpu.set_force_pstate(pstate={}, set_type={})", pstate, set_type);
+        let st = unsafe {
+            sys::api::private::NvAPI_GPU_SetForcePstate(self.0, pstate, set_type)
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_SetForcePstate, st)
+    }
+
+    /// Restart the display driver (NDA 0xB4B26B65). The classic "apply OC"
+    /// trigger used by legacy OC CLIs after writing clock/voltage settings.
+    /// No arguments. Modern drivers apply most settings without a restart,
+    /// so this is mostly vestigial.
+    pub fn restart_display_driver(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.restart_display_driver()");
+        let st = unsafe { sys::api::NvAPI_RestartDisplayDriver() };
+        crate::status_result(sys::Api::NvAPI_RestartDisplayDriver, st)
+    }
+
     /// GC6 / RTD3 force-wake control (NDA 0xD387D414). Commands the RM driver
     /// to query (cmd=0), force-sleep (cmd=1), or force-wake (cmd=2) the dGPU's
     /// GC6 power state. Returns the driver-decoded `result` state

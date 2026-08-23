@@ -1157,6 +1157,17 @@ impl Gpu {
     pub fn oem_oc_scanner_status(&self) -> nvapi::Result<()> {
         self.gpu.oem_oc_scanner_status().map_err(Into::into)
     }
+
+    /// Force the GPU into a given P-State. `set_type` 2 = force until
+    /// released (nvapioc convention), 0 = release.
+    pub fn set_force_pstate(&self, pstate: u32, set_type: u32) -> nvapi::Result<()> {
+        self.gpu.set_force_pstate(pstate, set_type).map_err(Into::into)
+    }
+
+    /// Restart the display driver (legacy "apply OC" trigger).
+    pub fn restart_display_driver(&self) -> nvapi::Result<()> {
+        self.gpu.restart_display_driver().map_err(Into::into)
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
