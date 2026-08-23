@@ -293,31 +293,31 @@ pub mod private {
         }
     }
 
-    /// V1 GetStatus entry (28-byte stride, live-verified on Ada 4060L).
-    /// Layout: `{clock_type, region, freq_kHz, voltage_uV, padding[3]}`.
-    /// Discovered by A/B vs V3 — V1 entry raw dwords:
-    ///   [0]=clock_type(0), [1]=region, [2]=0x33450(=210000=freq_kHz),
-    ///   [3]=0x6DDD0(=450000=voltage_uV). V3 entry[0] = (freq=210000kHz,
-    ///   volt=450000uV) confirms V1 freq @+8, voltage @+12 (NOT the
-    ///   `{clock_type, point:{freq,volt}, unknown}` we previously assumed).
+    /// V1 GetStatus entry (28-byte stride). IDA-verified against the
+    /// R610.74 impl converter (sub_180200190, V3-internal → V1/V2-user
+    /// copy-back): `lea rdx,[user+0x48]; mov [rdx-4],clock_type;
+    /// mov [rdx],freq_kHz; mov [rdx+4],voltage_uV` — i.e. entries sit at
+    /// +0x44 (68) with 28-byte stride and field map
+    /// `{clock_type@+0, freq_kHz@+4, voltage_uV@+8, padding[16]}`.
+    /// 68 + 28*255 = 7208 = 0x1C28 exactly.
     ///
-    /// `region` (dword[1]): 0 = core V/F curve, 1 = memory V/F curve
-    /// (live-verified: idx 0-125 region=0/core, idx 126-132 region=1/mem
-    /// with freq=405000/810000/6001000/7001000/8001000 = memory pstate
-    /// frequency tiers; 600000uV=600mV is a structural marker not real rail
-    /// voltage). V3 expresses the same split via `clock_type` field
-    /// (0=core,1=mem) but indexes the mem block one slot earlier, so V1
-    /// vs V3 per-index align with a +1 shift at the core→mem boundary.
-    /// V1 carries no default/overclocked point pair (tail padding zero)
-    /// — current-only, unlike V3's 348-byte entry.
+    /// The earlier live A/B note that placed a `region` dword at +4 with
+    /// freq@+8/volt@+12 was anchored 4 bytes early (raw dump started at
+    /// +64, not +68): its dword[1] "region 0/1" pattern was actually
+    /// `clock_type` (0 = core V/F curve, 1 = memory — same semantics as
+    /// the V3 `clock_type`), dword[2] was freq, dword[3] was voltage.
+    /// The converter sources freq/volt from the V3 entry's current pair
+    /// (the +156/+160 slot, which the driver fills with a copy of the
+    /// current freq/volt) — V1 is current-only, no default/overclocked
+    /// pair. Only entries with clock_type < 2 convert; any masked entry
+    /// with type >= 2 makes the whole V1/V2 call return -9.
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1 {
+            /// 0 = core V/F curve, 1 = memory (mirrors V3 clock_type).
             pub clock_type: u32,
-            /// 0=core V/F region, 1=memory V/F region (mirrors V3 clock_type).
-            pub region: u32,
             pub freq_kHz: u32,
             pub voltage_uV: u32,
-            pub unknown: Padding<[u32; 3]>,
+            pub unknown: Padding<[u32; 4]>,
         }
     }
 
@@ -351,6 +351,14 @@ pub mod private {
         }
     }
 
+    // IDA R610.74 (both System32 nvamsi and the impl SKU): the GetStatus
+    // handler accepts EXACTLY {0x11C28, 0x21C28, 0x35B0C} and the
+    // GetControl/SetControl handlers accept {0x12420, 0x12421, 0x22420,
+    // 0x22421} — the legacy 0x10434/1076B magics that third-party tools
+    // (aiup/LACT, pre-R610 drivers) use are REJECTED with -9 here, and
+    // there is NO GPU-arch dispatch inside these handlers: the 0x1C28
+    // status and 0x2420 control layouts are driver-version-fixed and
+    // marshaled verbatim to RM (escape 0x07000049, cmds 0x2080902A/C/D).
     nvversion! { NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1(1) = 0x1c28 }
     nvversion! { NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1(2) = 0x1c28 }
     nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V3(3) = 0x15b0c }

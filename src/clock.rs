@@ -972,8 +972,8 @@ impl RawConversion for power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        // V1 layout (live-verified Ada 4060L): {clock_type, freq_kHz, reserved,
-        // voltage_uV, ...}. freq_kHz @+4, voltage_uV @+12 (reserved dword @+8).
+        // V1 layout (IDA-verified R610.74 sub_180200190):
+        // {clock_type@+0, freq_kHz@+4, voltage_uV@+8} — current-only.
         Ok(VfPoint {
             frequency: self.freq_kHz,
             voltage: Microvolts(self.voltage_uV),
@@ -1059,8 +1059,8 @@ impl VfpCurve {
     /// V3 primary with V1 fallback. The medium `vfp_curve` inlines the same
     /// logic (V3 GET → on failure V1 GET with ver2 magic → `from_raw_v1`);
     /// this helper exists for callers that already hold both raw buffers.
-    /// V1 entries are 28-byte {clock_type, region, freq_kHz@+8,
-    /// voltage_uV@+12} — current-only, region-tagged (0=core/1=memory).
+    /// V1 entries are 28-byte {clock_type@+0, freq_kHz@+4, voltage_uV@+8}
+    /// — current-only; clock_type doubles as the region tag (0=core/1=mem).
     pub fn from_raw_versioned(
         v3: Option<&power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS>,
         v1: Option<&power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>,
