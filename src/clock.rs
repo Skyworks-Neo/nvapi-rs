@@ -698,7 +698,10 @@ pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
 }
 
 /// Class-aware prior: fabric domains (XBAR/HOST) take overrides from
-/// [`CLK_VF_FABRIC_OVERRIDES`] first, then fall through to the base table.
+/// [`CLK_VF_FABRIC_OVERRIDES`] first, then the base table, then the same
+/// piecewise first-order rule as Graphics (fabric C ≈ def/4000 too —
+/// verified: 2285 MHz fabric → 0.570 vs rule 0.571, near-exact at high
+/// def; the low band runs hot but that region is override-covered).
 pub fn clk_vf_g_prior_class(
     def_mhz: u32,
     class: ClkVfDomainClass,
@@ -709,7 +712,8 @@ pub fn clk_vf_g_prior_class(
             .iter()
             .chain(CLK_VF_G_PRIOR.iter())
             .find(|e| def_mhz >= e.def_mhz_lo && def_mhz <= e.def_mhz_hi)
-            .map(|e| (e.c_mhz_per_delta, e.d0_delta)),
+            .map(|e| (e.c_mhz_per_delta, e.d0_delta))
+            .or_else(|| clk_vf_g_prior(def_mhz)),
     }
 }
 
@@ -1519,6 +1523,11 @@ mod tests {
         // outside override bands fabric falls through to the base table
         let (f, _) = clk_vf_g_prior_class(1470, ClkVfDomainClass::Fabric).unwrap();
         assert!((f - 0.3375).abs() < 1e-9);
+        // outside BOTH tables (e.g. 50-series fabric >2700) fabric takes the
+        // same piecewise rule as Graphics — no None asymmetry
+        let (f, _) = clk_vf_g_prior_class(2800, ClkVfDomainClass::Fabric).unwrap();
+        assert!((f - (2800.0 - 72.0) / 4000.0).abs() < 1e-9);
+        assert!(clk_vf_g_prior_class(100, ClkVfDomainClass::Fabric).is_none());
 
         let d = clk_vf_delta_for_target(1300, 90.0, ClkVfDomainClass::Graphics).unwrap();
         let e = clk_vf_effect_for_delta(1300, d, ClkVfDomainClass::Graphics).unwrap();
