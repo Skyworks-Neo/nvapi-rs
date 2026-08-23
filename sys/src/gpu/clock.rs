@@ -581,17 +581,29 @@ pub mod private {
     nvversion! { @=NV_GPU_OC_SCANNER_CONTROL NV_GPU_OC_SCANNER_CONTROL_V1(1) = 68 }
 
     nvstruct! {
-        /// OC Scanner status-update registration (RE'd from MSIOCScanner;
-        /// NDA). 152 bytes, version magic 0x10098 (v1). The callback
-        /// function pointer sits at byte offset 0x50; its exact signature
-        /// is not yet recovered (the host passes a plain fn pointer) — typed
-        /// here as a no-arg placeholder, cast at the call site.
+        /// OC Scanner status-update registration (RE'd from nvapi64_impl.dll
+        /// handler 0x180072470; NDA). 152 bytes, version magic 0x10098 (v1).
+        /// Layout (IDA-verified): +0x30 = cookie (opaque u64), +0x50 =
+        /// registration-validity field (NULL-checked; zeroed on RPC failure =
+        /// unregister semantics), +0x78 = the callback fn pointer (driver
+        /// calls this on status notifications). The callback receives a
+        /// status struct: eventType(0/1)@+24, status byte@+28, flags@+32,
+        /// and eventType 1 carries a ~9KB per-point payload starting at
+        /// +0x6C.
         pub struct NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1 {
             pub version: NvVersion,
-            pub pad0: Padding<[u8; 76]>,
-            /// Status callback (offset 0x50). Signature unknown; see doc above.
+            pub pad0: Padding<[u8; 44]>,
+            /// Cookie (offset 0x30). Opaque u64 passed through to the callback.
+            pub cookie: u64,
+            /// Registration-validity field (offset 0x50). NULL-checked by
+            /// the driver; zeroed on RPC failure (unregister semantics).
+            pub validity: u32,
+            pub pad1: Padding<[u8; 36]>,
+            /// Status callback fn pointer (offset 0x78). The driver calls
+            /// this on status notifications. Exact signature not yet typed —
+            /// placeholder no-arg; cast at the call site.
             pub callback: Option<unsafe extern "system" fn()>,
-            pub pad1: Padding<[u8; 64]>,
+            pub pad2: Padding<[u8; 48]>,
         }
     }
 
