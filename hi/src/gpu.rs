@@ -1169,6 +1169,12 @@ impl Gpu {
     pub fn restart_display_driver(&self) -> nvapi::Result<()> {
         self.gpu.restart_display_driver().map_err(Into::into)
     }
+
+    /// Enable/disable dynamic pstate switching. enable=0 is the release
+    /// for a force-locked pstate (SetForcePstate has no unlock of its own).
+    pub fn enable_dynamic_pstates(&self, enable: u32) -> nvapi::Result<()> {
+        self.gpu.enable_dynamic_pstates(enable).map_err(Into::into)
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

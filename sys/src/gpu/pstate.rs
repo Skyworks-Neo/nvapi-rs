@@ -392,10 +392,13 @@ nvapi! {
 }
 
 nvapi! {
-    pub type GPU_EnableDynamicPstatesFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle) -> NvAPI_Status;
+    pub type GPU_EnableDynamicPstatesFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, enable: u32) -> NvAPI_Status;
 
-    /// Enable dynamic pstate switching.
-    /// Kepler-era API; may return NotSupported on Pascal+.
+    /// Enable/disable dynamic pstate switching (NDA 0xFA579A0F). 2-arg
+    /// signature `(h, enable)` confirmed by nvapioc.cpp:
+    /// `NvAPI_GPU_EnableDynamicPstates(h, enabled ? 1 : 0)`. enable=0 is
+    /// the likely RELEASE for a force-locked pstate (SetForcePstate has no
+    /// unlock path of its own). May return NotSupported on some SKUs.
     pub unsafe fn NvAPI_GPU_EnableDynamicPstates;
 }
 

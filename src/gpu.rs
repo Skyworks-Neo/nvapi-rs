@@ -891,9 +891,9 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_SetPstates20(self.0, &info)) }
     }
 
-    pub fn enable_dynamic_pstates(&self) -> crate::NvapiResult<()> {
-        trace!("gpu.enable_dynamic_pstates()");
-        unsafe { nvcall!(NvAPI_GPU_EnableDynamicPstates(self.0)) }
+    pub fn enable_dynamic_pstates(&self, enable: u32) -> crate::NvapiResult<()> {
+        trace!("gpu.enable_dynamic_pstates(enable={})", enable);
+        unsafe { nvcall!(NvAPI_GPU_EnableDynamicPstates(self.0, enable)) }
     }
 
     pub fn dynamic_pstates_info(&self) -> crate::Result<Utilizations> {
@@ -2766,11 +2766,21 @@ impl PhysicalGpu {
     }
 
     /// Force the GPU into a given P-State (NDA 0x025BFB10, private).
+    ///
     /// `set_type` live-tested on 4060L: 0/1/2 ALL force-lock the pstate —
-    /// NONE of them release. This API only forces, it cannot unlock.
-    /// nvapioc uses 2. To release a forced pstate, use a different API
-    /// (SetPstateClientLimits 0xFDFC7D49 or EnableDynamicPstates — both
-    /// already wrapped). Sibling SetForcePstateEx 0xE7B1198D is not wrapped.
+    /// NONE release. IDA (handler sub_1801D60C0) confirms why: set_type is
+    /// validated to {0,1,2} (else -5) and encoded as a 2-bit mode field at RM
+    /// buffer offset 56, but all three values take the SAME RM escape
+    /// (0x7000056) with no branching — the mode distinction is internal to
+    /// the kernel RM and not observable here. No release path exists in this
+    /// handler.
+    ///
+    /// `pstate`: 0..15 accepted (bitmask = 1<<pstate); **16 is special =
+    /// all pstates** (bitmask 0); ≥17 → -5. nvapioc uses set_type=2.
+    ///
+    /// To RELEASE a forced pstate use a different API: `EnableDynamicPstates`
+    /// (0xFA579A0F, enable=0) is the likely unlock — SetForcePstateEx
+    /// (0xE7B1198D) is also force-only (just +1 flag bit vs base, no min/max).
     pub fn set_force_pstate(&self, pstate: u32, set_type: u32) -> crate::NvapiResult<()> {
         trace!("gpu.set_force_pstate(pstate={}, set_type={})", pstate, set_type);
         let st = unsafe {
