@@ -449,10 +449,11 @@ pub mod private {
         /// Undocumented (NDA, ID 0x025BFB10). Force the GPU into a given
         /// P-State. 2-arg-plus-setType signature from the nvapioc tool
         /// (reverse/nvapioc-master/Source/main.cpp): it calls
-        /// `NvAPI_GPU_SetPstate(handle, pState, 2)` — setType 2 observed as
-        /// the working value (likely "force until released", with 0/1
-        /// soft/hard variants). Thermspy also resolves this ID. There is a
-        /// sibling SetForcePstateEx 0xE7B1198D (unwrapped).
+        /// `NvAPI_GPU_SetPstate(handle, pState, 2)`. Live-tested on 4060L:
+        /// set_type 0/1/2 ALL force-lock the pstate — NONE release. This
+        /// API only forces; to unlock use SetPstateClientLimits (0xFDFC7D49)
+        /// or EnableDynamicPstates (both wrapped). Thermspy also resolves
+        /// this ID. Sibling SetForcePstateEx 0xE7B1198D is unwrapped.
         pub unsafe fn NvAPI_GPU_SetForcePstate;
     }
 }

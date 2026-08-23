@@ -2766,9 +2766,11 @@ impl PhysicalGpu {
     }
 
     /// Force the GPU into a given P-State (NDA 0x025BFB10, private).
-    /// `setType` semantics from nvapioc: 2 = force until released (the
-    /// working value used by nvapioc's `-pstate` path). Pass 0 to release.
-    /// Sibling SetForcePstateEx 0xE7B1198D is not wrapped.
+    /// `set_type` live-tested on 4060L: 0/1/2 ALL force-lock the pstate —
+    /// NONE of them release. This API only forces, it cannot unlock.
+    /// nvapioc uses 2. To release a forced pstate, use a different API
+    /// (SetPstateClientLimits 0xFDFC7D49 or EnableDynamicPstates — both
+    /// already wrapped). Sibling SetForcePstateEx 0xE7B1198D is not wrapped.
     pub fn set_force_pstate(&self, pstate: u32, set_type: u32) -> crate::NvapiResult<()> {
         trace!("gpu.set_force_pstate(pstate={}, set_type={})", pstate, set_type);
         let st = unsafe {

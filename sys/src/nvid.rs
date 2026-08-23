@@ -328,6 +328,15 @@ NvAPI_GPU_ClientPowerTopologyGetStatus = 0xedcf624e,
 NvAPI_GPU_ClientPowerPoliciesGetInfo = 0x34206d86,
 NvAPI_GPU_ClientPowerPoliciesGetStatus = 0x70916171,
 NvAPI_GPU_ClientPowerPoliciesSetStatus = 0xad95f5ed,
+/// ClientPowerModes GetInfo (NVIDIA App's power-mode switcher — the UI's
+/// Balanced/Max toggle). RE'd from NVIDIA App nvxdapix.dll; struct magic
+/// 0x1150C. Live-RESOLVED on Windows R610.74.
+NvAPI_GPU_ClientPowerModesGetInfo = 0xf21c2d56,
+/// ClientPowerModes GetControl; struct magic 0x1100C.
+NvAPI_GPU_ClientPowerModesGetControl = 0x180a9468,
+/// ClientPowerModes SetControl; struct magic 0x1100C;
+/// NV_GPU_CLIENT_POWER_MODE_ID: BALANCED / MAX.
+NvAPI_GPU_ClientPowerModesSetControl = 0x3cc8c552,
 NvAPI_GPU_WorkstationFeatureSetup = 0x6c1f3fe4,
 NvAPI_GPU_WorkstationFeatureQuery = 0x004537df,
 NvAPI_GPU_QueryWorkstationFeatureSupport = 0x80b1abb9,
@@ -580,6 +589,10 @@ NvAPI_DRS_DeleteProfile = 0x17093206,
 NvAPI_DRS_SetCurrentGlobalProfile = 0x1c89c5df,
 NvAPI_DRS_GetCurrentGlobalProfile = 0x617bff9f,
 NvAPI_DRS_GetProfileInfo = 0x61cd6fd6,
+/// DRS GetProfileInfo-family variant (NVIDIA App nvxdapix DrsHelper::
+/// GetDrsProfile; 3-arg, 4096B struct, name @+2048). NULL on R610.74
+/// desktop nvapi64 — likely resolved only inside the App's own DLL host.
+NvAPI_DRS_GetProfileInfoEx = 0x7e4a9b0b,
 NvAPI_DRS_SetProfileInfo = 0x16abd3a9,
 NvAPI_DRS_FindProfileByName = 0x7e4a9a0b,
 NvAPI_DRS_EnumProfiles = 0xbc371ee0,

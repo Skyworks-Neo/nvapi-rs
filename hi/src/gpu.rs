@@ -1158,8 +1158,9 @@ impl Gpu {
         self.gpu.oem_oc_scanner_status().map_err(Into::into)
     }
 
-    /// Force the GPU into a given P-State. `set_type` 2 = force until
-    /// released (nvapioc convention), 0 = release.
+    /// Force the GPU into a given P-State. `set_type` 0/1/2 all force-lock
+    /// (live-tested 4060L); none release. nvapioc uses 2. To unlock, use
+    /// SetPstateClientLimits or EnableDynamicPstates instead.
     pub fn set_force_pstate(&self, pstate: u32, set_type: u32) -> nvapi::Result<()> {
         self.gpu.set_force_pstate(pstate, set_type).map_err(Into::into)
     }
