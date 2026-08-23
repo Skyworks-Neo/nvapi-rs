@@ -375,10 +375,13 @@ nvapi! {
 }
 
 nvapi! {
-    pub type GPU_EnableOverclockedPstatesFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle) -> NvAPI_Status;
+    pub type GPU_EnableOverclockedPstatesFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, enable: u32) -> NvAPI_Status;
 
-    /// Enable overclocked pstates (allow P0 to exceed factory clocks).
-    /// Kepler-era API; modern GPUs use VFP lock instead.
+    /// Enable/disable overclocked pstates (allow P0 to exceed factory clocks).
+    /// 2-arg signature confirmed by RE of HYDRA 2.2B PRO (nvapioc.cpp):
+    /// `movzx edx, dl` before the indirect call + log string
+    /// "NvAPI_GPU_EnableOverclockedPstates(h, enabled ? 1 : 0)".
+    /// On 50-series this is the extended memory-OC-range unlock (call before SetPstates20).
     pub unsafe fn NvAPI_GPU_EnableOverclockedPstates;
 }
 

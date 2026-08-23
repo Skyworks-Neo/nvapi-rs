@@ -292,11 +292,31 @@ pub mod private {
         }
     }
 
+    /// V1 GetStatus entry (28-byte stride, live-verified on Ada 4060L).
+    /// Layout: `{clock_type, region, freq_kHz, voltage_uV, padding[3]}`.
+    /// Discovered by A/B vs V3 — V1 entry raw dwords:
+    ///   [0]=clock_type(0), [1]=region, [2]=0x33450(=210000=freq_kHz),
+    ///   [3]=0x6DDD0(=450000=voltage_uV). V3 entry[0] = (freq=210000kHz,
+    ///   volt=450000uV) confirms V1 freq @+8, voltage @+12 (NOT the
+    ///   `{clock_type, point:{freq,volt}, unknown}` we previously assumed).
+    ///
+    /// `region` (dword[1]): 0 = core V/F curve, 1 = memory V/F curve
+    /// (live-verified: idx 0-125 region=0/core, idx 126-132 region=1/mem
+    /// with freq=405000/810000/6001000/7001000/8001000 = memory pstate
+    /// frequency tiers; 600000uV=600mV is a structural marker not real rail
+    /// voltage). V3 expresses the same split via `clock_type` field
+    /// (0=core,1=mem) but indexes the mem block one slot earlier, so V1
+    /// vs V3 per-index align with a +1 shift at the core→mem boundary.
+    /// V1 carries no default/overclocked point pair (tail padding zero)
+    /// — current-only, unlike V3's 348-byte entry.
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1 {
             pub clock_type: u32,
-            pub point: NV_GPU_CLOCK_CLIENT_CLK_VF_POINT,
-            pub unknown: Padding<[u32; 4]>,
+            /// 0=core V/F region, 1=memory V/F region (mirrors V3 clock_type).
+            pub region: u32,
+            pub freq_kHz: u32,
+            pub voltage_uV: u32,
+            pub unknown: Padding<[u32; 3]>,
         }
     }
 

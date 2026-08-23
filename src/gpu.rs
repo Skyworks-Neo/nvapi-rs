@@ -831,9 +831,25 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_SetPstates20(self.0, &info)) }
     }
 
-    pub fn enable_overclocked_pstates(&self) -> crate::NvapiResult<()> {
-        trace!("gpu.enable_overclocked_pstates()");
-        unsafe { nvcall!(NvAPI_GPU_EnableOverclockedPstates(self.0)) }
+    /// `enable`: 1 unlocks overclocked-pstate range (50-series: extended memory OC
+    /// range — call before `set_pstates20` to exceed the stock VBIOS clamp), 0 restores.
+    pub fn enable_overclocked_pstates(&self, enable: bool) -> crate::NvapiResult<()> {
+        trace!("gpu.enable_overclocked_pstates({enable})");
+        unsafe { nvcall!(NvAPI_GPU_EnableOverclockedPstates(self.0, enable as u32)) }
+    }
+
+    /// Set the global over-voltage offset via the PSTATES20 V2 `voltages[]`
+    /// OV array (numVoltages@+7316 / voltages[0].voltDelta_uV@+7332 on the
+    /// 7416B V2 struct) — the path HYDRA 2.2B PRO drives as its
+    /// "NvApiSetOverVoltageOffset" export. Distinct from per-pstate
+    /// baseVoltage deltas: a single core-domain OV offset on a zeroed struct.
+    pub fn set_overvolt(&self, delta: crate::types::MicrovoltsDelta) -> crate::NvapiResult<()> {
+        trace!("gpu.set_overvolt({delta:?})");
+        let mut info = pstate::NV_GPU_PERF_PSTATES20_INFO::default();
+        info.numVoltages = 1;
+        info.voltages[0].domainId = pstate::VoltageInfoDomain::Core as i32;
+        info.voltages[0].voltDelta_uV.value = delta.0;
+        unsafe { nvcall!(NvAPI_GPU_SetPstates20(self.0, &info)) }
     }
 
     pub fn enable_dynamic_pstates(&self) -> crate::NvapiResult<()> {

@@ -972,12 +972,12 @@ impl RawConversion for power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        let power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1 {
-            clock_type: _,
-            point,
-            unknown: _,
-        } = *self;
-        point.convert_raw().map_err(Into::into)
+        // V1 layout (live-verified Ada 4060L): {clock_type, freq_kHz, reserved,
+        // voltage_uV, ...}. freq_kHz @+4, voltage_uV @+12 (reserved dword @+8).
+        Ok(VfPoint {
+            frequency: self.freq_kHz,
+            voltage: Microvolts(self.voltage_uV),
+        })
     }
 }
 
