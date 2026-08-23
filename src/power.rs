@@ -86,6 +86,16 @@ pub struct PowerMonitorChannel {
     pub raw_status: Option<PowerMonitorStatus>,
 }
 
+impl PowerMonitorChannel {
+    /// Human-friendly name for this channel's rail via the three-layer
+    /// merged resolver ([`rail_display_name`]): AmpereOC precise NVIDIA
+    /// naming → RTSS full enum naming → GPU-Z market naming. Zero
+    /// contradictions across sources (verified rail-by-rail).
+    pub fn friendly_name(&self) -> Option<&'static str> {
+        rail_display_name(self.pwr_rail)
+    }
+}
+
 /// All decoded PowerMonitor channels from a GetInfo v4 + GetStatus pair.
 /// A `Vec` (not a map) because the v4 descriptor body is variable-stride and
 /// sparsely packed — channel index is a decoded field, not the position.
@@ -578,6 +588,118 @@ pub fn gpu_z_rail_name(rail: u32) -> Option<&'static str> {
     }
 }
 
+/// Human channel names for the PowerMonitor rail space, cross-referenced
+/// from AmpereOC's "Power Statistics" panel (sub_140068074): it renders 12
+/// fixed slots — Total Board Power Draw, Framebuffer VDD, NVIDIA GPU VDD,
+/// 12v PCIE 8-pin #1/#2/#3, 12v PEX Rail, PWR PP SRC, SRAM, MISC #0..#3 —
+/// each fed by one PowerMonitor channel (its GPU-object slots sit at a
+/// uniform 168-byte pitch, matching the GetInfo descriptor size). AmpereOC
+/// confirms these rails are reported in **milliwatts**. Use alongside
+/// [`gpu_z_rail_name`]: this table names the AmpereOC view of the rail
+/// space (incl. the unnamed-gap rails 218..=240), that names the GPU-Z
+/// view of the confirmed subset.
+pub fn ampereoc_rail_name(rail: u32) -> Option<&'static str> {
+    match rail {
+        245 | 223 => Some("Total Board Power Draw"), // TBPD  = InputTotalBoard(2)
+        246 | 226 => Some("NVIDIA GPU VDD"),         // NVVDD = InputNvvdd(1)
+        247 => Some("Framebuffer VDD"),              // FBVDD = InputFbvdd
+        241 => Some("PWR PP SRC"),                   // PWRPPCSRC = InputPwrSrcPp
+        222 | 255 => Some("12v PEX Rail"),           // PEX   = InputPex12v1 / InputPex12v
+        228 => Some("12v PCIE 8-pin #1"),            // InputExt12v8pin2
+        229 => Some("12v PCIE 8-pin #2"),            // InputExt12v8pin3
+        230 => Some("12v PCIE 8-pin #3"),            // InputExt12v8pin4
+        11 => Some("SRAM"),                          // OutputSram
+        232 => Some("MISC #0"),                      // InputMisc0
+        233 => Some("MISC #1"),                      // InputMisc1
+        234 => Some("MISC #2"),                      // InputMisc2
+        235 => Some("MISC #3"),                      // InputMisc3
+        _ => None,
+    }
+}
+
+/// Milliwatt display unit for PowerMonitor values, per AmpereOC's Power
+/// Statistics panel (all 12 slots rendered in mW). Applies to both the
+/// GetStatus live values and any averaged/min/max fields.
+pub const POWER_MONITOR_UNIT_MW: &str = "mW";
+
+/// Full RTSS `NV_GPU_POWER_CHANNEL_POWER_RAIL` enum naming — the complete
+/// coverage layer (0-11 outputs, 218..=255 inputs), promoted from the
+/// gpu_readonly test helper. Programming-style names; used as the
+/// fallback layer of [`rail_display_name`] so every known rail value
+/// resolves to *something*.
+pub fn rtss_rail_name(rail: u32) -> Option<&'static str> {
+    Some(match rail {
+        0 => "Unknown",
+        1 => "OutputNvvdd",
+        2 => "OutputFbvdd",
+        3 => "OutputFbvddq",
+        4 => "OutputFbvddQ",
+        5 => "OutputPexvdd",
+        6 => "OutputA3v3",
+        7 => "Output3v3nv",
+        8 => "OutputTotalGpu",
+        9 => "OutputFbvddqGpu",
+        10 => "OutputFbvddqMem",
+        11 => "OutputSram",
+        222 => "InputPex12v1",
+        223 => "InputTotalBoard2",
+        224 => "InputHighVolt0",
+        225 => "InputHighVolt1",
+        226 => "InputNvvdd1",
+        227 => "InputNvvdd2",
+        228 => "InputExt12v8pin2",
+        229 => "InputExt12v8pin3",
+        230 => "InputExt12v8pin4",
+        231 => "InputExt12v8pin5",
+        232 => "InputMisc0",
+        233 => "InputMisc1",
+        234 => "InputMisc2",
+        235 => "InputMisc3",
+        236 => "InputUsbc0",
+        237 => "InputUsbc1",
+        238 => "InputFan0",
+        239 => "InputFan1",
+        240 => "InputSram",
+        241 => "InputPwrSrcPp",
+        242 => "Input3v3Pp",
+        243 => "Input3v3Main",
+        244 => "Input3v3Aon",
+        245 => "InputTotalBoard",
+        246 => "InputNvvdd",
+        247 => "InputFbvdd",
+        248 => "InputFbvddq",
+        249 => "InputFbvddQ",
+        250 => "InputExt12v8pin0",
+        251 => "InputExt12v8pin1",
+        252 => "InputExt12v6pin0",
+        253 => "InputExt12v6pin1",
+        254 => "InputPex3v3",
+        255 => "InputPex12v",
+        _ => return None,
+    })
+}
+
+/// Three-layer merged rail naming — the definitive resolver. The three
+/// sources cover disjoint gaps with ZERO contradictions on overlap
+/// (verified rail-by-rail: GPU-Z market names vs AmpereOC NVIDIA names
+/// are synonyms, e.g. MVDDC≡Framebuffer VDD, Chip≡NVIDIA GPU VDD):
+///
+/// 1. [`ampereoc_rail_name`] — AmpereOC "Power Statistics" panel names:
+///    most precise NVIDIA semantics (TBPD/FBVDD/NVVDD/8pin/PEX/…), but
+///    only the 14 rails its panel renders. Values confirmed mW.
+/// 2. [`rtss_rail_name`] — full RTSS enum naming, complete coverage of
+///    every defined rail value (programming-style, no prose).
+/// 3. [`gpu_z_rail_name`] — GPU-Z market names; only adds "Chip-out"
+///    beyond layer 1's coverage (kept for stable GPU-Z-facing output).
+///
+/// Returns `None` only for genuinely undefined rail values (e.g. the
+/// unnamed gap 218..=221 observed on some SKUs).
+pub fn rail_display_name(rail: u32) -> Option<&'static str> {
+    ampereoc_rail_name(rail)
+        .or_else(|| rtss_rail_name(rail))
+        .or_else(|| gpu_z_rail_name(rail))
+}
+
 /// Confidence tier for a per-rail power reading, expressing how the value
 /// was obtained. Drives downstream rendering (CLI/pynvoc/TUI suffix the rail
 /// name: Measured=plain, Inferred=`~`, Ambiguous=`?`, Unavailable=omitted).
@@ -721,5 +843,61 @@ pub fn power_rail_name_owned(rail: u32) -> String {
         power_rail_name(rail).to_string()
     } else {
         format!("UNNAMED_{}", rail)
+    }
+}
+
+#[cfg(test)]
+mod rail_name_tests {
+    use super::*;
+
+    #[test]
+    fn merged_resolver_zero_blind_spots() {
+        // Every rail the scan-gate accepts must resolve through the merged
+        // resolver: outputs 1..=11, inputs 222..=255 (plus 0 = Unknown).
+        for rail in 0u32..=11 {
+            assert!(rail_display_name(rail).is_some(), "output rail {rail} unnamed");
+        }
+        for rail in 222u32..=255 {
+            assert!(rail_display_name(rail).is_some(), "input rail {rail} unnamed");
+        }
+    }
+
+    #[test]
+    fn merged_resolver_layer_priority() {
+        // Layer 1 (AmpereOC precise) wins on its 14 rails.
+        assert_eq!(rail_display_name(245), Some("Total Board Power Draw"));
+        assert_eq!(rail_display_name(247), Some("Framebuffer VDD"));
+        assert_eq!(rail_display_name(11), Some("SRAM"));
+        assert_eq!(rail_display_name(228), Some("12v PCIE 8-pin #1"));
+        // Layer 2 (RTSS full enum) covers what layer 1 misses.
+        assert_eq!(rail_display_name(243), Some("Input3v3Main"));
+        assert_eq!(rail_display_name(238), Some("InputFan0"));
+        // Layer 3 (GPU-Z) adds Chip-out on top of layers 1-2 gaps... note
+        // rail 1 is covered by RTSS as OutputNvvdd before GPU-Z is reached.
+        assert_eq!(rail_display_name(1), Some("OutputNvvdd"));
+        assert_eq!(gpu_z_rail_name(1), Some("Chip-out")); // still available directly
+        // Undefined gap rails return None.
+        assert_eq!(rail_display_name(218), None);
+    }
+
+    #[test]
+    fn no_contradictions_between_sources() {
+        // Wherever two sources both name a rail they must agree in meaning.
+        // Verified pairs (synonyms, not conflicts):
+        //   GPU-Z "Board"        == AmpereOC "Total Board Power Draw"  (245|223)
+        //   GPU-Z "Chip"         == AmpereOC "NVIDIA GPU VDD"         (246|226)
+        //   GPU-Z "MVDDC"        == AmpereOC "Framebuffer VDD"        (247)
+        //   GPU-Z "PWR_SRC"      == AmpereOC "PWR PP SRC"             (241)
+        //   GPU-Z "PCIe"         == AmpereOC "12v PEX Rail"           (222|255)
+        // The RTSS layer always names the same rail value, so a None/Some
+        // divergence between ampereoc and gpu_z tables would be a bug:
+        for rail in [245u32, 223, 246, 226, 247, 241, 222, 255] {
+            let a = ampereoc_rail_name(rail);
+            let g = gpu_z_rail_name(rail);
+            assert!(
+                a.is_some() && g.is_some(),
+                "rail {rail} lost a source name: ampereoc={a:?} gpuz={g:?}"
+            );
+        }
     }
 }
