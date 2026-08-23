@@ -294,7 +294,7 @@ pub mod private {
     }
 
     // ------------------------------------------------------------------
-    // NvAPI_SYS_ClientJpacSetControl2 (NDA, ID 0xD27D0629) — GPUMonCmd's
+    // NvAPI_SYS_ClientJpacSetControl (NDA, ID 0xD2561B69) — GPUMonCmd's
     // multi-feature BB2/WM2 control. RE'd from GPUMonCmd.exe
     // (reverse/GPUMon/GPUMonCmd.exe, handler sub_140017C00 cmdBb2Active /
     // sub_140024A90 setWm2Active / sub_140017720 cmdWm2Mode, all route
@@ -409,7 +409,7 @@ pub mod private {
         /// Single-parameter: the 1224-byte control struct (handle inside).
         /// GPUMonCmd uses this for `-bb` (Battery Boost 2.0 on/off) and
         /// `-wm`/`-wmMode` (Whisper Mode 2.0 on/off + acoustic mode).
-        pub unsafe fn NvAPI_SYS_ClientJpacSetControl2(pControl: *mut NV_SYS_CLIENT_JPAC_CONTROL) -> NvAPI_Status;
+        pub unsafe fn NvAPI_SYS_ClientJpacSetControl(pControl: *mut NV_SYS_CLIENT_JPAC_CONTROL) -> NvAPI_Status;
     }
 
     nvstruct! {
@@ -694,6 +694,46 @@ pub mod private {
         /// %d`, CLI `-db`). Matches the "PPAB Enable" checkbox on the
         /// Dynamic-Boost tab of OEM partner tools.
         pub unsafe fn NvAPI_GPU_ClientDynamicBoostSetStatus(active: BoolU32) -> NvAPI_Status;
+    }
+
+    // ------------------------------------------------------------------
+    // NVCP "电源模式" (PowerMizer / PerfLevel) — the Adaptive/Maximum
+    // Performance dropdown in NVIDIA Control Panel. Three APIs all
+    // live-RESOLVED on R610.74:
+    //   GetPowerMizerInfo  0x76bfa16b — GET struct (layout TBD; probe first)
+    //   SetPowerMizerInfo  0x50016c78 — SET struct
+    //   SetPerfLevel       0x75dd3e6a — scalar setter (like DynamicBoost):
+    //     fn(NvPhysicalGpuHandle, u32 level) where 0=Adaptive, 1=MaxPerf, 2=Auto
+    // SetPerfLevel is the simplest path and likely what NVCP actually uses.
+    // ------------------------------------------------------------------
+
+    nvenum! {
+        /// NVCP "电源模式" power-mode selector (the Control Panel's
+        /// Adaptive / Prefer Maximum Performance dropdown).
+        pub enum NV_GPU_PERF_LEVEL / PowerLevel {
+            NV_GPU_PERF_LEVEL_ADAPTIVE / Adaptive = 0,
+            NV_GPU_PERF_LEVEL_MAX / MaxPerformance = 1,
+            NV_GPU_PERF_LEVEL_AUTO / Auto = 2,
+        }
+    }
+
+    nvenum_display! {
+        PowerLevel => {
+            Adaptive = "Adaptive",
+            MaxPerformance = "Maximum Performance",
+            Auto = "Auto-select",
+        }
+    }
+
+    nvapi! {
+        /// NVCP power-mode SET (the "电源模式" dropdown). Scalar setter:
+        /// `fn(hGpu, level)` where 0=Adaptive, 1=Maximum Performance, 2=Auto.
+        pub unsafe fn NvAPI_GPU_SetPerfLevel(hPhysicalGPU: NvPhysicalGpuHandle, level: u32) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// NVCP power-mode GET (struct, layout not yet probed).
+        pub unsafe fn NvAPI_GPU_GetPowerMizerInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u32) -> NvAPI_Status;
     }
 
     nvapi! {

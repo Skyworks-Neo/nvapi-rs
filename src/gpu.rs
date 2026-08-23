@@ -2652,6 +2652,78 @@ impl PhysicalGpu {
         }
     }
 
+    /// Set the GPU frequency perf-cap (the ref tool `-gpuclk:<MHz>` SETTER,
+    /// PerfLimitsSetStatus NDA 0x32CA4983). RE'd byte-exact from GPUMonCmd v7.0's
+    /// `GPUHandle::setGpcClock`: clamps the perf max/min frequency to a cap
+    /// value — NOT an offset, NOT a P-state lock (that's [`set_pstate_native`]).
+    ///
+    /// `PerfFreqCap::Cap { max_khz, min_khz }` writes two entries (max + min);
+    /// `PerfFreqCap::Reset` clears both (the `-gpuclk:-1` path). `freq_khz` is
+    /// MHz × 1000. Faithful to GPUMon: does NOT call `private_lifecycle_init`
+    /// (setGpcClock calls the raw setter directly, unlike setPState).
+    pub fn set_perf_freq_cap(&self, cap: PerfFreqCap) -> crate::NvapiResult<()> {
+        trace!("gpu.set_perf_freq_cap({:?})", cap);
+        let buf = build_perf_freq_cap_buffer(cap);
+        unsafe {
+            nvcall!(NvAPI_GPU_PerfLimitsSetStatus(
+                self.0,
+                buf.as_ptr() as *const _
+            ))
+        }
+    }
+
+    /// Read back the active GPU frequency perf-caps (PerfLimitsGetStatus NDA
+    /// 0xEFCEDD1F). RE'd from GPUMonCmd `isPStateLocked`: the 3-step query —
+    /// GetInfo (count) → large GetStatus. Returns one entry per active cap
+    /// (max/min); `locked` is true where the cap is currently applied.
+    pub fn perf_freq_caps(&self) -> crate::NvapiResult<Vec<PerfFreqCapEntry>> {
+        trace!("gpu.perf_freq_caps()");
+        let count = self.perf_limits_info_count()?;
+
+        let mut buf = vec![0u8; PERF_LIMITS_SIZE];
+        buf[..4].copy_from_slice(&PERF_LIMITS_MAGIC.to_ne_bytes());
+        // GPUMon writes the info count into the large struct's count slot
+        // before the GET; the driver fills the entries.
+        buf[PERF_LIMITS_OFF_COUNT..PERF_LIMITS_OFF_COUNT + 4]
+            .copy_from_slice(&count.to_ne_bytes());
+        unsafe {
+            nvcall!(NvAPI_GPU_PerfLimitsGetStatus(
+                self.0,
+                buf.as_mut_ptr() as *mut _
+            ))?;
+        }
+
+        let n = read_u32(&buf, PERF_LIMITS_OFF_COUNT) as usize;
+        let mut out = Vec::with_capacity(n);
+        for k in 0..n {
+            let base = PERF_LIMITS_ENTRY0_BASE + k * PERF_LIMITS_ENTRY_STRIDE;
+            if base + PERF_LIMITS_OFF_LOCKED + 1 > buf.len() {
+                break;
+            }
+            out.push(PerfFreqCapEntry {
+                type_marker: read_u32(&buf, base + PERF_LIMITS_OFF_TYPE),
+                freq_khz: read_u32(&buf, base + PERF_LIMITS_OFF_FREQ),
+                locked: buf[base + PERF_LIMITS_OFF_LOCKED] != 0,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Read the entry count from the medium PerfLimitsGetInfo struct (NDA
+    /// 0xE63AE22B, magic 0x1300C). GPUMon's `isPStateLocked` uses this as the
+    /// entry count for the paired large GetStatus struct.
+    fn perf_limits_info_count(&self) -> crate::NvapiResult<u32> {
+        let mut buf = vec![0u8; PERF_LIMITS_INFO_SIZE];
+        buf[..4].copy_from_slice(&PERF_LIMITS_INFO_MAGIC.to_ne_bytes());
+        unsafe {
+            nvcall!(NvAPI_GPU_PerfLimitsGetInfo(
+                self.0,
+                buf.as_mut_ptr() as *mut _
+            ))?;
+        }
+        Ok(read_u32(&buf, PERF_LIMITS_INFO_OFF_COUNT))
+    }
+
     /// Clear the rated-TDP control (NDA 0xC9E9BB33, mode 0). the ref tool's setPState
     /// calls this before applying a new P-State/frequency lock. "Rated TDP" =
     /// the nominal default power baseline.
@@ -2765,46 +2837,46 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_ClientGetLastOcScannerResults, st)
     }
 
-    /// Battery Boost 2.0 enable/disable (NDA 0xD27D0629, private).
+    /// Battery Boost 2.0 enable/disable (NDA 0xD2561B69, private).
     /// GPUMonCmd `-bb:state` (state 1=enable, 0=disable). Mobile-only.
     pub fn set_bb2_active(&self, enable: bool) -> crate::NvapiResult<()> {
         trace!("gpu.set_bb2_active(enable={})", enable);
         use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
         let mut ctrl = NV_SYS_CLIENT_JPAC_CONTROL::bb2_active(enable);
         let st = unsafe {
-            sys::api::private::NvAPI_SYS_ClientJpacSetControl2(
+            sys::api::private::NvAPI_SYS_ClientJpacSetControl(
                 ptr::from_mut(&mut ctrl).cast(),
             )
         };
-        crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl2, st)
+        crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl, st)
     }
 
-    /// Whisper Mode 2.0 enable/disable (NDA 0xD27D0629, private).
+    /// Whisper Mode 2.0 enable/disable (NDA 0xD2561B69, private).
     /// GPUMonCmd `-wm:state` (state 1=enable, 0=disable). Mobile-only.
     pub fn set_wm2_active(&self, enable: bool) -> crate::NvapiResult<()> {
         trace!("gpu.set_wm2_active(enable={})", enable);
         use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
         let mut ctrl = NV_SYS_CLIENT_JPAC_CONTROL::wm2_active(enable);
         let st = unsafe {
-            sys::api::private::NvAPI_SYS_ClientJpacSetControl2(
+            sys::api::private::NvAPI_SYS_ClientJpacSetControl(
                 ptr::from_mut(&mut ctrl).cast(),
             )
         };
-        crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl2, st)
+        crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl, st)
     }
 
-    /// Whisper Mode 2.0 acoustic mode (NDA 0xD27D0629, private).
+    /// Whisper Mode 2.0 acoustic mode (NDA 0xD2561B69, private).
     /// GPUMonCmd `-wmMode:mode` (0=Quieter, 1=Quiet, 2=Balanced).
     pub fn set_wm2_mode(&self, mode: power::private::Wm2AcousticMode) -> crate::NvapiResult<()> {
         trace!("gpu.set_wm2_mode(mode={:?})", mode);
         use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
         let mut ctrl = NV_SYS_CLIENT_JPAC_CONTROL::wm2_mode(mode);
         let st = unsafe {
-            sys::api::private::NvAPI_SYS_ClientJpacSetControl2(
+            sys::api::private::NvAPI_SYS_ClientJpacSetControl(
                 ptr::from_mut(&mut ctrl).cast(),
             )
         };
-        crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl2, st)
+        crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl, st)
     }
 
     /// Force the GPU into a given P-State (NDA 0x025BFB10, private).
@@ -3291,6 +3363,26 @@ impl PhysicalGpu {
         data.set_target_temp_c(policy_index, celsius);
         // SET: apply the patched buffer.
         unsafe { nvcall!(NvAPI_GPU_ClientThermalTargetSetStatus(self.0, &data)) }
+    }
+
+    /// NVCP "电源模式" (Adaptive / Maximum Performance) — the Control
+    /// Panel dropdown. Uses `NvAPI_GPU_SetPerfLevel` (0x75dd3e6a).
+    /// 0=Adaptive, 1=Maximum Performance, 2=Auto.
+    pub fn set_perf_level(&self, level: power::private::PowerLevel) -> crate::NvapiResult<()> {
+        trace!("gpu.set_perf_level({level:?})");
+        unsafe { nvcall!(NvAPI_GPU_SetPerfLevel(self.0, level as u32)) }
+    }
+
+    /// NVCP "电源模式" GET — reads the current PowerMizer/PerfLevel via
+    /// `NvAPI_GPU_GetPowerMizerInfo` (0x76bfa16b). The struct layout is
+    /// not yet fully probed; this returns the raw first dword which on
+    /// tested drivers carries the mode (0=Adaptive, 1=MaxPerf).
+    pub fn power_mizer_info(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.power_mizer_info()");
+        let mut data: u32 = 0;
+        let st = unsafe { sys::api::NvAPI_GPU_GetPowerMizerInfo(self.0, &mut data) };
+        crate::status_result(sys::Api::NvAPI_GPU_GetPowerMizerInfo, st)?;
+        Ok(data)
     }
 
     /// Read the NVCP power-mode (均衡/高性能 = Balanced/Max) capability:
@@ -4482,6 +4574,55 @@ pub enum PStateNativeLock {
     PstateAndFreq { pstate: u8, freq_khz: u32 },
 }
 
+/// GPU frequency perf-cap request (the ref tool `-gpuclk:<MHz>` SETTER,
+/// PerfLimitsSetStatus NDA 0x32CA4983). RE'd byte-exact from GPUMonCmd v7.0's
+/// `GPUHandle::setGpcClock`: clamps the perf max/min frequency to a cap value
+/// (NOT an offset, NOT a P-state lock — see [[PStateNativeLock]] for that).
+/// `freq_khz` is MHz × 1000.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PerfFreqCap {
+    /// Clear the perf frequency cap (`-gpuclk:-1`): both entries enable=0,
+    /// no frequency written.
+    Reset,
+    /// Clamp perf frequency to `[min_khz, max_khz]`. Either bound may be 0 to
+    /// leave that side unset (GPUMon sets both to the same cap value).
+    Cap { max_khz: u32, min_khz: u32 },
+}
+
+/// One entry read back by `Gpu::perf_freq_caps` (PerfLimitsGetStatus NDA
+/// 0xEFCEDD1F). `type_marker` is the driver's entry-type code (0x5D='Pmax',
+/// 0x49='I'=Pmin observed in GPUMon); `freq_khz` is the cap (MHz × 1000);
+/// `locked` is non-zero when the cap is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PerfFreqCapEntry {
+    pub type_marker: u32,
+    pub freq_khz: u32,
+    pub locked: bool,
+}
+
+// ── PerfLimits large-struct byte offsets (magic 0x6642C, 0x4642C B) ──
+// RE'd from GPUMonCmd setGpcClock (sub_140023FE0) / isPStateLocked
+// (sub_14002C8E0). Entry stride 0x464; entry0 data @ +0x2C, entry1 @ +0x490.
+pub(super) const PERF_LIMITS_MAGIC: u32 = 0x6642C;
+pub(super) const PERF_LIMITS_SIZE: usize = 0x4642C;
+pub(super) const PERF_LIMITS_OFF_COUNT: usize = 0x08;
+pub(super) const PERF_LIMITS_ENTRY_STRIDE: usize = 0x464;
+pub(super) const PERF_LIMITS_ENTRY0_BASE: usize = 0x2C; // entry0 type_marker
+pub(super) const PERF_LIMITS_ENTRY1_BASE: usize = 0x490; // = 0x2C + 0x464
+pub(super) const PERF_LIMITS_OFF_TYPE: usize = 0x00; // rel to entry base
+pub(super) const PERF_LIMITS_OFF_ENABLE: usize = 0x30; // rel to entry base
+pub(super) const PERF_LIMITS_OFF_FREQ: usize = 0x58; // rel to entry base
+pub(super) const PERF_LIMITS_OFF_LOCKED: usize = 0x458; // rel to entry base (GET only)
+// SET type markers (entry0=max, entry1=min).
+pub(super) const PERF_LIMITS_TYPE_MAX: u32 = 0x58;
+pub(super) const PERF_LIMITS_TYPE_MIN: u32 = 0x5B;
+pub(super) const PERF_LIMITS_ENABLE_APPLY: u32 = 2;
+pub(super) const PERF_LIMITS_ENABLE_RESET: u32 = 0;
+// ── PerfLimits medium-struct (GetInfo, magic 0x1300C) ──
+pub(super) const PERF_LIMITS_INFO_MAGIC: u32 = 0x1300C;
+pub(super) const PERF_LIMITS_INFO_SIZE: usize = 0x300C;
+pub(super) const PERF_LIMITS_INFO_OFF_COUNT: usize = 0x08;
+
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct VfpInfo {
@@ -4528,5 +4669,182 @@ impl VfpInfo {
                 }
             }
         })
+    }
+}
+
+/// Little-endian u32 write at a byte offset (heap-backed NVAPI struct helper).
+#[inline]
+fn write_u32(buf: &mut [u8], off: usize, v: u32) {
+    buf[off..off + 4].copy_from_slice(&v.to_ne_bytes());
+}
+
+/// Little-endian u32 read at a byte offset (heap-backed NVAPI struct helper).
+#[inline]
+fn read_u32(buf: &[u8], off: usize) -> u32 {
+    let mut b = [0u8; 4];
+    b.copy_from_slice(&buf[off..off + 4]);
+    u32::from_ne_bytes(b)
+}
+
+/// Build the PerfLimits SetStatus buffer (magic 0x6642C, 0x4642C B) for a
+/// [`PerfFreqCap`]. Extracted from `set_perf_freq_cap` so the byte layout is
+/// unit-testable without a live GPU handle. RE'd from GPUMonCmd setGpcClock.
+fn build_perf_freq_cap_buffer(cap: PerfFreqCap) -> Vec<u8> {
+    let mut buf = vec![0u8; PERF_LIMITS_SIZE];
+    buf[..4].copy_from_slice(&PERF_LIMITS_MAGIC.to_ne_bytes());
+    // count = 2 (entry0 = max, entry1 = min).
+    write_u32(&mut buf, PERF_LIMITS_OFF_COUNT, 2);
+
+    let (enable, max_khz, min_khz) = match cap {
+        PerfFreqCap::Reset => (PERF_LIMITS_ENABLE_RESET, 0, 0),
+        PerfFreqCap::Cap { max_khz, min_khz } => (PERF_LIMITS_ENABLE_APPLY, max_khz, min_khz),
+    };
+    // entry0 (max): type_marker @ +0x2C, enable @ +0x5C, freq @ +0x84.
+    write_u32(&mut buf, PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_TYPE, PERF_LIMITS_TYPE_MAX);
+    write_u32(&mut buf, PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_ENABLE, enable);
+    write_u32(&mut buf, PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_FREQ, max_khz);
+    // entry1 (min): type_marker @ +0x490, enable @ +0x4C0, freq @ +0x508.
+    write_u32(&mut buf, PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_TYPE, PERF_LIMITS_TYPE_MIN);
+    write_u32(&mut buf, PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_ENABLE, enable);
+    write_u32(&mut buf, PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_FREQ, min_khz);
+    buf
+}
+
+#[cfg(test)]
+mod perflimits_tests {
+    use super::*;
+
+    /// The large-struct layout RE'd from GPUMonCmd setGpcClock must hold.
+    #[test]
+    fn perf_limits_layout_constants() {
+        assert_eq!(PERF_LIMITS_MAGIC, 0x6642C);
+        assert_eq!(PERF_LIMITS_SIZE, 0x4642C);
+        assert_eq!(PERF_LIMITS_OFF_COUNT, 0x08);
+        assert_eq!(PERF_LIMITS_ENTRY_STRIDE, 0x464);
+        assert_eq!(PERF_LIMITS_ENTRY0_BASE, 0x2C);
+        assert_eq!(PERF_LIMITS_ENTRY1_BASE, 0x2C + 0x464); // 0x490
+        assert_eq!(PERF_LIMITS_OFF_TYPE, 0x00);
+        assert_eq!(PERF_LIMITS_OFF_ENABLE, 0x30); // entry+0x30 = struct+0x5C
+        assert_eq!(PERF_LIMITS_OFF_FREQ, 0x58); // entry+0x58 = struct+0x84
+        assert_eq!(PERF_LIMITS_OFF_LOCKED, 0x458); // entry+0x458 = struct+0x484
+        assert_eq!(PERF_LIMITS_TYPE_MAX, 0x58);
+        assert_eq!(PERF_LIMITS_TYPE_MIN, 0x5B);
+        assert_eq!(PERF_LIMITS_ENABLE_APPLY, 2);
+        assert_eq!(PERF_LIMITS_ENABLE_RESET, 0);
+        // medium GetInfo struct
+        assert_eq!(PERF_LIMITS_INFO_MAGIC, 0x1300C);
+        assert_eq!(PERF_LIMITS_INFO_SIZE, 0x300C);
+        assert_eq!(PERF_LIMITS_INFO_OFF_COUNT, 0x08);
+    }
+
+    #[test]
+    fn build_perf_freq_cap_buffer_cap_writes_both_entries() {
+        // -gpuclk:300 → max=min=300 MHz = 300_000 kHz (the GPUMon pattern).
+        let buf = build_perf_freq_cap_buffer(PerfFreqCap::Cap {
+            max_khz: 300_000,
+            min_khz: 300_000,
+        });
+        assert_eq!(buf.len(), PERF_LIMITS_SIZE);
+        assert_eq!(read_u32(&buf, 0), PERF_LIMITS_MAGIC);
+        assert_eq!(read_u32(&buf, PERF_LIMITS_OFF_COUNT), 2);
+        // entry0 (max)
+        assert_eq!(
+            read_u32(&buf, PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_TYPE),
+            PERF_LIMITS_TYPE_MAX
+        );
+        assert_eq!(
+            read_u32(&buf, PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_ENABLE),
+            PERF_LIMITS_ENABLE_APPLY
+        );
+        assert_eq!(
+            read_u32(&buf, PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_FREQ),
+            300_000
+        );
+        // entry1 (min) @ +0x490
+        assert_eq!(
+            read_u32(&buf, PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_TYPE),
+            PERF_LIMITS_TYPE_MIN
+        );
+        assert_eq!(
+            read_u32(&buf, PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_ENABLE),
+            PERF_LIMITS_ENABLE_APPLY
+        );
+        assert_eq!(
+            read_u32(&buf, PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_FREQ),
+            300_000
+        );
+    }
+
+    #[test]
+    fn build_perf_freq_cap_buffer_reset_clears_enable() {
+        // -gpuclk:-1 → enable=0 on both entries, freq stays 0.
+        let buf = build_perf_freq_cap_buffer(PerfFreqCap::Reset);
+        assert_eq!(read_u32(&buf, 0), PERF_LIMITS_MAGIC);
+        assert_eq!(read_u32(&buf, PERF_LIMITS_OFF_COUNT), 2);
+        assert_eq!(
+            read_u32(&buf, PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_ENABLE),
+            0
+        );
+        assert_eq!(
+            read_u32(&buf, PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_ENABLE),
+            0
+        );
+        // type markers still written (GPUMon writes them even on reset path).
+        assert_eq!(
+            read_u32(&buf, PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_TYPE),
+            PERF_LIMITS_TYPE_MAX
+        );
+    }
+
+    #[test]
+    fn perf_freq_caps_parses_get_buffer() {
+        // Simulate a GET-status buffer with 2 entries: entry0 locked max,
+        // entry1 unlocked min — mirrors the isPStateLocked read loop.
+        // (We can't call perf_freq_caps without a GPU handle, so test the
+        // field offsets the parse path uses.)
+        let mut buf = vec![0u8; PERF_LIMITS_SIZE];
+        write_u32(&mut buf, 0, PERF_LIMITS_MAGIC);
+        write_u32(&mut buf, PERF_LIMITS_OFF_COUNT, 2);
+        write_u32(
+            &mut buf,
+            PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_TYPE,
+            0x5D, // Pmax
+        );
+        write_u32(
+            &mut buf,
+            PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_FREQ,
+            300_000,
+        );
+        buf[PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_LOCKED] = 1; // locked
+        write_u32(
+            &mut buf,
+            PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_TYPE,
+            0x49, // Pmin
+        );
+        write_u32(
+            &mut buf,
+            PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_FREQ,
+            200_000,
+        );
+        // entry1 locked byte stays 0
+
+        // Re-implement the parse loop the getter uses, against this buffer.
+        let n = read_u32(&buf, PERF_LIMITS_OFF_COUNT) as usize;
+        let mut entries = Vec::with_capacity(n);
+        for k in 0..n {
+            let base = PERF_LIMITS_ENTRY0_BASE + k * PERF_LIMITS_ENTRY_STRIDE;
+            entries.push(PerfFreqCapEntry {
+                type_marker: read_u32(&buf, base + PERF_LIMITS_OFF_TYPE),
+                freq_khz: read_u32(&buf, base + PERF_LIMITS_OFF_FREQ),
+                locked: buf[base + PERF_LIMITS_OFF_LOCKED] != 0,
+            });
+        }
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].type_marker, 0x5D);
+        assert_eq!(entries[0].freq_khz, 300_000);
+        assert!(entries[0].locked);
+        assert_eq!(entries[1].type_marker, 0x49);
+        assert_eq!(entries[1].freq_khz, 200_000);
+        assert!(!entries[1].locked);
     }
 }

@@ -555,6 +555,52 @@ pub mod private {
     }
 
     // ------------------------------------------------------------------
+    // PerfLimits family — GPU frequency perf-cap (NDA). RE'd byte-exact from
+    // GPUMonCmd v7.0's `-gpuclk:<MHz>` (`GPUHandle::setGpcClock`). DISTINCT
+    // from PerfClientLimits above (P-state lock, 780B): this is a 287KB
+    // struct that clamps the perf max/min frequency to a cap value, not a
+    // P-state/mode entry table. The medium GetInfo struct returns the entry
+    // count; the large GetStatus/SetStatus structs share one layout.
+    //
+    // Three structs (all heap-backed in the high-level wrapper — too large for
+    // a fixed-size `nvstruct!`):
+    //   small  NV_GPU_PERF_CLIENT_LIMITS  magic 0x2030C 0x30C B (already wrapped above)
+    //   medium NV_GPU_PERF_LIMITS_INFO    magic 0x1300C 0x300C B
+    //   large  NV_GPU_PERF_LIMITS         magic 0x6642C 0x4642C B
+    //
+    // Large struct layout (from setGpcClock sub_140023FE0 + isPStateLocked
+    // sub_14002C8E0):
+    //   +0x00 u32  magic/size = 0x6642C
+    //   +0x08 u32  count (entries; SET=2, GET fills)
+    //   entry[k] @ +0x2C + k*0x464 (stride 0x464 = 1124 B):
+    //     +0x00 (+0x2C)  type_marker u32  (SET entry0=0x58/entry1=0x5B; GET 0x5D=Pmax/0x49=Pmin)
+    //     +0x30 (+0x5C)  enable u32       (2=apply cap, 0=reset)
+    //     +0x58 (+0x84)  freq_kHz u32     (1000*MHz; entry0=max, entry1=min)
+    //     +0x458(+0x484) locked u8        (GET only: non-zero = cap active)
+    //   Medium struct: +0x00 magic 0x1300C, +0x08 count.
+    // ------------------------------------------------------------------
+    nvapi! {
+        /// PerfLimits GetInfo (NDA 0xE63AE22B). Medium struct (magic 0x1300C);
+        /// fills `count` at +0x08 — the entry count for the paired large
+        /// GetStatus/SetStatus struct. RE'd from GPUMonCmd isPStateLocked.
+        pub unsafe fn NvAPI_GPU_PerfLimitsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pPerfLimitsInfo: *mut u8) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// PerfLimits GetStatus (NDA 0xEFCEDD1F). Large struct (magic 0x6642C,
+        /// 0x4642C B): reads back the current perf frequency caps. RE'd from
+        /// GPUMonCmd isPStateLocked.
+        pub unsafe fn NvAPI_GPU_PerfLimitsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPerfLimits: *mut u8) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// PerfLimits SetStatus (NDA 0x32CA4983). Large struct (magic 0x6642C,
+        /// 0x4642C B): sets the perf max/min frequency cap. RE'd from
+        /// GPUMonCmd `-gpuclk:<MHz>` (setGpcClock). MHz→kHz (×1000); -1=reset.
+        pub unsafe fn NvAPI_GPU_PerfLimitsSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPerfLimits: *const u8) -> NvAPI_Status;
+    }
+
+    // ------------------------------------------------------------------
     // Driver-side OC Scanner family (NDA). RE'd from MSI's MSIOCScanner_x64
     // host (reverse/msiafterburner/Bundle/OCScanner): on drivers >= 455.00
     // the legacy user-mode scanner.dll is bypassed entirely — the host calls
