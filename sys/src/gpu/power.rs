@@ -293,6 +293,125 @@ pub mod private {
         }
     }
 
+    // ------------------------------------------------------------------
+    // NvAPI_SYS_ClientJpacSetControl2 (NDA, ID 0xD27D0629) — GPUMonCmd's
+    // multi-feature BB2/WM2 control. RE'd from GPUMonCmd.exe
+    // (reverse/GPUMon/GPUMonCmd.exe, handler sub_140017C00 cmdBb2Active /
+    // sub_140024A90 setWm2Active / sub_140017720 cmdWm2Mode, all route
+    // through sub_140005EC0 which QueryInterface's 0xD27D0629).
+    //
+    // 1224-byte buffer (0x4C8), version magic 0x104C8 (v1 | size).
+    // Single-parameter call: NvAPI(handle_inside_struct). Layout:
+    //   dword[0]  (off 0x00) = version magic 0x104C8
+    //   dword[1]  (off 0x04) = operation: 1 = active on/off, 2 = SL mode
+    //   dword[18] (off 0x48) = feature: 0 = WM2-active, 1 = WM2-mode, 3 = BB2-active
+    //   dword[19] (off 0x4C) = enable flag (op 1) or mode enum (op 2)
+    //                          WM2 modes: 0=Quieter, 1=Quiet, 2=Balanced
+    //   dword[27] (off 0x6C) = constant 2 (WM2-mode only)
+    //   dword[28] (off 0x70) = SL sound-level value: Quieter=30, Quiet=40, Balanced=60
+    // ------------------------------------------------------------------
+
+    /// Feature selector for the Jpac multi-feature control (dword[18]).
+    #[repr(u32)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum JpacFeature {
+        /// Whisper Mode 2.0 active on/off.
+        Wm2Active = 0,
+        /// Whisper Mode 2.0 SL (sound-level) mode.
+        Wm2Mode = 1,
+        /// Battery Boost 2.0 active on/off.
+        Bb2Active = 3,
+    }
+
+    /// Whisper Mode 2.0 acoustic mode (dword[19] when op=2, feature=Wm2Mode).
+    #[repr(u32)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Wm2AcousticMode {
+        /// Quieter — SL value 30.
+        Quieter = 0,
+        /// Quiet — SL value 40.
+        Quiet = 1,
+        /// Balanced — SL value 60.
+        Balanced = 2,
+    }
+
+    impl Wm2AcousticMode {
+        /// The SL sound-level value the driver writes for this mode.
+        pub const fn sl_value(self) -> u32 {
+            match self {
+                Wm2AcousticMode::Quieter => 30,
+                Wm2AcousticMode::Quiet => 40,
+                Wm2AcousticMode::Balanced => 60,
+            }
+        }
+    }
+
+    nvstruct! {
+        /// BB2/WM2 multi-feature control (RE'd from GPUMonCmd; NDA).
+        /// 1224 bytes, version magic 0x104C8. Use the builders below — the
+        /// raw layout is op/feature multiplexed and most dwords must stay 0.
+        pub struct NV_SYS_CLIENT_JPAC_CONTROL_V1 {
+            pub version: NvVersion,
+            /// Operation: 1 = active on/off, 2 = SL mode (WM2 only).
+            pub op: u32,
+            pub pad0: Padding<[u32; 16]>,
+            /// Feature selector (dword[18], offset 0x48).
+            pub feature: JpacFeature,
+            /// Enable flag (op=1) or WM2 acoustic mode (op=2, feature=Wm2Mode).
+            pub value: u32,
+            pub pad1: Padding<[u32; 7]>,
+            /// Constant 2 for WM2-mode (dword[27], offset 0x6C); 0 otherwise.
+            pub wm2_mode_marker: u32,
+            /// SL sound-level value (dword[28], offset 0x70); only for WM2-mode.
+            pub sl_value: u32,
+            pub pad2: Padding<[u32; 277]>,
+        }
+    }
+
+    nvversion! { @=NV_SYS_CLIENT_JPAC_CONTROL NV_SYS_CLIENT_JPAC_CONTROL_V1(1) = 0x4C8 }
+
+    impl NV_SYS_CLIENT_JPAC_CONTROL_V1 {
+        /// Build a BB2 active on/off control (enable=true → on).
+        pub fn bb2_active(enable: bool) -> Self {
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = NvVersion::with_struct::<Self>(1);
+            s.op = 1;
+            s.feature = JpacFeature::Bb2Active;
+            s.value = enable as u32;
+            s
+        }
+
+        /// Build a WM2 active on/off control (enable=true → on).
+        pub fn wm2_active(enable: bool) -> Self {
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = NvVersion::with_struct::<Self>(1);
+            s.op = 1;
+            s.feature = JpacFeature::Wm2Active;
+            s.value = enable as u32;
+            s
+        }
+
+        /// Build a WM2 SL acoustic-mode control.
+        pub fn wm2_mode(mode: Wm2AcousticMode) -> Self {
+            let mut s: Self = unsafe { std::mem::zeroed() };
+            s.version = NvVersion::with_struct::<Self>(1);
+            s.op = 2;
+            s.feature = JpacFeature::Wm2Mode;
+            s.value = mode as u32;
+            s.wm2_mode_marker = 2;
+            s.sl_value = mode.sl_value();
+            s
+        }
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xD27D0629). BB2/WM2 multi-feature control.
+        /// Single-parameter: the 1224-byte control struct (handle inside).
+        /// GPUMonCmd uses this for `-bb` (Battery Boost 2.0 on/off) and
+        /// `-wm`/`-wmMode` (Whisper Mode 2.0 on/off + acoustic mode).
+        pub unsafe fn NvAPI_SYS_ClientJpacSetControl2(pControl: *mut NV_SYS_CLIENT_JPAC_CONTROL) -> NvAPI_Status;
+    }
+
     nvstruct! {
         /// V1 GetStatus entry (28-byte stride). IDA-verified against the
         /// R610.74 impl converter (sub_180200190, V3-internal → V1/V2-user
@@ -513,11 +632,23 @@ pub mod private {
 
     nvstruct! {
         /// ClientPowerModes GetInfo (magic 0x1150C = v1 | 5388B).
-        /// Layout not yet probe-verified; fields opaque.
+        /// Decoded from NVIDIA App UXDriver PhysicalStructure.cpp consumers
+        /// (nvxdapix RE, instruction-verified):
+        /// - +0x04 dword: seed value copied into CONTROL+0x04 before
+        ///   GetControl in BOTH read and write paths (purpose opaque —
+        ///   possibly a session/feature key the driver echoes).
+        /// - +0x08 lo-u16 `mode_mask`: bitmask of supported modes
+        ///   (0xFFFF observed = all bits set).
+        /// - +0x0A hi-u16 `max_mode_idx`: feature-support gate — the App
+        ///   exposes the Balanced/Max toggle ONLY when == 1 (0xFFFF on
+        ///   4060L → unsupported, no toggle in the UI).
+        /// Rest of the 5376-byte payload is never read by the App.
         pub struct NV_GPU_CLIENT_POWER_MODES_INFO_V1 {
             pub version: NvVersion,
-            pub flags: u32,
-            pub rest: Padding<[u32; 1345]>,
+            pub seed: u32,
+            pub mode_mask: u16,
+            pub max_mode_idx: u16,
+            pub rest: Padding<[u32; 1344]>,
         }
     }
 
@@ -526,10 +657,15 @@ pub mod private {
     nvstruct! {
         /// ClientPowerModes Get/SetControl (magic 0x1100C = v1 | 4108B):
         /// the active power-mode selector.
+        /// SET protocol (App's SetIsGPUPowerMode, instruction-verified):
+        /// GET-prime RMW — GetInfo → copy INFO+0x04 into CONTROL+0x04 →
+        /// GetControl → write ONLY the u16 `active_mode_idx` at +0x08 →
+        /// SetControl (every other byte passes through untouched).
         pub struct NV_GPU_CLIENT_POWER_MODES_CONTROL_V1 {
             pub version: NvVersion,
-            pub flags: u32,
-            pub mode: NV_GPU_CLIENT_POWER_MODE_ID,
+            pub seed: u32,
+            pub active_mode_idx: u16,
+            pub padding: Padding<[u8; 2]>,
             pub rest: Padding<[u32; 1024]>,
         }
     }
