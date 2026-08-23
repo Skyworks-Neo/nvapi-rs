@@ -45,7 +45,9 @@ fn main() {
     if st != 0 { return; }
     let mask_ptr = ptr::from_ref(&info.mask.mask) as *const u8;
 
-    // 2. GetStatus V1 (7208B) — ver2 magic 0x21C28 (ver1 0x11C28 returns -9 live)
+    // 2. GetStatus V1 (7208B) — ver2 magic 0x21C28 (both ver1 0x11C28 and
+    //    ver2 return valid data with a real 32-byte point mask; see
+    //    probe_blackwell_vf stage 2 for the full magic matrix)
     let mut v1 = vec![0u8; 7208];
     v1[0..4].copy_from_slice(&0x21C28u32.to_le_bytes());
     unsafe { std::ptr::copy_nonoverlapping(mask_ptr, v1.as_mut_ptr().add(4), 32); }
