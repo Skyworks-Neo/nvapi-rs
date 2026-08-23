@@ -838,6 +838,12 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetPstatesInfoEx@get(self.0, 0u32) => raw) }
     }
 
+    /// NOTE on units (ccminer cross-ref, nvml.cpp:1467 "gpu delta value
+    /// seems to be x2, not the memory"): the boost-TABLE path
+    /// (`set_vfp_table` on 0x23F1B133) stores GPU deltas in Kilohertz2
+    /// (×2, /2000 = MHz) while MEMORY deltas are plain kHz (/1000 = MHz).
+    /// This SetPstates20 path takes plain kHz for both domains (ccminer
+    /// writes `freqDelta_kHz.value = delta` then logs `delta/1000`).
     pub fn set_pstates<I: IntoIterator<Item = (PState, ClockDomain, KilohertzDelta)>>(
         &self,
         deltas: I,

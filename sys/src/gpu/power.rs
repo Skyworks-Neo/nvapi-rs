@@ -957,9 +957,12 @@ pub mod private {
             /// - 1 on load
             /// - 3 in low clocks
             /// - 7 in idle
+            /// (ccminer cross-ref: seen 1/4/5 while mining, 16 idle —
+            /// bitmask of active policies)
             pub unknown: u32,
             pub zero1: u32,
             /// nanoseconds
+            /// (ccminer cross-ref: companion flag field seen 7 and 3)
             pub timers: [u64; 3],
             pub padding: Padding<[u32; 326]>,
         }
