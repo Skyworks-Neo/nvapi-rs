@@ -85,6 +85,68 @@ nvapi! {
     pub unsafe fn NvAPI_GPU_GetAllClockFrequencies;
 }
 
+// ------------------------------------------------------------------
+// NvAPI_GPU_GetPerfClocks / SetPerfClocks (ID 0x1EA54A3B / 0x07BCF4AC).
+// Fermi/Kepler-era per-pstate clock/voltage table. Layout from the
+// vertminer wrapper (reverse/vertminer-nvidia-master/compat/nvapi/
+// nvapi_vertminer.h): version-2 magic 0x22A74 = 10868 bytes; the first
+// 12 dwords were field-mapped by live probing, the remaining 2705 dwords
+// were never decoded (observed mostly-zero memory-domain clock fields).
+// vertminer's SET wrapper is marked "error" — never observed working;
+// modern (Pascal+) drivers likely reject both. Registered for
+// completeness only.
+// ------------------------------------------------------------------
+
+nvstruct! {
+    /// Per-pstate performance clocks table (Kepler-era, undocumented).
+    /// 10868 bytes, version magic 0x22A74 (v2).
+    pub struct NV_GPU_PERF_CLOCKS_V2 {
+        pub version: NvVersion,
+        /// Observed constant 4.
+        pub val1: u32,
+        /// Observed 2 or 0.
+        pub val2: u32,
+        /// Observed constant 2.
+        pub val3: u32,
+        /// Observed constant 3.
+        pub val4: u32,
+        pub pStateId: u32,
+        /// Observed 0 or 2.
+        pub val6: u32,
+        /// Observed constant 4.
+        pub val7: u32,
+        /// Observed 0.
+        pub val8: u32,
+        /// Memory frequency kHz (observed 405000).
+        pub memFreq1: u32,
+        /// Memory frequency kHz (observed 405000).
+        pub memFreq2: u32,
+        /// Memory frequency minimum kHz (observed 101250).
+        pub memFreqMin: u32,
+        /// Undecoded tail (2705 dwords; mostly-zero memory-domain fields).
+        pub pad: Padding<[u32; 2705]>,
+    }
+}
+
+nvversion! { @=NV_GPU_PERF_CLOCKS NV_GPU_PERF_CLOCKS_V2(2) }
+
+nvapi! {
+    pub type GPU_GetPerfClocksFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, numClocks: u32, pPerfClocks: *mut NV_GPU_PERF_CLOCKS) -> NvAPI_Status;
+
+    /// Kepler-era per-pstate clock table GET. vertminer resolves 0x1EA54A3B
+    /// with the 10868-byte V2 struct; expect NotSupported on Pascal+.
+    pub unsafe fn NvAPI_GPU_GetPerfClocks;
+}
+
+nvapi! {
+    pub type GPU_SetPerfClocksFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, numClocks: u32, pPerfClocks: *const NV_GPU_PERF_CLOCKS) -> NvAPI_Status;
+
+    /// Kepler-era per-pstate clock table SET (0x07BCF4AC). vertminer's own
+    /// wrapper is commented "// error" — no known working usage; bound for
+    /// completeness.
+    pub unsafe fn NvAPI_GPU_SetPerfClocks;
+}
+
 /// Undocumented API
 pub mod private {
     use crate::prelude_::*;
@@ -292,6 +354,13 @@ pub mod private {
 
     pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_PROG_V1 = i32;
 
+    // nvapioc (reverse/nvapioc-master) navigates the V/F table by VOLTAGE,
+    // not point index: GET the mask+curve, find the entry whose voltageUV
+    // matches the requested mV, patch that entry's freqDeltaKHz. It also
+    // multiplies the delta by 2 before SET and divides by 2 after GET —
+    // on R610.74 our live round-trip shows plain kHz units (90000 delta →
+    // exactly +90 MHz), so the ×2 is either a Pascal-era driver unit or
+    // nvapioc's own CLI convention; do NOT copy it blindly.
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_V1 {
             pub clock_type: u32,
@@ -443,6 +512,10 @@ pub mod private {
 
     nvstruct! {
         pub struct NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
+            // nvapioc (reverse/nvapioc-master) drives this exact 780-byte
+            // CLOCK_LOCK form as its "-cvolt/-mvolt" VOLTAGE LOCK: RMW the
+            // GET, then for the entry with id==6 set mode=3 and value=µV
+            // (0 to unlock). Corroborates mode 3 = manual voltage below.
             pub id: NV_PERF_CLIENT_LIMIT_ID, // entry index
             pub b: u32, // 0
             pub mode: NV_GPU_CLOCK_LOCK_MODE, // 0 = default, 3 = manual voltage

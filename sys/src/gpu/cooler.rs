@@ -276,6 +276,11 @@ pub mod private {
         ///
         /// NOTE: To lock the fan speed independent of the temperature or performance changes set the cooler currentPolicy to
         /// NVAPI_COOLER_POLICY_MANUAL else set it to the current policy retrieved from the GetCoolerSettings API.
+        ///
+        /// nvapioc (reverse/nvapioc-master) corroborates the policy encoding from
+        /// the field's consumers: policy 32 (= NVAPI_COOLER_POLICY_DEFAULT) restores
+        /// the driver fan curve, policy 1 (= MANUAL) applies `level` as a fixed
+        /// duty in percent.
         pub unsafe fn NvAPI_GPU_SetCoolerLevels;
     }
 

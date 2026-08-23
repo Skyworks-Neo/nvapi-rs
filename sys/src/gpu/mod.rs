@@ -75,6 +75,21 @@ nvapi! {
 }
 
 nvapi! {
+    pub type GPU_GetSerialNumberFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, szSerialNumber: *mut NvAPI_ShortString) -> NvAPI_Status;
+
+    /// Undocumented (ID 0x14B83A5F, from the vertminer wrapper). Returns the
+    /// GPU serial number as a short string. vertminer resolves it via
+    /// QueryInterface; availability on modern consumer boards unverified.
+    ///
+    /// Live 4060 Laptop (R610.74, probe_misc_ids): resolves, returns OK, but
+    /// the buffer gets 5 binary bytes (`E1 19 C2 B0 05`) + zeros — NOT a
+    /// NUL-terminated string. Either the serial is binary-encoded on this
+    /// board or the ShortString prototype is wrong for modern drivers
+    /// (vertminer never live-verified it). Treat output as raw bytes.
+    pub unsafe fn NvAPI_GPU_GetSerialNumber;
+}
+
+nvapi! {
     pub type GPU_GetPhysicalFrameBufferSizeFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pSize: *mut u32) -> NvAPI_Status;
 
     /// This function returns the physical size of framebuffer in KB.  This does NOT include any

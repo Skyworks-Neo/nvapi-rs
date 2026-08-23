@@ -150,3 +150,12 @@ nvapi! {
     /// If NVAPI is unable to get the information of particular driver type, we report all flags as 0 (Unknown).
     pub unsafe fn NvAPI_SYS_GetDisplayDriverInfo(pDriverInfo: *mut NV_DISPLAY_DRIVER_INFO) -> NvAPI_Status;
 }
+
+nvapi! {
+    /// Undocumented (ID 0xB4B26B65, from the nvapioc tool). Restarts the
+    /// display driver — the classic "apply OC" trigger used by legacy OC
+    /// CLIs after writing clock/voltage settings (nvapioc's `-restart`).
+    /// No arguments. Modern drivers apply most settings without a restart,
+    /// so this is mostly vestigial.
+    pub unsafe fn NvAPI_RestartDisplayDriver() -> NvAPI_Status;
+}

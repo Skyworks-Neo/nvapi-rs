@@ -273,6 +273,12 @@ nvstruct! {
         pub numVoltages: u32,
         /// OV settings - Please refer to NVIDIA over-volting recommendation to understand impact of this functionality
         /// Valid index range is 0 to numVoltages-1
+        ///
+        /// nvapioc (reverse/nvapioc-master) demonstrates a working pstate-less
+        /// over-voltage write through this segment alone: numPStates=0,
+        /// overVoltage.numVoltages=1, voltages[0] = {domainId: 0,
+        /// voltageDeltaUV: offset} with the V2 version magic — no pstates[]
+        /// entries needed for a global core over-voltage delta.
         pub voltages: Array<[NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1; NVAPI_MAX_GPU_PSTATE20_BASE_VOLTAGES]>,
     }
 }
@@ -435,5 +441,18 @@ pub mod private {
         pub type GPU_SetPstateClientLimitsFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pLimits: *const NV_GPU_PSTATE_CLIENT_LIMITS) -> NvAPI_Status;
 
         pub unsafe fn NvAPI_GPU_SetPstateClientLimits;
+    }
+
+    nvapi! {
+        pub type GPU_SetForcePstateFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pstate: u32, setType: u32) -> NvAPI_Status;
+
+        /// Undocumented (NDA, ID 0x025BFB10). Force the GPU into a given
+        /// P-State. 2-arg-plus-setType signature from the nvapioc tool
+        /// (reverse/nvapioc-master/Source/main.cpp): it calls
+        /// `NvAPI_GPU_SetPstate(handle, pState, 2)` — setType 2 observed as
+        /// the working value (likely "force until released", with 0/1
+        /// soft/hard variants). Thermspy also resolves this ID. There is a
+        /// sibling SetForcePstateEx 0xE7B1198D (unwrapped).
+        pub unsafe fn NvAPI_GPU_SetForcePstate;
     }
 }

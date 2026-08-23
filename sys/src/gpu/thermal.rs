@@ -550,6 +550,10 @@ pub mod private {
     // This is NOT the documented ClientThermalPoliciesSetStatus (0x34C0B13D),
     // which returns OK on mobile but silently does not persist. The private
     // pair is what actually writes the wall (nvidia-smi 87->82 confirmed).
+    // (nvapioc corroborates the documented SET's field encoding even where it
+    // doesn't persist: entries[0] = {controller: 1, value: celsius << 8,
+    // flags: bit0 = priority} — i.e. the same ×256 Q8 encoding as the private
+    // pair's dword 7.)
     // Both IDs sit in nvapi64.dll's static table off_1804DD000 and resolve in
     // nvoc's process (probe-confirmed: SET -> 0x7FFE90A12750 on RTX 4060 Laptop).
     //
