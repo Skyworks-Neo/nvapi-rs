@@ -293,25 +293,25 @@ pub mod private {
         }
     }
 
-    /// V1 GetStatus entry (28-byte stride). IDA-verified against the
-    /// R610.74 impl converter (sub_180200190, V3-internal → V1/V2-user
-    /// copy-back): `lea rdx,[user+0x48]; mov [rdx-4],clock_type;
-    /// mov [rdx],freq_kHz; mov [rdx+4],voltage_uV` — i.e. entries sit at
-    /// +0x44 (68) with 28-byte stride and field map
-    /// `{clock_type@+0, freq_kHz@+4, voltage_uV@+8, padding[16]}`.
-    /// 68 + 28*255 = 7208 = 0x1C28 exactly.
-    ///
-    /// The earlier live A/B note that placed a `region` dword at +4 with
-    /// freq@+8/volt@+12 was anchored 4 bytes early (raw dump started at
-    /// +64, not +68): its dword[1] "region 0/1" pattern was actually
-    /// `clock_type` (0 = core V/F curve, 1 = memory — same semantics as
-    /// the V3 `clock_type`), dword[2] was freq, dword[3] was voltage.
-    /// The converter sources freq/volt from the V3 entry's current pair
-    /// (the +156/+160 slot, which the driver fills with a copy of the
-    /// current freq/volt) — V1 is current-only, no default/overclocked
-    /// pair. Only entries with clock_type < 2 convert; any masked entry
-    /// with type >= 2 makes the whole V1/V2 call return -9.
     nvstruct! {
+        /// V1 GetStatus entry (28-byte stride). IDA-verified against the
+        /// R610.74 impl converter (sub_180200190, V3-internal → V1/V2-user
+        /// copy-back): `lea rdx,[user+0x48]; mov [rdx-4],clock_type;
+        /// mov [rdx],freq_kHz; mov [rdx+4],voltage_uV` — i.e. entries sit at
+        /// +0x44 (68) with 28-byte stride and field map
+        /// `{clock_type@+0, freq_kHz@+4, voltage_uV@+8, padding[16]}`.
+        /// 68 + 28*255 = 7208 = 0x1C28 exactly.
+        ///
+        /// The earlier live A/B note that placed a `region` dword at +4 with
+        /// freq@+8/volt@+12 was anchored 4 bytes early (raw dump started at
+        /// +64, not +68): its dword[1] "region 0/1" pattern was actually
+        /// `clock_type` (0 = core V/F curve, 1 = memory — same semantics as
+        /// the V3 `clock_type`), dword[2] was freq, dword[3] was voltage.
+        /// The converter sources freq/volt from the V3 entry's current pair
+        /// (the +156/+160 slot, which the driver fills with a copy of the
+        /// current freq/volt) — V1 is current-only, no default/overclocked
+        /// pair. Only entries with clock_type < 2 convert; any masked entry
+        /// with type >= 2 makes the whole V1/V2 call return -9.
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1 {
             /// 0 = core V/F curve, 1 = memory (mirrors V3 clock_type).
             pub clock_type: u32,

@@ -1149,6 +1149,14 @@ impl Gpu {
     pub fn oem_oc_scanner_revert(&self) -> nvapi::Result<()> {
         self.gpu.oem_oc_scanner_revert().map_err(Into::into)
     }
+
+    /// Query the last OC scanner run status. Returns Ok(()) if idle/has-
+    /// result, or an error status (busy/scanning, not-supported, etc.).
+    /// Per-point results are not available through this call — they arrive
+    /// via the Register callback (not yet wired in the hi layer).
+    pub fn oem_oc_scanner_status(&self) -> nvapi::Result<()> {
+        self.gpu.oem_oc_scanner_status().map_err(Into::into)
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

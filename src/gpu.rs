@@ -2740,6 +2740,25 @@ impl PhysicalGpu {
         self.oem_oc_scanner_call(false, false, true)
     }
 
+    /// Query the last OC scanner run status (NDA 0x593E8E72). Uses the same
+    /// 68-byte control struct (magic 0x10044). Returns a status code
+    /// describing the scanner state: OK = idle/has-result, -104 = busy/
+    /// scanning, -1 = generic error, -191 = not-on-bus. Per IDA this is a
+    /// STATUS-ONLY call — it does NOT write per-point results into the
+    /// struct; per-point data arrives via the Register callback.
+    pub fn oem_oc_scanner_status(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.oem_oc_scanner_status()");
+        let mut buf = [0u8; 68];
+        buf[..4].copy_from_slice(&0x10044u32.to_ne_bytes());
+        let st = unsafe {
+            sys::api::private::NvAPI_GPU_ClientGetLastOcScannerResults(
+                self.0,
+                buf.as_mut_ptr() as *mut _,
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientGetLastOcScannerResults, st)
+    }
+
     /// GC6 / RTD3 force-wake control (NDA 0xD387D414). Commands the RM driver
     /// to query (cmd=0), force-sleep (cmd=1), or force-wake (cmd=2) the dGPU's
     /// GC6 power state. Returns the driver-decoded `result` state

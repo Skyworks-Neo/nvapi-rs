@@ -28,7 +28,6 @@ nvenum_display! {
     IlluminationAttrib => {
         LogoBrightness = "Logo",
         SliBrightness = "SLI Bridge",
-        _ = _,
     }
 }
 

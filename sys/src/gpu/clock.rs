@@ -634,8 +634,20 @@ pub mod private {
     nvapi! {
         /// Undocumented (NDA, ID 0x1CB41116). Register a status callback
         /// for the driver-side OC scanner. 152-byte struct, magic 0x10098,
-        /// callback fn pointer at +0x50.
+        /// callback fn pointer at +0x78 (cookie at +0x30, validity at +0x50).
         pub unsafe fn NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(hPhysicalGPU: NvPhysicalGpuHandle, pRegister: *mut NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0x593E8E72). Query the last OC scanner
+        /// run status. Uses the SAME 68-byte control struct as Start
+        /// (magic 0x10044). Per IDA (nvapi64_impl handler 0x180071B80):
+        /// this is a STATUS-ONLY call — it returns an NVAPI status code
+        /// describing the scanner state (OK = idle/has-result, busy/timeout
+        /// = scanning, etc.) but does NOT write per-point results into the
+        /// struct. Per-point result data flows through the Register callback
+        /// (eventType 1, ~9KB payload) or the internal selector-2002 RPC.
+        pub unsafe fn NvAPI_GPU_ClientGetLastOcScannerResults(hPhysicalGPU: NvPhysicalGpuHandle, pScanner: *mut NV_GPU_OC_SCANNER_CONTROL) -> NvAPI_Status;
     }
 
     // ------------------------------------------------------------------
