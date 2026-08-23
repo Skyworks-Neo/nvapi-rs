@@ -2664,6 +2664,82 @@ impl PhysicalGpu {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Driver-side ("OEM"/NVIDIA) OC Scanner control — the family MSI's
+    // MSIOCScanner uses on drivers >= 455.00 instead of the legacy
+    // user-mode scanner.dll. The scan runs INSIDE the driver; user mode
+    // only starts/stops/reverts it and observes results on the V/F curve.
+    // 68-byte control struct, version magic 0x10044; per the MSIOCScanner
+    // host the payload beyond the version is left zeroed.
+    // ------------------------------------------------------------------
+
+    fn oem_oc_scanner_call(
+        &self,
+        start: bool,
+        stop: bool,
+        revert: bool,
+    ) -> crate::NvapiResult<()> {
+        trace!("gpu.oem_oc_scanner_call(start={start}, stop={stop}, revert={revert})");
+        let mut buf = [0u8; 68];
+        buf[..4].copy_from_slice(&0x10044u32.to_ne_bytes());
+        let (id, st) = if start {
+            (
+                sys::Api::NvAPI_GPU_ClientStartOcScanner,
+                unsafe {
+                    sys::api::private::NvAPI_GPU_ClientStartOcScanner(
+                        self.0,
+                        buf.as_mut_ptr() as *mut _,
+                    )
+                },
+            )
+        } else if stop {
+            (
+                sys::Api::NvAPI_GPU_ClientStopOcScanner,
+                unsafe {
+                    sys::api::private::NvAPI_GPU_ClientStopOcScanner(
+                        self.0,
+                        buf.as_mut_ptr() as *mut _,
+                    )
+                },
+            )
+        } else if revert {
+            (
+                sys::Api::NvAPI_GPU_ClientRevertOc,
+                unsafe {
+                    sys::api::private::NvAPI_GPU_ClientRevertOc(
+                        self.0,
+                        buf.as_mut_ptr() as *mut _,
+                    )
+                },
+            )
+        } else {
+            return Err(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClientStartOcScanner,
+                crate::Status::Error,
+            ));
+        };
+        crate::status_result(id, st)
+    }
+
+    /// Start the driver-side OC scanner (NDA 0xBC4AEE25). Fire-and-forget:
+    /// the driver scans in the background and applies the resulting V/F
+    /// offsets itself. Progress reporting (the 0x1CB41116 callback) is not
+    /// wired; observe completion via the V/F curve.
+    pub fn oem_oc_scanner_start(&self) -> crate::NvapiResult<()> {
+        self.oem_oc_scanner_call(true, false, false)
+    }
+
+    /// Stop the driver-side OC scanner (NDA 0xC28B73DE).
+    pub fn oem_oc_scanner_stop(&self) -> crate::NvapiResult<()> {
+        self.oem_oc_scanner_call(false, true, false)
+    }
+
+    /// Revert the OC applied by the driver-side scanner (NDA 0xCC727B22) —
+    /// restores the pre-scan curve.
+    pub fn oem_oc_scanner_revert(&self) -> crate::NvapiResult<()> {
+        self.oem_oc_scanner_call(false, false, true)
+    }
+
     /// GC6 / RTD3 force-wake control (NDA 0xD387D414). Commands the RM driver
     /// to query (cmd=0), force-sleep (cmd=1), or force-wake (cmd=2) the dGPU's
     /// GC6 power state. Returns the driver-decoded `result` state

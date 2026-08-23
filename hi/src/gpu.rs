@@ -1133,6 +1133,22 @@ impl Gpu {
             .set_vfp_table(info, iter::empty(), iter::empty())
             .map_err(Into::into)
     }
+
+    // Driver-side ("OEM"/NVIDIA) OC Scanner control — the family MSI's
+    // MSIOCScanner drives on drivers >= 455.00. The scan runs inside the
+    // driver; these are thin start/stop/revert controls. See
+    // `PhysicalGpu::oem_oc_scanner_start` for the RE provenance.
+    pub fn oem_oc_scanner_start(&self) -> nvapi::Result<()> {
+        self.gpu.oem_oc_scanner_start().map_err(Into::into)
+    }
+
+    pub fn oem_oc_scanner_stop(&self) -> nvapi::Result<()> {
+        self.gpu.oem_oc_scanner_stop().map_err(Into::into)
+    }
+
+    pub fn oem_oc_scanner_revert(&self) -> nvapi::Result<()> {
+        self.gpu.oem_oc_scanner_revert().map_err(Into::into)
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
