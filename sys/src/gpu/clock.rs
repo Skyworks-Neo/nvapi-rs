@@ -555,6 +555,78 @@ pub mod private {
     }
 
     // ------------------------------------------------------------------
+    // Driver-side OC Scanner family (NDA). RE'd from MSI's MSIOCScanner_x64
+    // host (reverse/msiafterburner/Bundle/OCScanner): on drivers >= 455.00
+    // the legacy user-mode scanner.dll is bypassed entirely — the host calls
+    // ClientStartOcScanner and the DRIVER performs the scan, reporting
+    // progress through the RegisterForOcScannerStatusUpdates callback.
+    // Start/Stop/Revert all take the same 68-byte struct (magic 0x10044,
+    // zeroed then version-stamped by the host; fields opaque). The register
+    // call takes a 152-byte struct (magic 0x10098) whose qword at +0x50 is
+    // the status callback function pointer. There is also
+    // ClientGetLastOcScannerResults 0x593E8E72 (registered in nvid.rs,
+    // layout unknown — not bound).
+    // ------------------------------------------------------------------
+
+    nvstruct! {
+        /// Driver-side OC Scanner control (RE'd from MSIOCScanner; NDA).
+        /// 68 bytes, version magic 0x10044 (v1). Fields beyond the version
+        /// are opaque — the host zeroes the buffer and stamps the magic.
+        pub struct NV_GPU_OC_SCANNER_CONTROL_V1 {
+            pub version: NvVersion,
+            pub pad: Padding<[u8; 64]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_OC_SCANNER_CONTROL NV_GPU_OC_SCANNER_CONTROL_V1(1) = 68 }
+
+    nvstruct! {
+        /// OC Scanner status-update registration (RE'd from MSIOCScanner;
+        /// NDA). 152 bytes, version magic 0x10098 (v1). The callback
+        /// function pointer sits at byte offset 0x50; its exact signature
+        /// is not yet recovered (the host passes a plain fn pointer) — typed
+        /// here as a no-arg placeholder, cast at the call site.
+        pub struct NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1 {
+            pub version: NvVersion,
+            pub pad0: Padding<[u8; 76]>,
+            /// Status callback (offset 0x50). Signature unknown; see doc above.
+            pub callback: Option<unsafe extern "system" fn()>,
+            pub pad1: Padding<[u8; 64]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1(1) = 152 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xBC4AEE25). Start the DRIVER-side OC
+        /// scanner (drivers >= 455.00). 68-byte control struct, magic
+        /// 0x10044. Progress arrives via the RegisterForOcScannerStatusUpdates
+        /// callback. The legacy path (NVIDIA's scanner.dll) is only used on
+        /// pre-455 drivers or when forced.
+        pub unsafe fn NvAPI_GPU_ClientStartOcScanner(hPhysicalGPU: NvPhysicalGpuHandle, pScanner: *mut NV_GPU_OC_SCANNER_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xC28B73DE). Stop the driver-side OC
+        /// scanner. Same 68-byte control struct as the start call.
+        pub unsafe fn NvAPI_GPU_ClientStopOcScanner(hPhysicalGPU: NvPhysicalGpuHandle, pScanner: *mut NV_GPU_OC_SCANNER_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xCC727B22). Revert the OC applied by the
+        /// driver-side scanner (back to the pre-scan curve). Same 68-byte
+        /// control struct.
+        pub unsafe fn NvAPI_GPU_ClientRevertOc(hPhysicalGPU: NvPhysicalGpuHandle, pRevert: *mut NV_GPU_OC_SCANNER_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0x1CB41116). Register a status callback
+        /// for the driver-side OC scanner. 152-byte struct, magic 0x10098,
+        /// callback fn pointer at +0x50.
+        pub unsafe fn NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(hPhysicalGPU: NvPhysicalGpuHandle, pRegister: *mut NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM) -> NvAPI_Status;
+    }
+
+    // ------------------------------------------------------------------
     // PerfPstatesGetInfoPrivate (NDA, ID 0x7B30AE0D) — the P-State level
     // table behind the ref tool's `-pstate` GET ("Level[N] P*.Max/P*.Min").
     //
