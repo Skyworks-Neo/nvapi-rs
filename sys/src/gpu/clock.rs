@@ -259,6 +259,31 @@ pub mod private {
 
     nvversion! { @=NV_GPU_CLOCK_EFFECTIVE_INFO NV_GPU_CLOCK_INFO_V2(2) }
 
+    nvstruct! {
+        /// GetAllClockFrequencies V3 "compact" variant (magic 0x30108, 264B),
+        /// discovered in AmpereOC (sub_14005C998). `mode` selects the table:
+        /// 1 = BASE clocks, 2 = BOOST clocks. 8 slots of {valid, value_kHz}
+        /// at 32-byte stride: slot[0] = core (kHz), slot[1] = memory (kHz).
+        /// The driver ORs status flags into `mode` on return
+        /// (0x0800_0001 / 0x0900_0002 observed on Ada mobile).
+        /// Live-verified 4060L: base 2175/8001 MHz, boost 2370/8001 MHz.
+        pub struct NV_GPU_CLOCK_INFO_V3_COMPACT {
+            pub version: NvVersion,
+            pub mode: u32,
+            pub slots: Array<[NV_GPU_CLOCK_INFO_V3_SLOT; 8]>,
+        }
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_CLOCK_INFO_V3_SLOT {
+            pub valid: u32,
+            pub value_kHz: u32,
+            pub reserved: Padding<[u32; 6]>,
+        }
+    }
+
+    nvversion! { NV_GPU_CLOCK_INFO_V3_COMPACT(3) = 0x108 }
+
     // Note: GetAllClocks (ID 0x1bd69f49) is FFI-bound once above with the V1
     // `NV_CLOCKS_INFO` pointer type. The V2 effective-clocks layout uses the
     // SAME function ID — callers pass a `*mut NV_GPU_CLOCK_INFO_V2` (cast to

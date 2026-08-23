@@ -189,6 +189,14 @@ impl VoltRails {
     }
 }
 
+/// Mode selector for the GetAllClockFrequencies V3 compact table
+/// ([`PhysicalGpu::base_boost_clocks`]).
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BaseBoostMode {
+    Base = 1,
+    Boost = 2,
+}
+
 impl PhysicalGpu {
     pub fn handle(&self) -> &sys::handles::NvPhysicalGpuHandle {
         &self.0
@@ -622,6 +630,31 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_GetAllClocks, status)
             .map_err(Into::into)
             .map(|_| crate::clock::all_clocks_from_raw(&data))
+    }
+
+    /// Base/boost clock pairs via GetAllClockFrequencies V3 compact (ID
+    /// 0xDCB616C3, magic 0x30108 — discovered in AmpereOC). `mode` selects
+    /// the table: 1 = base, 2 = boost. slot[0] = core kHz, slot[1] = memory
+    /// kHz. Live-verified on Ada mobile (4060L: base 2175/8001 MHz, boost
+    /// 2370/8001 MHz). Returns `(core_kHz, memory_kHz)` for the mode.
+    pub fn base_boost_clocks(
+        &self,
+        mode: BaseBoostMode,
+    ) -> crate::NvapiResult<(u32, u32)> {
+        trace!("gpu.base_boost_clocks({mode:?})");
+        let mut data = unsafe { std::mem::zeroed::<clock::private::NV_GPU_CLOCK_INFO_V3_COMPACT>() };
+        data.version = NvVersion::new(0x108, 3);
+        data.mode = mode as u32;
+        let status = unsafe {
+            sys::api::NvAPI_GPU_GetAllClockFrequencies(self.0, ptr::from_mut(&mut data).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetAllClockFrequencies, status)
+            .map_err(Into::into)
+            .map(|_| {
+                let core = data.slots[0].value_kHz;
+                let mem = data.slots[1].value_kHz;
+                (core, mem)
+            })
     }
 
     /// Per-channel / per-rail power via PowerMonitor v4 GetInfo + v1 GetStatus
