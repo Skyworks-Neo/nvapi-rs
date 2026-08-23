@@ -32,6 +32,9 @@ pub mod power;
 
 pub mod display;
 
+/// GPU illumination (LED brightness) query/control
+pub mod illumination;
+
 /// ECC memory error information
 pub mod ecc;
 

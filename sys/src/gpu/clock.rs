@@ -134,15 +134,15 @@ pub mod private {
 
         /// Undocumented function. Probably deprecated and replaced with [NvAPI_GPU_GetAllClockFrequencies()](super::NvAPI_GPU_GetAllClockFrequencies)
         ///
-        /// ```
+        /// ```text
         /// memory_clock = clocks[8] * 0.001f;
         ///
         /// if clocks[30] != 0 {
-        /// core_clock = clocks[30] * 0.0005f
-        /// shader_clock = clocks[30] * 0.001f
+        /// core_clock = clocks[30] * 0.0005f;
+        /// shader_clock = clocks[30] * 0.001f;
         /// } else {
-        /// core_clock = clocks[0] * 0.001f
-        /// shader_clock = clocks[14] * 0.001f
+        /// core_clock = clocks[0] * 0.001f;
+        /// shader_clock = clocks[14] * 0.001f;
         /// }
         /// ```
         pub unsafe fn NvAPI_GPU_GetAllClocks;
@@ -324,6 +324,19 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClockClientClkVfPointsSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pClockTable: *const NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL) -> NvAPI_Status;
     }
 
+    // IDA R610.74 impl (sub_180204C30, the 0x928 ClkDomainsGetInfo fill
+    // loop): user entry i is 72 bytes at struct+0x28; the handler copies
+    // RM record dwords @+80/+84 into entry+0x28/+0x2C (rangeMax/Min) and
+    // TWO SEPARATE BYTES @+88/+89 into entry+0x30/+0x31 — MinerLamp's
+    // `tempMax i32` reading of the same dword is wrong (only 2 bytes are
+    // written, +0x32/+0x33 stay zero). The byte pair is confirmed to be
+    // the domain's V/F-point index bounds: the public VfPoints SetControl
+    // (sub_1802071C0) gates per-point scaling on
+    // `point >= rec[88] && point <= rec[89]`. `disabled`@entry+0 is the
+    // inverted RM type byte@+64: 1 = domain present without range info
+    // (type 0), 0 = range + vfp-index fields filled (type 1); any other
+    // type byte aborts the whole call with -180. clockType@entry+4 is
+    // filled by sub_1801FF320 from the RM domain id @rec+68.
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_ENTRY {
             pub disabled: u32,

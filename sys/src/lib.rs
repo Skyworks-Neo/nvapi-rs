@@ -60,6 +60,7 @@ pub mod api {
     pub use crate::gpu::cooler::*;
     pub use crate::gpu::display::*;
     pub use crate::gpu::ecc::*;
+    pub use crate::gpu::illumination::*;
 
     pub use crate::gpu::pstate::*;
     pub use crate::gpu::thermal::*;
