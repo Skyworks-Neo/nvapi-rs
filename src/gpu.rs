@@ -899,7 +899,19 @@ impl PhysicalGpu {
             ..Default::default()
         };
 
-        unsafe { nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetControl@get{data}(self.0) => err) }
+        let v2 = unsafe { nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetControl@get{data}(self.0) => err) };
+        if v2.is_ok() {
+            return v2;
+        }
+        // V1 magic fallback (0x12420, ver1/9248B): the impl handler accepts
+        // BOTH (ver−0x12420)&0xFFFEFFFF==0 → ver1 and ver2; AmpereOC and
+        // HYDRA both send ver1. Same layout, only the version stamp differs.
+        let mut v1 = unsafe { std::mem::zeroed::<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL>() };
+        use crate::sys::nvapi::VersionedStruct;
+        *v1.nvapi_version_mut() =
+            NvVersion::with_version(1 << 16 | 9248);
+        v1.mask = info.mask.mask;
+        unsafe { nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetControl@get{v1}(self.0) => err) }
     }
 
     pub fn vfp_table(&self, info: &VfpInfo) -> crate::Result<crate::clock::ClockTable> {

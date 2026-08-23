@@ -22,8 +22,9 @@ pub mod private {
     nvstruct! {
         pub struct NV_GPU_CLIENT_VOLT_RAILS_CONTROL_V1 {
             pub version: NvVersion,
-            /// uiDelta
-            pub percent: u32, // apparently actually i32?
+            /// uiDelta — unsigned percent of boost range, clamped [0, 100]
+            /// (AmpereOC + HYDRA both treat as unsigned; never negative).
+            pub percent: u32,
             pub unknown: Padding<[u32; 8]>,
         }
     }

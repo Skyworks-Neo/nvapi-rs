@@ -1055,6 +1055,27 @@ impl VfpCurve {
     ) -> crate::Result<Self> {
         Self::from_raw_v3(raw, info)
     }
+
+    /// V3 primary with V1 fallback. The medium `vfp_curve` inlines the same
+    /// logic (V3 GET → on failure V1 GET with ver2 magic → `from_raw_v1`);
+    /// this helper exists for callers that already hold both raw buffers.
+    /// V1 entries are 28-byte {clock_type, region, freq_kHz@+8,
+    /// voltage_uV@+12} — current-only, region-tagged (0=core/1=memory).
+    pub fn from_raw_versioned(
+        v3: Option<&power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS>,
+        v1: Option<&power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>,
+        info: &VfpInfo,
+    ) -> crate::Result<Self> {
+        if let Some(raw) = v3 {
+            if let Ok(curve) = Self::from_raw_v3(raw, info) {
+                return Ok(curve);
+            }
+        }
+        if let Some(raw) = v1 {
+            return Self::from_raw_v1(raw, info);
+        }
+        Err(crate::Error::ArgumentRange(Default::default()))
+    }
 }
 
 impl RawConversion for power::private::NV_GPU_CLIENT_VOLT_RAILS_STATUS_V1 {
