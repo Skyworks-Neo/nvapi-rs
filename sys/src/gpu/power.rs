@@ -495,6 +495,59 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClientPowerPoliciesSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPowerStatus: *const NV_GPU_CLIENT_POWER_POLICIES_STATUS) -> NvAPI_Status;
     }
 
+    // ClientPowerModes — NVIDIA App's power-MODE switcher (the UI's
+    // Balanced/Max toggle), parallel to the PowerPolicies family above.
+    // RE'd from NVIDIA App nvxdapix.dll; all three live-RESOLVED on
+    // Windows R610.74 via the standard nvapi64 → nvapi64_impl chain.
+
+    nvenum! {
+        pub enum NV_GPU_CLIENT_POWER_MODE_ID / ClientPowerMode {
+            NV_GPU_CLIENT_POWER_MODE_ID_BALANCED / Balanced = 0,
+            NV_GPU_CLIENT_POWER_MODE_ID_MAX / Max = 1,
+        }
+    }
+
+    nvenum_display! {
+        ClientPowerMode => _
+    }
+
+    nvstruct! {
+        /// ClientPowerModes GetInfo (magic 0x1150C = v1 | 5388B).
+        /// Layout not yet probe-verified; fields opaque.
+        pub struct NV_GPU_CLIENT_POWER_MODES_INFO_V1 {
+            pub version: NvVersion,
+            pub flags: u32,
+            pub rest: Padding<[u32; 1345]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_POWER_MODES_INFO NV_GPU_CLIENT_POWER_MODES_INFO_V1(1) = 5388 }
+
+    nvstruct! {
+        /// ClientPowerModes Get/SetControl (magic 0x1100C = v1 | 4108B):
+        /// the active power-mode selector.
+        pub struct NV_GPU_CLIENT_POWER_MODES_CONTROL_V1 {
+            pub version: NvVersion,
+            pub flags: u32,
+            pub mode: NV_GPU_CLIENT_POWER_MODE_ID,
+            pub rest: Padding<[u32; 1024]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_POWER_MODES_CONTROL NV_GPU_CLIENT_POWER_MODES_CONTROL_V1(1) = 4108 }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_ClientPowerModesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_POWER_MODES_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_ClientPowerModesGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_CLIENT_POWER_MODES_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_ClientPowerModesSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_CLIENT_POWER_MODES_CONTROL) -> NvAPI_Status;
+    }
+
     nvapi! {
         /// Undocumented (NDA-private, ID 0x1504FC3D). PPAB / Dynamic-Boost
         /// controller enable. `active` = 0 disables, non-zero enables. This is a
