@@ -24,9 +24,11 @@ pub use nvapi::{
     ClockLockEntry, ClockLockValue, ComputeCapabilities, ConnectedIdsFlags, CoolerControl,
     CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings, CoolerStatus, CoolerTarget,
     CoolerType, DisplayId, DriverModel, EccErrors, EffectiveClocks, FanArbiterControl,
-    FanArbiterStatus, FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta,
+    FanArbiterStatus, FanCoolerId, FanCurve, FanCurvePoint, Foundry, GpuType, Kibibytes,
+    Kilohertz, KilohertzDelta,
     MemoryInfo, Microvolts, MicrovoltsDelta, PState, PStateNativeLock, PciIdentifiers, Percentage,
-    PerfInfo, PerfLimitId, PerfStatus, PerformanceDecreaseReason, PffCurve, PffPoint, PhysicalGpu,
+    PerfFreqCap, PerfFreqCapEntry, PerfInfo, PerfLimitId, PerfStatus, PerformanceDecreaseReason,
+    PffCurve, PffPoint, PhysicalGpu,
     PowerMonitor, PowerRails, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType,
     ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalTarget, UtilizationDomain,
     Utilizations, Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
@@ -933,6 +935,20 @@ impl Gpu {
     /// `-pstate:<index>` SETTER). See [`nvapi::PStateNativeLock`].
     pub fn set_pstate_native(&self, lock: nvapi::PStateNativeLock) -> nvapi::Result<()> {
         self.gpu.set_pstate_native(lock).map_err(Into::into)
+    }
+
+    /// Set the GPU frequency perf-cap (NDA 0x32CA4983, the ref tool
+    /// `-gpuclk:<MHz>` SETTER). Clamps the perf max/min frequency to a cap
+    /// value — NOT an offset, NOT a P-state lock. See [`nvapi::PerfFreqCap`].
+    pub fn set_perf_freq_cap(&self, cap: nvapi::PerfFreqCap) -> nvapi::Result<()> {
+        self.gpu.set_perf_freq_cap(cap).map_err(Into::into)
+    }
+
+    /// Read back the active GPU frequency perf-caps (NDA 0xEFCEDD1F). Returns
+    /// one [`nvapi::PerfFreqCapEntry`] per active cap (max/min). Empty where
+    /// the driver doesn't expose the private interface.
+    pub fn perf_freq_caps(&self) -> nvapi::Result<Vec<nvapi::PerfFreqCapEntry>> {
+        self.gpu.perf_freq_caps().map_err(Into::into)
     }
 
     /// Force the dGPU out of GC6 / GCOFF — the one-shot wake (NDA 0x55590CB2).

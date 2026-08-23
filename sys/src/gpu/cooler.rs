@@ -628,4 +628,108 @@ pub mod private {
 
         pub unsafe fn NvAPI_GPU_ClientFanCoolersSetControl;
     }
+
+    // One user-editable temperature→RPM point of the CURVE table. Layout RE'd
+    // byte-for-byte from GPUMon.exe setFanCurve/pollFanCurve and cross-checked
+    // against the nvapi64_impl.dll ObjInfo handler for the ClientFanPolicies
+    // {Get,Set}Control pair. The driver's Set handler enforces strict
+    // monotonicity across all three dword lanes (temp, reserved, rpm) plus
+    // per-point ordering — a non-increasing curve returns -5.
+    nvstruct! {
+        pub struct NV_GPU_CLIENT_FAN_POLICIES_POINT_V1 {
+            /// input temperature, Q8.8 fixed-point (celsius × 256) — the
+            /// GPUMon dialog stores `temp << 8` here and reads it back as
+            /// `(x + 128) >> 8`.
+            pub temp_q8: u32,
+            /// reserved lane — GPUMon never writes it (kept from the GET
+            /// snapshot); the driver still requires it monotonic.
+            pub reserved: u32,
+            /// target fan speed, Q16 scaled (RPM × 65536/100); GPUMon reads
+            /// it back as `(x * 100 + 32768) / 65536`.
+            pub rpm_q16: u32,
+        }
+    }
+
+    // One fan-curve slot (temperature→RPM points) in the control table.
+    // 52 bytes — the per-curve stride GPUMon and the impl handler share.
+    nvstruct! {
+        pub struct NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1 {
+            /// curve slot index (byte @ slot+0, abs +20)
+            pub index: u8,
+            pub padding: Padding<[u8; 3]>,
+            /// three monotonic (temp, rpm) points, each 12 bytes
+            pub points: Array<[NV_GPU_CLIENT_FAN_POLICIES_POINT_V1; 3]>,
+            pub tail: Padding<[u8; 12]>,
+        }
+    }
+
+    /// Undocumented client fan-policy curve table (structure magic `0x200DC`;
+    /// legacy sibling `0x10038`). RE'd from GPUMon.exe (`setFanCurve`, pane
+    /// "DialogFanCurve") and nvapi64_impl.dll — both GET and SET marshal the
+    /// same table through RM escape `0x07000198`. To change one curve you GET
+    /// a snapshot, edit the slot (`+20 + 52·k`), then SET it back (RMW).
+    /// `count` ≤ 4 curves; "Next Curve" in GPUMon just cycles `(idx+1) % count`.
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
+    pub struct NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
+        /// structure magic — `0x200DC`
+        pub version: u32,
+        /// curve count (byte; driver rejects > 4)
+        pub count: u8,
+        pub header: Padding<[u8; 15]>,
+        /// up to 4 curve slots, each 52 bytes
+        pub curves: Array<[NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1; 4]>,
+    }
+
+    unsafe impl zerocopy::AsBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {}
+    }
+    unsafe impl zerocopy::FromBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {}
+    }
+
+    /// Versionless alias used by the NVAPI function signatures (this NDA
+    /// structure is magic-numbered, not size-versioned like public NVAPI V1s).
+    pub type NV_GPU_CLIENT_FAN_POLICIES_CONTROL = NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1;
+
+    impl NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
+        /// The `0x200DC` structure magic for `ClientFanPolicies{Get,Set}Control`.
+        pub const MAGIC: u32 = 0x200DC;
+
+        pub fn new() -> Self {
+            Self {
+                version: Self::MAGIC,
+                count: 0,
+                header: Padding { data: [0u8; 15] },
+                curves: Padding {
+                    data: [NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1 {
+                        index: 0,
+                        padding: Padding { data: [0u8; 3] },
+                        points: Padding {
+                            data: [NV_GPU_CLIENT_FAN_POLICIES_POINT_V1 {
+                                temp_q8: 0,
+                                reserved: 0,
+                                rpm_q16: 0,
+                            }; 3],
+                        },
+                        tail: Padding { data: [0u8; 12] },
+                    }; 4],
+                },
+            }
+        }
+    }
+
+    nvapi! {
+        pub type GPU_ClientFanPoliciesGetControlFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_CLIENT_FAN_POLICIES_CONTROL) -> NvAPI_Status;
+
+        /// Undocumented. Fills the fan-curve table (version `0x200DC`).
+        pub unsafe fn NvAPI_GPU_ClientFanPoliciesGetControl;
+    }
+
+    nvapi! {
+        pub type GPU_ClientFanPoliciesSetControlFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_CLIENT_FAN_POLICIES_CONTROL) -> NvAPI_Status;
+
+        /// Undocumented. Writes the fan-curve table (version `0x200DC`).
+        pub unsafe fn NvAPI_GPU_ClientFanPoliciesSetControl;
+    }
 }

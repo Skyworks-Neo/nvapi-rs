@@ -2682,8 +2682,6 @@ impl PhysicalGpu {
 
         let mut buf = vec![0u8; PERF_LIMITS_SIZE];
         buf[..4].copy_from_slice(&PERF_LIMITS_MAGIC.to_ne_bytes());
-        // GPUMon writes the info count into the large struct's count slot
-        // before the GET; the driver fills the entries.
         buf[PERF_LIMITS_OFF_COUNT..PERF_LIMITS_OFF_COUNT + 4]
             .copy_from_slice(&count.to_ne_bytes());
         unsafe {
@@ -2700,11 +2698,18 @@ impl PhysicalGpu {
             if base + PERF_LIMITS_OFF_LOCKED + 1 > buf.len() {
                 break;
             }
-            out.push(PerfFreqCapEntry {
+            let entry = PerfFreqCapEntry {
                 type_marker: read_u32(&buf, base + PERF_LIMITS_OFF_TYPE),
                 freq_khz: read_u32(&buf, base + PERF_LIMITS_OFF_FREQ),
                 locked: buf[base + PERF_LIMITS_OFF_LOCKED] != 0,
-            });
+            };
+            // Skip empty slots: the driver returns a large count (the struct's
+            // full capacity) but only a few entries are active caps. Mirror
+            // GPUMon's isPStateLocked, which only acts on entries where the
+            // locked flag / type / freq are non-zero.
+            if entry.locked || entry.type_marker != 0 || entry.freq_khz != 0 {
+                out.push(entry);
+            }
         }
         Ok(out)
     }
@@ -3542,6 +3547,82 @@ impl PhysicalGpu {
 
         self.cooler_settings_()
             .map(|c| c.into_iter().map(|(i, c)| (i, c.control)).collect())
+    }
+
+    /// Read the GPU fan-curve table (`ClientFanPoliciesGetControl` NDA
+    /// 0xE543C540, structure magic `0x200DC`). RE'd from GPUMon.exe
+    /// `pollFanCurve`: one table snapshot holds up to 4 curve slots, each
+    /// with 3 monotonic (temperature, RPM) points. Returns one `FanCurve`
+    /// per slot reported by the driver's `count` byte.
+    ///
+    /// Point encodings (matching GPUMon's dialog round-trip): temperature
+    /// stored Q8.8 (`temp << 8`, read back as `(x + 128) >> 8`), RPM stored
+    /// Q16-scaled (`(x * 100 + 32768) / 65536`).
+    pub fn fan_curves(&self) -> crate::NvapiResult<Vec<FanCurve>> {
+        trace!("gpu.fan_curves()");
+
+        let raw = unsafe {
+            nvcall!(NvAPI_GPU_ClientFanPoliciesGetControl@get{
+                cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new()
+            }(self.0))?
+        };
+
+        let count = raw.count.min(4) as usize;
+        let mut out = Vec::with_capacity(count);
+        for k in 0..count {
+            let curve = &raw.curves[k];
+            let mut points = Vec::with_capacity(3);
+            for p in &curve.points[..3] {
+                points.push(FanCurvePoint {
+                    temp_c: ((p.temp_q8.wrapping_add(128)) >> 8) as u16,
+                    rpm: (p.rpm_q16 as u64 * 100).div_ceil(65536) as u32,
+                });
+            }
+            out.push(FanCurve { index: curve.index, points });
+        }
+        Ok(out)
+    }
+
+    /// Set one fan-curve slot (`ClientFanPoliciesSetControl` NDA 0xC181947A,
+    /// structure magic `0x200DC`). RE'd from GPUMon.exe `setFanCurve`: mirror
+    /// the RMW protocol — GET the current table, overwrite the `index` slot's
+    /// three (temperature, RPM) points, SET the whole table back. This leaves
+    /// the driver-owned reserved lane untouched.
+    ///
+    /// The driver's Set handler enforces **strict monotonicity** on all three
+    /// dword lanes (temperature must increase across points, RPM must
+    /// increase, reserved must increase) — pass an increasing curve or you
+    /// get `NvapiError(-5)`. Curves are typically only settable on desktop
+    /// boards (mobile laptops drive their fans through the EC, not NVAPI).
+    pub fn set_fan_curve(&self, curve: &FanCurve) -> crate::NvapiResult<()> {
+        trace!("gpu.set_fan_curve({:?})", curve);
+        if curve.points.len() > 3 {
+            return Err(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClientFanPoliciesSetControl,
+                sys::Status::InvalidArgument,
+            ));
+        }
+
+        let mut raw = unsafe {
+            nvcall!(NvAPI_GPU_ClientFanPoliciesGetControl@get{
+                cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new()
+            }(self.0))?
+        };
+        if curve.index >= 4 {
+            return Err(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClientFanPoliciesSetControl,
+                sys::Status::InvalidArgument,
+            ));
+        }
+        let slot = &mut raw.curves[curve.index as usize];
+        slot.index = curve.index;
+        for (i, p) in curve.points.iter().enumerate() {
+            slot.points[i].temp_q8 = (p.temp_c as u32) << 8;
+            slot.points[i].rpm_q16 = p.rpm * 65536 / 100;
+        }
+        unsafe {
+            nvcall!(NvAPI_GPU_ClientFanPoliciesSetControl(self.0, &raw))
+        }
     }
 
     pub fn getcooler_settings(
@@ -4612,7 +4693,7 @@ pub(super) const PERF_LIMITS_ENTRY1_BASE: usize = 0x490; // = 0x2C + 0x464
 pub(super) const PERF_LIMITS_OFF_TYPE: usize = 0x00; // rel to entry base
 pub(super) const PERF_LIMITS_OFF_ENABLE: usize = 0x30; // rel to entry base
 pub(super) const PERF_LIMITS_OFF_FREQ: usize = 0x58; // rel to entry base
-pub(super) const PERF_LIMITS_OFF_LOCKED: usize = 0x458; // rel to entry base (GET only)
+pub(super) const PERF_LIMITS_OFF_LOCKED: usize = 0x458; // rel to entry base (GET only; struct+0x484)
 // SET type markers (entry0=max, entry1=min).
 pub(super) const PERF_LIMITS_TYPE_MAX: u32 = 0x58;
 pub(super) const PERF_LIMITS_TYPE_MIN: u32 = 0x5B;
@@ -4670,6 +4751,32 @@ impl VfpInfo {
             }
         })
     }
+}
+
+/// One temperature→RPM point of a GPU fan curve (`ClientFanPolicies` table,
+/// structure magic `0x200DC`). RE'd from GPUMon.exe's `DialogFanCurve` pane:
+/// the dialog edits three monotonic (temp, RPM) pairs per curve slot, and the
+/// driver's Set handler rejects non-strictly-increasing input with -5.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FanCurvePoint {
+    /// input temperature in °C (stored in the driver struct as Q8.8, ×256)
+    pub temp_c: u16,
+    /// target fan speed in RPM (stored Q16, ×65536/100)
+    pub rpm: u32,
+}
+
+/// A single fan-curve slot as reported by [`PhysicalGpu::fan_curves`] /
+/// targeted by [`PhysicalGpu::set_fan_curve`]. The table holds up to 4 slots
+/// (GPUMon's runtime "Next Curve" cycles `(idx + 1) % count`); `count` — the
+/// table's first byte after the magic — is the authoritative curve count.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FanCurve {
+    /// curve slot index
+    pub index: u8,
+    /// 3 monotonic (temperature, RPM) points
+    pub points: Vec<FanCurvePoint>,
 }
 
 /// Little-endian u32 write at a byte offset (heap-backed NVAPI struct helper).
@@ -4846,5 +4953,56 @@ mod perflimits_tests {
         assert_eq!(entries[1].type_marker, 0x49);
         assert_eq!(entries[1].freq_khz, 200_000);
         assert!(!entries[1].locked);
+    }
+}
+
+#[cfg(test)]
+mod fan_curve_tests {
+    use super::*;
+
+    /// The `0x200DC` curve-table layout RE'd from GPUMon.exe + impl.dll: magic
+    /// at +0, count byte at +4, slots at +20 with a 52-byte stride, each slot's
+    /// 3 points at +4h/+10h/+1Ch (12-byte points, {temp<<8, reserved, rpm}).
+    #[test]
+    fn fan_curve_table_layout() {
+        assert_eq!(cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1::MAGIC, 0x200DC);
+        let mut raw = cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new();
+        raw.version = 0x200DC;
+        raw.count = 1;
+        let slot = &mut raw.curves[0];
+        slot.index = 0;
+        slot.points[0].temp_q8 = 40 << 8;
+        slot.points[0].rpm_q16 = 1200 * 65536 / 100;
+        slot.points[1].temp_q8 = 60 << 8;
+        slot.points[1].rpm_q16 = 2000 * 65536 / 100;
+        slot.points[2].temp_q8 = 80 << 8;
+        slot.points[2].rpm_q16 = 3000 * 65536 / 100;
+
+        // The NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 layout is enforced via
+        // its struct definition (repr(C) + Padding<T> wrappers): version u32
+        // + count u8 + 15 header + 4 slot × 52 B. Each slot: index u8 + 3 pad
+        // + 3 point {temp_q8, reserved, rpm_q16} + 12 tail — so point0.temp
+        // lands at struct byte 20 + 4 = 24 and point0.rpm at 20 + 12 = 32.
+        assert_eq!(std::mem::size_of::<cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1>(), 4 + 1 + 15 + 4 * 52);
+        assert_eq!(std::mem::size_of::<cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1>(), 52);
+        assert_eq!(std::mem::offset_of!(cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1, points), 4);
+        assert_eq!(std::mem::offset_of!(cooler::private::NV_GPU_CLIENT_FAN_POLICIES_POINT_V1, rpm_q16), 8);
+    }
+
+    /// Round-trip encoding matches GPUMon's dialog read logic
+    /// ((x + 128) >> 8 for temp, (x*100 + 32768) / 65536 for RPM).
+    #[test]
+    fn fan_curve_encode_roundtrip() {
+        let mut raw = cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new();
+        raw.count = 1;
+        let slot = &mut raw.curves[0];
+        slot.points[0].temp_q8 = 42 << 8;
+        slot.points[0].rpm_q16 = 1600 * 65536 / 100;
+
+        assert_eq!((slot.points[0].temp_q8.wrapping_add(128)) >> 8, 42);
+        assert_eq!(
+            (slot.points[0].rpm_q16 as u64 * 100).div_ceil(65536) as u32,
+            1600
+        );
     }
 }
