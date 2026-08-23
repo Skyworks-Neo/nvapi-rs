@@ -3071,6 +3071,55 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientThermalTargetSetStatus(self.0, &data)) }
     }
 
+    /// Fake the GPU thermal sensor reading so the driver's thermal policy
+    /// (boost/throttle) reacts to a synthetic temperature. Requires VBIOS
+    /// "Secured Overrides" table with `<Temp faking allowed>` enabled;
+    /// otherwise returns `NotSupported` (observed on Ada mobile).
+    /// RE'd from GPUMon.exe + ThermSpyPremium (both use the same 4-arg
+    /// signature on `NvAPI_GPU_SetExtendedThermalSimulationMode`).
+    pub fn set_temp_sim(&self, temperature_celsius: i32) -> crate::NvapiResult<()> {
+        trace!("gpu.set_temp_sim({temperature_celsius} C)");
+        unsafe {
+            nvcall!(NvAPI_GPU_SetExtendedThermalSimulationMode(
+                self.0,
+                0, // flags
+                1, // enable
+                temperature_celsius,
+            ))
+        }
+    }
+
+    /// Disable temperature simulation (restore real sensor reading).
+    pub fn disable_temp_sim(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.disable_temp_sim()");
+        unsafe {
+            nvcall!(NvAPI_GPU_SetExtendedThermalSimulationMode(
+                self.0,
+                0, // flags
+                0, // disable
+                0, // temperature ignored
+            ))
+        }
+    }
+
+    /// Read back the current temperature-simulation state. Returns
+    /// `(enable, temperature_celsius)` when supported.
+    pub fn temp_sim(&self) -> crate::NvapiResult<(bool, i32)> {
+        trace!("gpu.temp_sim()");
+        let mut flags = 0u32;
+        let mut enable = 0u32;
+        let mut temp = 0i32;
+        unsafe {
+            nvcall!(NvAPI_GPU_GetThermalSimulationMode(
+                self.0,
+                &mut flags,
+                &mut enable,
+                &mut temp,
+            ))?
+        };
+        Ok((enable != 0, temp))
+    }
+
     pub fn cooler_info(
         &self,
     ) -> crate::Result<BTreeMap<crate::thermal::FanCoolerId, crate::thermal::CoolerInfo>> {

@@ -295,6 +295,30 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClientThermalPoliciesSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pThermalLimit: *const NV_GPU_CLIENT_THERMAL_POLICIES_STATUS) -> NvAPI_Status;
     }
 
+    // Temperature simulation — fakes the GPU's thermal sensor reading so the
+    // driver's thermal policy (boost/throttle) reacts to a synthetic value.
+    // Requires VBIOS "Secured Overrides" table with <Temp faking allowed>
+    // enabled; otherwise returns NotSupported (confirmed on Ada mobile).
+    // RE'd from GPUMon.exe [GPUHandle::setTempSim/disableTempSim/pollTempSim]
+    // + ThermSpyPremium (both call the same 4-arg signature).
+
+    nvapi! {
+        /// 4-arg: `(hGpu, flags=0, enable: 1=on/0=off, temperature: °C as i32)`.
+        /// Confirmed by GPUMon + Thermspy cross-check. `disableTempSim` =
+        /// same call with enable=0, temp=0.
+        pub unsafe fn NvAPI_GPU_SetExtendedThermalSimulationMode(hPhysicalGPU: NvPhysicalGpuHandle, flags: u32, enable: u32, temperature: i32) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Fallback path (non-extended). Same 4-arg signature per Thermspy.
+        pub unsafe fn NvAPI_GPU_SetThermalSimulationMode(hPhysicalGPU: NvPhysicalGpuHandle, flags: u32, enable: u32, temperature: i32) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Read back the current simulation mode/state.
+        pub unsafe fn NvAPI_GPU_GetThermalSimulationMode(hPhysicalGPU: NvPhysicalGpuHandle, pFlags: *mut u32, pEnable: *mut u32, pTemperature: *mut i32) -> NvAPI_Status;
+    }
+
     nvstruct! {
         #[derive(Default)]
         pub struct NV_GPU_CLIENT_PFF_CURVE_POINT_V1 {
