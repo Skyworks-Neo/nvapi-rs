@@ -1175,6 +1175,21 @@ impl Gpu {
     pub fn enable_dynamic_pstates(&self, enable: u32) -> nvapi::Result<()> {
         self.gpu.enable_dynamic_pstates(enable).map_err(Into::into)
     }
+
+    /// Battery Boost 2.0 enable/disable. Mobile-only. GPUMonCmd `-bb`.
+    pub fn set_bb2_active(&self, enable: bool) -> nvapi::Result<()> {
+        self.gpu.set_bb2_active(enable).map_err(Into::into)
+    }
+
+    /// Whisper Mode 2.0 enable/disable. Mobile-only. GPUMonCmd `-wm`.
+    pub fn set_wm2_active(&self, enable: bool) -> nvapi::Result<()> {
+        self.gpu.set_wm2_active(enable).map_err(Into::into)
+    }
+
+    /// Whisper Mode 2.0 acoustic mode (Quieter/Quiet/Balanced). GPUMonCmd `-wmMode`.
+    pub fn set_wm2_mode(&self, mode: nvapi::sys::gpu::power::private::Wm2AcousticMode) -> nvapi::Result<()> {
+        self.gpu.set_wm2_mode(mode).map_err(Into::into)
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

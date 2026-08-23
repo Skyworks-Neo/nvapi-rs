@@ -374,7 +374,7 @@ pub mod private {
         /// Build a BB2 active on/off control (enable=true → on).
         pub fn bb2_active(enable: bool) -> Self {
             let mut s: Self = unsafe { std::mem::zeroed() };
-            s.version = NvVersion::with_struct::<Self>(1);
+            s.version = NvVersion::with_version(0x104C8);
             s.op = 1;
             s.feature = JpacFeature::Bb2Active;
             s.value = enable as u32;
@@ -384,7 +384,7 @@ pub mod private {
         /// Build a WM2 active on/off control (enable=true → on).
         pub fn wm2_active(enable: bool) -> Self {
             let mut s: Self = unsafe { std::mem::zeroed() };
-            s.version = NvVersion::with_struct::<Self>(1);
+            s.version = NvVersion::with_version(0x104C8);
             s.op = 1;
             s.feature = JpacFeature::Wm2Active;
             s.value = enable as u32;
@@ -394,7 +394,7 @@ pub mod private {
         /// Build a WM2 SL acoustic-mode control.
         pub fn wm2_mode(mode: Wm2AcousticMode) -> Self {
             let mut s: Self = unsafe { std::mem::zeroed() };
-            s.version = NvVersion::with_struct::<Self>(1);
+            s.version = NvVersion::with_version(0x104C8);
             s.op = 2;
             s.feature = JpacFeature::Wm2Mode;
             s.value = mode as u32;

@@ -2765,6 +2765,48 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_ClientGetLastOcScannerResults, st)
     }
 
+    /// Battery Boost 2.0 enable/disable (NDA 0xD27D0629, private).
+    /// GPUMonCmd `-bb:state` (state 1=enable, 0=disable). Mobile-only.
+    pub fn set_bb2_active(&self, enable: bool) -> crate::NvapiResult<()> {
+        trace!("gpu.set_bb2_active(enable={})", enable);
+        use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
+        let mut ctrl = NV_SYS_CLIENT_JPAC_CONTROL::bb2_active(enable);
+        let st = unsafe {
+            sys::api::private::NvAPI_SYS_ClientJpacSetControl2(
+                ptr::from_mut(&mut ctrl).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl2, st)
+    }
+
+    /// Whisper Mode 2.0 enable/disable (NDA 0xD27D0629, private).
+    /// GPUMonCmd `-wm:state` (state 1=enable, 0=disable). Mobile-only.
+    pub fn set_wm2_active(&self, enable: bool) -> crate::NvapiResult<()> {
+        trace!("gpu.set_wm2_active(enable={})", enable);
+        use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
+        let mut ctrl = NV_SYS_CLIENT_JPAC_CONTROL::wm2_active(enable);
+        let st = unsafe {
+            sys::api::private::NvAPI_SYS_ClientJpacSetControl2(
+                ptr::from_mut(&mut ctrl).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl2, st)
+    }
+
+    /// Whisper Mode 2.0 acoustic mode (NDA 0xD27D0629, private).
+    /// GPUMonCmd `-wmMode:mode` (0=Quieter, 1=Quiet, 2=Balanced).
+    pub fn set_wm2_mode(&self, mode: power::private::Wm2AcousticMode) -> crate::NvapiResult<()> {
+        trace!("gpu.set_wm2_mode(mode={:?})", mode);
+        use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
+        let mut ctrl = NV_SYS_CLIENT_JPAC_CONTROL::wm2_mode(mode);
+        let st = unsafe {
+            sys::api::private::NvAPI_SYS_ClientJpacSetControl2(
+                ptr::from_mut(&mut ctrl).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl2, st)
+    }
+
     /// Force the GPU into a given P-State (NDA 0x025BFB10, private).
     ///
     /// `set_type` live-tested on 4060L: 0/1/2 ALL force-lock the pstate —
@@ -3249,6 +3291,59 @@ impl PhysicalGpu {
         data.set_target_temp_c(policy_index, celsius);
         // SET: apply the patched buffer.
         unsafe { nvcall!(NvAPI_GPU_ClientThermalTargetSetStatus(self.0, &data)) }
+    }
+
+    /// Read the NVCP power-mode (均衡/高性能 = Balanced/Max) capability:
+    /// `(mode_mask, max_mode_idx)`. The feature exists only when
+    /// `max_mode_idx == 1` (0xFFFF on unsupported GPUs, e.g. 4060L).
+    pub fn power_modes_capability(&self) -> crate::NvapiResult<(u16, u16)> {
+        trace!("gpu.power_modes_capability()");
+        let mut info = unsafe { std::mem::zeroed::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>() };
+        use crate::sys::nvapi::VersionedStruct;
+        *info.nvapi_version_mut() =
+            NvVersion::with_struct::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>(1);
+        let st = unsafe { sys::api::NvAPI_GPU_ClientPowerModesGetInfo(self.0, &mut info) };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientPowerModesGetInfo, st)?;
+        Ok((info.mode_mask, info.max_mode_idx))
+    }
+
+    /// Read the active NVCP power mode (`Balanced`/`Max`).
+    pub fn power_mode(&self) -> crate::NvapiResult<&'static str> {
+        trace!("gpu.power_mode()");
+        let control = self.power_modes_primed_control()?;
+        Ok(if control.active_mode_idx == 1 { "Max" } else { "Balanced" })
+    }
+
+    /// Set the NVCP power mode (均衡/高性能). Implements the App's
+    /// instruction-verified GET-prime RMW protocol: GetInfo → seed
+    /// CONTROL+0x04 → GetControl → write ONLY the u16 mode → SetControl.
+    pub fn set_power_mode(&self, max: bool) -> crate::NvapiResult<()> {
+        trace!("gpu.set_power_mode(max={max})");
+        let mut control = self.power_modes_primed_control()?;
+        control.active_mode_idx = max as u16;
+        unsafe { nvcall!(NvAPI_GPU_ClientPowerModesSetControl(self.0, &control)) }
+    }
+
+    /// GET-prime helper shared by read/write: seeds CONTROL+0x04 from
+    /// INFO+0x04 (required in BOTH paths per the UXDriver RE), then
+    /// GetControl so every untouched byte passes through as the driver
+    /// returned it.
+    fn power_modes_primed_control(
+        &self,
+    ) -> crate::NvapiResult<power::private::NV_GPU_CLIENT_POWER_MODES_CONTROL> {
+        let mut info = unsafe { std::mem::zeroed::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>() };
+        let mut control = unsafe { std::mem::zeroed::<power::private::NV_GPU_CLIENT_POWER_MODES_CONTROL>() };
+        use crate::sys::nvapi::VersionedStruct;
+        *info.nvapi_version_mut() =
+            NvVersion::with_struct::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>(1);
+        *control.nvapi_version_mut() =
+            NvVersion::with_struct::<power::private::NV_GPU_CLIENT_POWER_MODES_CONTROL>(1);
+        let st = unsafe { sys::api::NvAPI_GPU_ClientPowerModesGetInfo(self.0, &mut info) };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientPowerModesGetInfo, st)?;
+        control.seed = info.seed;
+        let st = unsafe { sys::api::NvAPI_GPU_ClientPowerModesGetControl(self.0, &mut control) };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientPowerModesGetControl, st)?;
+        Ok(control)
     }
 
     /// Fake the GPU thermal sensor reading so the driver's thermal policy

@@ -1445,7 +1445,12 @@ Unknown_CF0AB99F = 0xcf0ab99f,
 /// `NvAPI_GPU_FanCoolerGetControl` — GPUHandle::pollFanSpeed/setFanSim - ClientFanCoolersGetControl
 NvAPI_GPU_FanCoolerGetControl = 0xcf86b990,
 /// `NvAPI_SYS_ClientJpacSetControl` — GPUHandle::setBb2Active/setWm2Active - enable BB2/WM2
+/// (GPUMon.exe sibling; GPUMonCmd.exe uses 0xD27D0629 for the same functions — see below)
 NvAPI_SYS_ClientJpacSetControl = 0xd2561b69,
+/// `NvAPI_SYS_ClientJpacSetControl2` — GPUMonCmd.exe's setBb2Active/setWm2Active/setWm2Mode:
+/// multi-feature control (1224B buffer, magic 0x104C8). dword[1]=op (1=active,2=mode),
+/// dword[18]=feature (0=WM2-active,1=WM2-mode,3=BB2-active), dword[19]=enable flag or mode enum.
+NvAPI_SYS_ClientJpacSetControl2 = 0xd27d0629,
 /// `Unknown_D8135264` — GPUHandle::queryArchitecture sub-call - identity
 Unknown_D8135264 = 0xd8135264,
 /// `NvAPI_GPS_SetPM1Available` — DriverInvoker::setBoostClock - set PM1 availability
