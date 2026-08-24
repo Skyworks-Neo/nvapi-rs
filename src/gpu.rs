@@ -3864,9 +3864,10 @@ impl PhysicalGpu {
     ///
     /// `cooler_index` picks the cooler (0-based). `rpm` is the target RPM;
     /// pass `None` to disable simulation (clear the enable bit → return to
-    /// driver/auto control). The driver enforces `[min_rpm, max_rpm]` range
-    /// (queried from the control struct). For PWM-type coolers the RPM is
-    /// linearly interpolated to a Q16 level; for pwm-tach it's a raw write.
+    /// driver/auto control). The input is clamped into the cooler's
+    /// `[min_rpm, max_rpm]` physical range (queried from the control
+    /// struct) and linearly mapped onto the 0..65536 level scale
+    /// (`level = rpm / max × 65536`) — for every cooler type.
     pub fn set_fan_rpm(
         &self,
         cooler_index: u32,
@@ -3936,37 +3937,26 @@ impl PhysicalGpu {
                 // interpolation ((v-min)<<16)/(max-min) double-converts —
                 // it first normalizes into the min..max span and then the
                 // driver scales again.)
-                // pwm-tach coolers take the raw RPM value instead.
                 // Guard: clamp the input into [min, max] (u64 math, no
-                // overflow).
-                if cooler_type <= 1 {
-                    if max_rpm == 0 {
-                        // No range reported: reject rather than divide by 0.
-                        return Err(crate::NvapiError::new(
-                            sys::Api::NvAPI_GPU_FanCoolerSetControl,
-                            sys::Status::InvalidArgument,
-                        ));
-                    }
-                    let v = if min_rpm <= max_rpm {
-                        target.clamp(min_rpm, max_rpm)
-                    } else {
-                        target
-                    };
-                    let level = ((v as u64) << 16) / (max_rpm as u64) as u64;
-                    let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
-                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en | 1);
-                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, level as u32);
-                } else {
-                    // pwm-tach: raw RPM write, clamped to the range when valid.
-                    let v = if max_rpm > min_rpm {
-                        target.clamp(min_rpm, max_rpm)
-                    } else {
-                        target
-                    };
-                    let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
-                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en | 1);
-                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, v);
+                // overflow). The 0..65536 level scale applies to ALL cooler
+                // types — 2070 live test showed the pwm-tach (type 2) raw
+                // RPM write lands at rpm/65536 ≈ 5% at full speed.
+                if max_rpm == 0 {
+                    // No range reported: reject rather than divide by 0.
+                    return Err(crate::NvapiError::new(
+                        sys::Api::NvAPI_GPU_FanCoolerSetControl,
+                        sys::Status::InvalidArgument,
+                    ));
                 }
+                let v = if min_rpm <= max_rpm {
+                    target.clamp(min_rpm, max_rpm)
+                } else {
+                    target
+                };
+                let level = ((v as u64) << 16) / (max_rpm as u64) as u64;
+                let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
+                write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en | 1);
+                write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, level as u32);
             }
         }
         unsafe {
