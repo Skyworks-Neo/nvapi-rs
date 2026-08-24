@@ -3826,29 +3826,36 @@ impl PhysicalGpu {
                 write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en & !1);
             }
             Some(target) => {
-                // GPUMon fansim logic by cooler type:
-                // type 0/1 (active/pwm): level = ((v-min)<<16)/(max-min) —
-                //   a 0..65536 normalized scale (set v = v/65536 × 100% duty
-                //   on GPUs whose grid is the duty scale).
-                // type 2 (pwm-tach): level = v (raw).
-                // Guard: clamp the input into [min, max] so the <<16
-                // interpolation can never overflow u32 (compute in u64).
+                // min/max from the control struct are the cooler's PHYSICAL
+                // RPM range (2070 live-verified: fan0 max = 3300 = full
+                // speed). The level register is a 0..65536 scale where
+                // 65536 = 100% = max RPM, so the conversion is a direct
+                // linear map: raw = rpm / max × 65536. (The relative
+                // interpolation ((v-min)<<16)/(max-min) double-converts —
+                // it first normalizes into the min..max span and then the
+                // driver scales again.)
+                // pwm-tach coolers take the raw RPM value instead.
+                // Guard: clamp the input into [min, max] (u64 math, no
+                // overflow).
                 if cooler_type <= 1 {
-                    if max_rpm <= min_rpm {
-                        // Degenerate range: reject rather than divide by 0.
+                    if max_rpm == 0 {
+                        // No range reported: reject rather than divide by 0.
                         return Err(crate::NvapiError::new(
                             sys::Api::NvAPI_GPU_FanCoolerSetControl,
                             sys::Status::InvalidArgument,
                         ));
                     }
-                    let v = target.clamp(min_rpm, max_rpm);
-                    let level = (((v as u64 - min_rpm as u64) << 16)
-                        / (max_rpm as u64 - min_rpm as u64)) as u32;
+                    let v = if min_rpm <= max_rpm {
+                        target.clamp(min_rpm, max_rpm)
+                    } else {
+                        target
+                    };
+                    let level = ((v as u64) << 16) / (max_rpm as u64) as u64;
                     let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
                     write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en | 1);
-                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, level);
+                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, level as u32);
                 } else {
-                    // pwm-tach: raw write, clamped to the range when valid.
+                    // pwm-tach: raw RPM write, clamped to the range when valid.
                     let v = if max_rpm > min_rpm {
                         target.clamp(min_rpm, max_rpm)
                     } else {
