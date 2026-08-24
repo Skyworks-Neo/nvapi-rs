@@ -197,6 +197,18 @@ pub enum BaseBoostMode {
     Boost = 2,
 }
 
+/// One pstate floor/ceiling clamp from the Kepler-era ClientLimits family
+/// (GET 0x39442CFB sibling / SET 0xFDFC7D49, private). `min_level`/
+/// `max_level` constrain the pstate range the driver may pick; clearing the
+/// limits table is the RELEASE path for a force-locked pstate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct PstateClientLimit {
+    pub pstate_id: u32,
+    pub min_level: u32,
+    pub max_level: u32,
+}
+
 impl PhysicalGpu {
     pub fn handle(&self) -> &sys::handles::NvPhysicalGpuHandle {
         &self.0
@@ -2878,6 +2890,96 @@ impl PhysicalGpu {
         );
         let st = unsafe { sys::api::private::NvAPI_GPU_SetForcePstate(self.0, pstate, set_type) };
         crate::status_result(sys::Api::NvAPI_GPU_SetForcePstate, st)
+    }
+
+    /// Kepler-era pstate floor/ceiling clamps GET (private
+    /// GetPstateClientLimits). Returns the per-pstate min/max limits
+    /// currently in force (empty when unrestricted).
+    pub fn pstate_client_limits(&self) -> crate::NvapiResult<Vec<PstateClientLimit>> {
+        trace!("gpu.pstate_client_limits()");
+        use crate::sys::nvapi::VersionedStruct;
+        use pstate::private::NV_GPU_PSTATE_CLIENT_LIMITS;
+        let mut raw = unsafe { std::mem::zeroed::<NV_GPU_PSTATE_CLIENT_LIMITS>() };
+        *raw.nvapi_version_mut() =
+            NvVersion::with_struct::<NV_GPU_PSTATE_CLIENT_LIMITS>(1);
+        let st = unsafe {
+            sys::api::private::NvAPI_GPU_GetPstateClientLimits(self.0, ptr::from_mut(&mut raw))
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetPstateClientLimits, st)?;
+        let n = (raw.numLimits as usize).min(pstate::NVAPI_MAX_GPU_PSTATE20_PSTATES);
+        Ok((0..n)
+            .map(|i| {
+                let l = &raw.limits[i];
+                PstateClientLimit {
+                    pstate_id: l.pstateId as u32,
+                    min_level: l.minLevel,
+                    max_level: l.maxLevel,
+                }
+            })
+            .collect())
+    }
+
+    /// Kepler-era pstate floor/ceiling clamp SET (NDA 0xFDFC7D49, private —
+    /// nvidiaInspector's legacy OC family). This is the RELEASE path for a
+    /// force-locked pstate ([`set_force_pstate`]): pass an empty slice to
+    /// clear all limits, or clamp specific pstates to a min/max level range.
+    /// Note this is the older sibling of the already-wrapped modern
+    /// PerfClientLimits (0x39442CFB) family — prefer that one on Pascal+.
+    pub fn set_pstate_client_limits(&self, limits: &[PstateClientLimit]) -> crate::NvapiResult<()> {
+        trace!("gpu.set_pstate_client_limits(len={})", limits.len());
+        use crate::sys::nvapi::VersionedStruct;
+        use pstate::private::NV_GPU_PSTATE_CLIENT_LIMITS;
+        if limits.len() > pstate::NVAPI_MAX_GPU_PSTATE20_PSTATES {
+            return Err(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_SetPstateClientLimits,
+                sys::Status::InvalidArgument,
+            ));
+        }
+        let mut raw = unsafe { std::mem::zeroed::<NV_GPU_PSTATE_CLIENT_LIMITS>() };
+        *raw.nvapi_version_mut() =
+            NvVersion::with_struct::<NV_GPU_PSTATE_CLIENT_LIMITS>(1);
+        raw.numLimits = limits.len() as u32;
+        for (dst, src) in raw.limits.iter_mut().zip(limits) {
+            dst.pstateId = src.pstate_id as _;
+            dst.minLevel = src.min_level;
+            dst.maxLevel = src.max_level;
+        }
+        let st = unsafe {
+            sys::api::private::NvAPI_GPU_SetPstateClientLimits(self.0, ptr::from_ref(&raw))
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_SetPstateClientLimits, st)
+    }
+
+    /// Kepler-era per-pstate clock table SET (0x07BCF4AC, from
+    /// nvidiaInspector's legacy OC family — the SET sibling of the bound
+    /// GetPerfClocks 0x1EA54A3B). `num_clocks` is the table count the legacy
+    /// API expects (vertminer's SET wrapper never observed working; value 1
+    /// alongside the 10868-byte V2 table is the best guess). Expect
+    /// NotSupported on Pascal+ — modern cards go through SetPstates20.
+    pub fn set_perf_clocks(
+        &self,
+        num_clocks: u32,
+        clocks: &clock::NV_GPU_PERF_CLOCKS,
+    ) -> crate::NvapiResult<()> {
+        trace!("gpu.set_perf_clocks(num_clocks={})", num_clocks);
+        let st =
+            unsafe { sys::api::NvAPI_GPU_SetPerfClocks(self.0, num_clocks, ptr::from_ref(clocks)) };
+        crate::status_result(sys::Api::NvAPI_GPU_SetPerfClocks, st)
+    }
+
+    /// Legacy pstate table SET (0xCDF27911, from nvidiaInspector's legacy OC
+    /// family — pre-pstates20 OC path). `input_flags` observed 0. Expect
+    /// NotSupported on Pascal+; use [`set_pstates20`][Self::set_pstates]
+    /// instead on modern drivers.
+    pub fn set_pstates_info(
+        &self,
+        input_flags: u32,
+        info: &pstate::NV_GPU_PERF_PSTATES_INFO,
+    ) -> crate::NvapiResult<()> {
+        trace!("gpu.set_pstates_info(flags={})", input_flags);
+        let st =
+            unsafe { sys::api::NvAPI_GPU_SetPstatesInfo(self.0, input_flags, ptr::from_ref(info)) };
+        crate::status_result(sys::Api::NvAPI_GPU_SetPstatesInfo, st)
     }
 
     /// Restart the display driver (NDA 0xB4B26B65). The classic "apply OC"

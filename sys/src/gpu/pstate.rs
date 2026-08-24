@@ -402,6 +402,16 @@ nvapi! {
     pub unsafe fn NvAPI_GPU_EnableDynamicPstates;
 }
 
+nvapi! {
+    pub type GPU_SetClocksShmooFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, enable: u32) -> NvAPI_Status;
+
+    /// Undocumented (ID 0x1AB0724B, from nvidiaInspector's legacy OC
+    /// family). Fermi-era "Shmoo" clock-mode toggle. Signature unverified —
+    /// declared as `(h, enable)` like the sibling Enable* toggles; expect
+    /// NotSupported on modern drivers. Bound for completeness only.
+    pub unsafe fn NvAPI_GPU_SetClocksShmoo;
+}
+
 /// Undocumented API
 pub mod private {
     use crate::prelude_::*;
@@ -458,5 +468,16 @@ pub mod private {
         /// or EnableDynamicPstates (both wrapped). Thermspy also resolves
         /// this ID. Sibling SetForcePstateEx 0xE7B1198D is unwrapped.
         pub unsafe fn NvAPI_GPU_SetForcePstate;
+    }
+
+    nvapi! {
+        pub type GPU_SetForcePstateExFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pstate: u32, setType: u32) -> NvAPI_Status;
+
+        /// Undocumented (NDA, ID 0xE7B1198D). Extended sibling of
+        /// [`NvAPI_GPU_SetForcePstate`] — one extra flag bit vs the base
+        /// call, no min/max fields. Signature assumed identical to the base
+        /// 3-arg form; force-only (no release path), like the base call.
+        /// Sibling SetPstateClientLimits 0xFDFC7D49 is the release path.
+        pub unsafe fn NvAPI_GPU_SetForcePstateEx;
     }
 }

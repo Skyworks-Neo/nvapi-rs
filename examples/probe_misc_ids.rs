@@ -60,4 +60,39 @@ fn main() {
     // SetForcePstate live-call is intentionally skipped: forcing a pstate
     // changes GPU state; we only verify resolution above.
     let _ = NvAPI_GPU_SetForcePstate;
+
+    // New bindings from the GPU Caps Viewer / nvidiaInspector sweep (2026-08-25):
+    // legacy-driver enumeration pair + legacy OC setters. Resolve-only for the
+    // SETs; SYS enumeration pair is live-called (read-only).
+    resolve(0xD3B24D2D, "SYS_GetPhysicalGPUs");
+    resolve(0xCCFFFC10, "SYS_GetLogicalGPUs");
+    resolve(0xE7B1198D, "SetForcePstateEx");
+    resolve(0x1AB0724B, "SetClocksShmoo");
+    resolve(0xFDFC7D49, "SetPstateClientLimits");
+
+    let mut sys_handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS as usize];
+    let mut sys_count = 0u32;
+    let st = unsafe { nvapi::sys::api::NvAPI_SYS_GetPhysicalGPUs(&mut sys_handles, &mut sys_count) };
+    println!("SYS_GetPhysicalGPUs st={st} count={sys_count} (legacy fallback path)");
+
+    // GET half of the ClientLimits clamp family (read-only, safe to call)
+    for i in 0..count as usize {
+        let gpu = handles[i];
+        let mut limits = <NV_GPU_PSTATE_CLIENT_LIMITS as StructVersion<1>>::versioned();
+        let st =
+            unsafe { nvapi::sys::api::private::NvAPI_GPU_GetPstateClientLimits(gpu, &mut limits) };
+        println!(
+            "GPU{i} GetPstateClientLimits st={st} numLimits={}",
+            limits.numLimits
+        );
+        for l in 0..limits.numLimits as usize {
+            let e = &limits.limits[l];
+            println!(
+                "  limit[{l}] pstateId={} min={} max={}",
+                e.pstateId as u32, e.minLevel, e.maxLevel
+            );
+        }
+    }
 }
+
+use nvapi::sys::gpu::pstate::private::NV_GPU_PSTATE_CLIENT_LIMITS;
