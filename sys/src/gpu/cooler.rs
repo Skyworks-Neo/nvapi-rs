@@ -740,4 +740,47 @@ pub mod private {
         /// Undocumented. Writes the fan-curve table (version `0x200DC`).
         pub unsafe fn NvAPI_GPU_ClientFanPoliciesSetControl;
     }
+
+    // ------------------------------------------------------------------
+    // FanPolicy whole-block reset family (NDA). RE'd from GPUMon.exe
+    // `GPUHandle::resetFanCurve` (sub_140030830): GET the full 0x14AC-byte
+    // fan-policy block, write `1 << curve_index` into the bitmask dword at
+    // +0x04 and set the flag bit0 at +0x08, SET it back — the driver
+    // restores that curve slot to factory. This is GPUMon's NVAPI fan
+    // reset, NOT the public RestoreCoolerSettings (which the driver rejects
+    // with NOT_SUPPORTED on GPUs whose user-mode cooler table isn't
+    // exposed, e.g. desktop 3060/2070; NVML's SetDefaultFanSpeed_v2 goes
+    // through a separate RM arbiter channel and works there).
+    //
+    // Struct layout (magic 0x214AC = size 0x14AC | version 2):
+    //   +0x00 u32  magic 0x214AC
+    //   +0x04 u32  reset bitmask: bit N set = reset curve slot N
+    //   +0x08 u32  flag dword: bit0 set by GPUMon's reset (meaning: apply)
+    //   +0x0C..    opaque driver-filled policy data (memset from +0x0C,
+    //              0x14A4 bytes; GET fills the rest first)
+    // Cross-checked against nvapi64_impl.dll's 0x214AC handler.
+    // ------------------------------------------------------------------
+    pub const NV_GPU_FAN_POLICY_CONTROL_SIZE: usize = 0x14AC;
+    pub const NV_GPU_FAN_POLICY_CONTROL_MAGIC: u32 = 0x214AC;
+    /// Byte offset of the per-curve reset bitmask within the FanPolicy block.
+    pub const NV_GPU_FAN_POLICY_OFF_RESET_MASK: usize = 0x04;
+    /// Byte offset of the flag dword (bit0 = apply/reset marker).
+    pub const NV_GPU_FAN_POLICY_OFF_FLAGS: usize = 0x08;
+
+    nvapi! {
+        pub type GPU_FanPolicyGetControlFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pPolicy: *mut u8) -> NvAPI_Status;
+
+        /// Undocumented (NDA 0x0FE87B7F). Fills the full fan-policy block
+        /// (magic 0x214AC, 0x14AC bytes). RE'd from GPUMon resetFanCurve.
+        pub unsafe fn NvAPI_GPU_FanPolicyGetControl;
+    }
+
+    nvapi! {
+        pub type GPU_FanPolicySetControlFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pPolicy: *const u8) -> NvAPI_Status;
+
+        /// Undocumented (NDA 0x2B2A2A45). Writes the full fan-policy block;
+        /// a set bit in the +0x04 bitmask resets that curve slot to factory.
+        /// RE'd from GPUMon resetFanCurve.
+        pub unsafe fn NvAPI_GPU_FanPolicySetControl;
+    }
 }

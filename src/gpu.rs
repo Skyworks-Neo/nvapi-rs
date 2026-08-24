@@ -3610,6 +3610,82 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientFanPoliciesSetControl(self.0, &raw)) }
     }
 
+    /// Reset one fan-curve slot to factory (`FanPolicySetControl` NDA
+    /// 0x2B2A2A45, structure magic `0x214AC`). RE'd byte-exact from GPUMon.exe
+    /// `GPUHandle::resetFanCurve` and cross-checked against the impl.dll
+    /// handler: GET the full 0x14AC policy block, write `1 << curve_index`
+    /// into the reset bitmask at +0x04, set flag bit0 at +0x08, SET back.
+    ///
+    /// This is GPUMon's NVAPI fan reset — NOT the public
+    /// `RestoreCoolerSettings`, which the driver rejects with
+    /// NOT_SUPPORTED(-104) on GPUs whose user-mode cooler table isn't
+    /// exposed (observed on desktop RTX 3060/2070; NVML's
+    /// SetDefaultFanSpeed_v2 uses a separate RM arbiter channel and works
+    /// there). `curve_index` is the slot to reset (0..=3; GPUMon's reset
+    /// button uses 0).
+    pub fn reset_fan_curve(&self, curve_index: u32) -> crate::NvapiResult<()> {
+        trace!("gpu.reset_fan_curve({})", curve_index);
+        if curve_index >= 4 {
+            return Err(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_FanPolicySetControl,
+                sys::Status::InvalidArgument,
+            ));
+        }
+        use cooler::private::{
+            NV_GPU_FAN_POLICY_CONTROL_MAGIC, NV_GPU_FAN_POLICY_CONTROL_SIZE,
+            NV_GPU_FAN_POLICY_OFF_FLAGS, NV_GPU_FAN_POLICY_OFF_RESET_MASK,
+        };
+        let mut buf = vec![0u8; NV_GPU_FAN_POLICY_CONTROL_SIZE];
+        buf[..4].copy_from_slice(&NV_GPU_FAN_POLICY_CONTROL_MAGIC.to_ne_bytes());
+        unsafe {
+            nvcall!(NvAPI_GPU_FanPolicyGetControl(
+                self.0,
+                buf.as_mut_ptr() as *mut _
+            ))?;
+        }
+        // Reset bitmask at +0x04 (GPUMon assigns, not ORs) + apply flag
+        // bit0 at +0x08 (GPUMon sets it unconditionally on the reset path).
+        let mask = 1u32 << curve_index;
+        buf[NV_GPU_FAN_POLICY_OFF_RESET_MASK..NV_GPU_FAN_POLICY_OFF_RESET_MASK + 4]
+            .copy_from_slice(&mask.to_ne_bytes());
+        let mut flags = [0u8; 4];
+        flags.copy_from_slice(&buf[NV_GPU_FAN_POLICY_OFF_FLAGS..NV_GPU_FAN_POLICY_OFF_FLAGS + 4]);
+        let flags = u32::from_ne_bytes(flags) | 1;
+        buf[NV_GPU_FAN_POLICY_OFF_FLAGS..NV_GPU_FAN_POLICY_OFF_FLAGS + 4]
+            .copy_from_slice(&flags.to_ne_bytes());
+        unsafe {
+            nvcall!(NvAPI_GPU_FanPolicySetControl(
+                self.0,
+                buf.as_ptr() as *const _
+            ))
+        }
+    }
+
+    /// Toggle fan stop / zero-RPM for a curve slot (`FanArbiterSet` NDA
+    /// 0x44CD3014, versioned struct `0x10124` = the 292-byte V1). RE'd from
+    /// GPUMon.exe `setFanCurve`'s tail call: count=1 at +0x04, then
+    /// arbiters[0] at +0x24 = {arbiter_index = curve_index, flags bit0 =
+    /// FAN_STOP enable}.
+    pub fn set_fan_stop(&self, curve_index: u32, enable: bool) -> crate::NvapiResult<()> {
+        trace!("gpu.set_fan_stop({}, {})", curve_index, enable);
+        use cooler::private::{
+            NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1, NV_GPU_CLIENT_FAN_ARBITERS_CONTROL,
+            NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1,
+        };
+        let mut ctrl = NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1::default();
+        ctrl.version = <NV_GPU_CLIENT_FAN_ARBITERS_CONTROL as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        ctrl.count = 1;
+        ctrl.arbiters[0] = NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
+            arbiter_index: curve_index,
+            flags: if enable {
+                cooler::private::FanArbiterControlFlags::FAN_STOP.bits()
+            } else {
+                0
+            },
+        };
+        unsafe { nvcall!(NvAPI_GPU_ClientFanArbitersSetControl(self.0, &ctrl)) }
+    }
+
     pub fn getcooler_settings(
         &self,
         index: Option<u32>,
