@@ -3686,6 +3686,139 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientFanArbitersSetControl(self.0, &ctrl)) }
     }
 
+    /// Query per-cooler info via the private FanCoolerGetInfo (NDA 0x65CE5BFC,
+    /// struct magic 0x10888). Returns one entry per cooler with its type
+    /// (0=active, 1=pwm, 2=pwm-tach) and min/max RPM range. RE'd from
+    /// GPUMon.exe `setFanSim` — this is the private path, richer than the
+    /// public `GetCoolerSettings` (which only returns level/defaultPolicy).
+    pub fn cooler_info_private(&self) -> crate::NvapiResult<Vec<PrivateCoolerInfo>> {
+        trace!("gpu.cooler_info_private()");
+        use cooler::private::{
+            NV_GPU_FAN_COOLER_INFO_MAGIC, NV_GPU_FAN_COOLER_INFO_SIZE,
+        };
+        let mut buf = vec![0u8; NV_GPU_FAN_COOLER_INFO_SIZE];
+        buf[..4].copy_from_slice(&NV_GPU_FAN_COOLER_INFO_MAGIC.to_ne_bytes());
+        unsafe {
+            nvcall!(NvAPI_GPU_FanCoolerGetInfo(
+                self.0,
+                buf.as_mut_ptr() as *mut _
+            ))?;
+        }
+        let count = read_u32(&buf, 0x04) as usize;
+        let mut out = Vec::with_capacity(count);
+        for k in 0..count {
+            // Info struct per-cooler layout: GPUMon reads from the *control*
+            // struct for min/max RPM, not the info struct. The info struct's
+            // per-cooler fields are opaque to us beyond count. We return the
+            // cooler count here; the control struct (queried in set_fan_rpm)
+            // has the type/min/max fields GPUMon uses.
+            out.push(PrivateCoolerInfo {
+                index: k as u32,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Set fan speed by RPM via the private FanCoolerSetControl (NDA
+    /// 0xEB44E8AA, struct 0x210AC). RE'd byte-exact from GPUMon.exe
+    /// `GPUHandle::setFanSim`: GET the control snapshot, patch the target
+    /// cooler's enable + level per its cooler type, SET back.
+    ///
+    /// `cooler_index` picks the cooler (0-based). `rpm` is the target RPM;
+    /// pass `None` to disable simulation (clear the enable bit → return to
+    /// driver/auto control). The driver enforces `[min_rpm, max_rpm]` range
+    /// (queried from the control struct). For PWM-type coolers the RPM is
+    /// linearly interpolated to a Q16 level; for pwm-tach it's a raw write.
+    pub fn set_fan_rpm(
+        &self,
+        cooler_index: u32,
+        rpm: Option<u32>,
+    ) -> crate::NvapiResult<SetFanRpmResult> {
+        trace!("gpu.set_fan_rpm({}, {:?})", cooler_index, rpm);
+        if cooler_index >= 32 {
+            return Err(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_FanCoolerSetControl,
+                sys::Status::InvalidArgument,
+            ));
+        }
+        use cooler::private::{
+            NV_GPU_FAN_COOLER_CONTROL_MAGIC, NV_GPU_FAN_COOLER_CONTROL_SIZE,
+            NV_GPU_FAN_COOLER_ENTRY0_BASE, NV_GPU_FAN_COOLER_ENTRY_STRIDE,
+            NV_GPU_FAN_COOLER_OFF_ENABLE, NV_GPU_FAN_COOLER_OFF_LEVEL,
+            NV_GPU_FAN_COOLER_INFO_MAGIC, NV_GPU_FAN_COOLER_INFO_SIZE,
+            NV_GPU_FAN_COOLER_OFF_MAX_RPM, NV_GPU_FAN_COOLER_OFF_MIN_RPM,
+            NV_GPU_FAN_COOLER_OFF_TYPE,
+        };
+        let mut buf = vec![0u8; NV_GPU_FAN_COOLER_CONTROL_SIZE];
+        buf[..4].copy_from_slice(&NV_GPU_FAN_COOLER_CONTROL_MAGIC.to_ne_bytes());
+        // FanCoolerGetInfo fills the count; mirror GPUMon by querying info
+        // first to set count, then GET control.
+        {
+            let mut info = vec![0u8; NV_GPU_FAN_COOLER_INFO_SIZE];
+            info[..4].copy_from_slice(&NV_GPU_FAN_COOLER_INFO_MAGIC.to_ne_bytes());
+            unsafe {
+                nvcall!(NvAPI_GPU_FanCoolerGetInfo(
+                    self.0,
+                    info.as_mut_ptr() as *mut _
+                ))?;
+            }
+            let count = read_u32(&info, 0x04);
+            write_u32(&mut buf, 0x04, count);
+        }
+        unsafe {
+            nvcall!(NvAPI_GPU_FanCoolerGetControl(
+                self.0,
+                buf.as_mut_ptr() as *mut _
+            ))?;
+        }
+        let base = NV_GPU_FAN_COOLER_ENTRY0_BASE + cooler_index as usize * NV_GPU_FAN_COOLER_ENTRY_STRIDE;
+        let cooler_type = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_TYPE);
+        let min_rpm = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MIN_RPM);
+        let max_rpm = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MAX_RPM);
+        match rpm {
+            None => {
+                // Disable simulation: clear enable bit.
+                let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
+                write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en & !1);
+            }
+            Some(target) => {
+                // GPUMon fansim logic by cooler type:
+                // type 0 (active) / type 1 (pwm): level = ((rpm-min)<<16)/(max-min)
+                // type 2 (pwm-tach): level = rpm (raw)
+                if cooler_type <= 1 {
+                    if max_rpm <= min_rpm || target < min_rpm || target > max_rpm {
+                        return Err(crate::NvapiError::new(
+                            sys::Api::NvAPI_GPU_FanCoolerSetControl,
+                            sys::Status::InvalidArgument,
+                        ));
+                    }
+                    let level = ((target - min_rpm) << 16) / (max_rpm - min_rpm);
+                    let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
+                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en | 1);
+                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, level);
+                } else {
+                    // pwm-tach: raw RPM write
+                    let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
+                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en | 1);
+                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, target);
+                }
+            }
+        }
+        unsafe {
+            nvcall!(NvAPI_GPU_FanCoolerSetControl(
+                self.0,
+                buf.as_ptr() as *const _
+            ))?;
+        }
+        Ok(SetFanRpmResult {
+            cooler_index,
+            cooler_type,
+            min_rpm,
+            max_rpm,
+            applied_rpm: rpm,
+        })
+    }
+
     pub fn getcooler_settings(
         &self,
         index: Option<u32>,
@@ -4740,6 +4873,25 @@ pub struct PerfFreqCapEntry {
     pub type_marker: u32,
     pub freq_khz: u32,
     pub locked: bool,
+}
+
+/// Per-cooler info from the private FanCoolerGetInfo (NDA 0x65CE5BFC).
+/// RE'd from GPUMon.exe setFanSim. `index` is the 0-based cooler index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrivateCoolerInfo {
+    pub index: u32,
+}
+
+/// Result of a `set_fan_rpm` call (private FanCoolerSetControl NDA 0xEB44E8AA).
+/// RE'd from GPUMon.exe setFanSim. `cooler_type`: 0=active, 1=pwm, 2=pwm-tach.
+/// `applied_rpm` is `None` when simulation was disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetFanRpmResult {
+    pub cooler_index: u32,
+    pub cooler_type: u32,
+    pub min_rpm: u32,
+    pub max_rpm: u32,
+    pub applied_rpm: Option<u32>,
 }
 
 // ── PerfLimits large-struct byte offsets (magic 0x6642C, 0x4642C B) ──

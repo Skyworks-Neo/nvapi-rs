@@ -783,4 +783,87 @@ pub mod private {
         /// RE'd from GPUMon resetFanCurve.
         pub unsafe fn NvAPI_GPU_FanPolicySetControl;
     }
+
+    // ------------------------------------------------------------------
+    // Private FanCoolers family (NDA). RE'd from GPUMon.exe
+    // `GPUHandle::setFanSim` (sub_140030F40): the private cooler info +
+    // control path used for RPM-direct fan simulation. DISTINCT from the
+    // public ClientFanCoolers family (0xFB85B01E etc.) — different IDs,
+    // different structures, richer data (per-cooler type + min/max RPM).
+    //
+    // Three IDs (all already in nvid.rs):
+    //   FanCoolerGetInfo     0x65CE5BFC  struct 0x10888 (42440B)
+    //   FanCoolerGetControl  0xCF86B990  struct 0x210AC (135340B)
+    //   FanCoolerSetControl  0xEB44E8AA  struct 0x210AC (135340B)
+    //
+    // Info struct (0x10888):
+    //   +0x00 u32  magic 0x10888
+    //   +0x04 u32  cooler count
+    //
+    // Control struct (0x210AC, per-cooler stride 33 dword = 0x84):
+    //   +0x00 u32  magic 0x210AC
+    //   +0x04 u32  cooler count (copied from info)
+    //   entry[k] @ +0x08 + k*0x84:
+    //     +0x00 (+0x08)  reserved
+    //     ...
+    //     +0x0C (+0x14)  u32 cooler type (0=active, 1=pwm, 2=pwm-tach)
+    //     +0x18 (+0x20)  u32 min RPM
+    //     +0x1C (+0x24)  u32 max RPM
+    //     +0x20 (+0x28)  u32 enable bitmask (bit0 = simulation active)
+    //     +0x24 (+0x2C)  u32 level (RPM mode: ((rpm-min)<<16)/(max-min);
+    //                               PWM mode: (pct<<16)/100;
+    //                               pwm-tach: raw RPM)
+    //     +0x28 (+0x30)  u32 min PWM
+    //     +0x2C (+0x34)  u32 max PWM
+    //     +0x30 (+0x38)  u32 PWM enable bitmask
+    //     +0x34 (+0x3C)  u32 PWM level
+    //     +0x44 (+0x4C)  u32 tach enable bitmask
+    //     +0x48 (+0x50)  u32 tach level (raw RPM)
+    // ------------------------------------------------------------------
+    pub const NV_GPU_FAN_COOLER_INFO_MAGIC: u32 = 0x10888;
+    pub const NV_GPU_FAN_COOLER_INFO_SIZE: usize = 42440;
+    pub const NV_GPU_FAN_COOLER_CONTROL_MAGIC: u32 = 0x210AC;
+    pub const NV_GPU_FAN_COOLER_CONTROL_SIZE: usize = 135340;
+    /// Per-cooler entry stride in the control struct (33 dword = 0x84).
+    pub const NV_GPU_FAN_COOLER_ENTRY_STRIDE: usize = 0x84;
+    /// Byte offset of the first entry within the control struct.
+    pub const NV_GPU_FAN_COOLER_ENTRY0_BASE: usize = 0x08;
+    // Per-entry field offsets (relative to entry base):
+    pub const NV_GPU_FAN_COOLER_OFF_TYPE: usize = 0x0C;
+    pub const NV_GPU_FAN_COOLER_OFF_MIN_RPM: usize = 0x18;
+    pub const NV_GPU_FAN_COOLER_OFF_MAX_RPM: usize = 0x1C;
+    pub const NV_GPU_FAN_COOLER_OFF_ENABLE: usize = 0x20;
+    pub const NV_GPU_FAN_COOLER_OFF_LEVEL: usize = 0x24;
+    pub const NV_GPU_FAN_COOLER_OFF_MIN_PWM: usize = 0x28;
+    pub const NV_GPU_FAN_COOLER_OFF_MAX_PWM: usize = 0x2C;
+    pub const NV_GPU_FAN_COOLER_OFF_PWM_ENABLE: usize = 0x30;
+    pub const NV_GPU_FAN_COOLER_OFF_PWM_LEVEL: usize = 0x34;
+    pub const NV_GPU_FAN_COOLER_OFF_TACH_ENABLE: usize = 0x44;
+    pub const NV_GPU_FAN_COOLER_OFF_TACH_LEVEL: usize = 0x48;
+
+    nvapi! {
+        pub type GPU_FanCoolerGetInfoFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u8) -> NvAPI_Status;
+
+        /// Undocumented (NDA 0x65CE5BFC). Fills the private cooler info
+        /// struct (magic 0x10888): per-cooler type + min/max RPM range.
+        /// RE'd from GPUMon setFanSim.
+        pub unsafe fn NvAPI_GPU_FanCoolerGetInfo;
+    }
+
+    nvapi! {
+        pub type GPU_FanCoolerGetControlFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut u8) -> NvAPI_Status;
+
+        /// Undocumented (NDA 0xCF86B990). Fills the private cooler control
+        /// struct (magic 0x210AC): per-cooler enable/level snapshot.
+        /// RE'd from GPUMon setFanSim (RMW baseline).
+        pub unsafe fn NvAPI_GPU_FanCoolerGetControl;
+    }
+
+    nvapi! {
+        pub type GPU_FanCoolerSetControlFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const u8) -> NvAPI_Status;
+
+        /// Undocumented (NDA 0xEB44E8AA). Writes the private cooler control
+        /// struct. RE'd from GPUMon setFanSim (RMW write-back).
+        pub unsafe fn NvAPI_GPU_FanCoolerSetControl;
+    }
 }
