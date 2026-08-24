@@ -792,12 +792,12 @@ pub mod private {
     // different structures, richer data (per-cooler type + min/max RPM).
     //
     // Three IDs (all already in nvid.rs):
-    //   FanCoolerGetInfo     0x65CE5BFC  struct 0x10888 (42440B)
+    //   FanCoolerGetInfo     0x65CE5BFC  struct 0x108A8 (2216B)
     //   FanCoolerGetControl  0xCF86B990  struct 0x210AC (135340B)
     //   FanCoolerSetControl  0xEB44E8AA  struct 0x210AC (135340B)
     //
-    // Info struct (0x10888):
-    //   +0x00 u32  magic 0x10888
+    // Info struct (0x108A8 = version 1, size 0x8A8 = 2216B):
+    //   +0x00 u32  magic 0x108A8
     //   +0x04 u32  cooler count
     //
     // Control struct (0x210AC, per-cooler stride 33 dword = 0x84):
@@ -820,32 +820,36 @@ pub mod private {
     //     +0x44 (+0x4C)  u32 tach enable bitmask
     //     +0x48 (+0x50)  u32 tach level (raw RPM)
     // ------------------------------------------------------------------
-    pub const NV_GPU_FAN_COOLER_INFO_MAGIC: u32 = 0x10888;
-    pub const NV_GPU_FAN_COOLER_INFO_SIZE: usize = 42440;
+    pub const NV_GPU_FAN_COOLER_INFO_MAGIC: u32 = 0x108A8;
+    pub const NV_GPU_FAN_COOLER_INFO_SIZE: usize = 0x8A8;
     pub const NV_GPU_FAN_COOLER_CONTROL_MAGIC: u32 = 0x210AC;
-    pub const NV_GPU_FAN_COOLER_CONTROL_SIZE: usize = 135340;
-    /// Per-cooler entry stride in the control struct (33 dword = 0x84).
+    pub const NV_GPU_FAN_COOLER_CONTROL_SIZE: usize = 0x10AC;
+    /// Per-cooler entry stride (33 dword = 0x84 bytes). Field addressing is
+    /// `dword[33*cooler + field_idx]` straight from the struct base — the
+    /// magic/count header occupies entry0's first two dword slots and the
+    /// driver tolerates that overlap (GPUMon's exact arithmetic).
     pub const NV_GPU_FAN_COOLER_ENTRY_STRIDE: usize = 0x84;
-    /// Byte offset of the first entry within the control struct.
-    pub const NV_GPU_FAN_COOLER_ENTRY0_BASE: usize = 0x08;
-    // Per-entry field offsets (relative to entry base):
-    pub const NV_GPU_FAN_COOLER_OFF_TYPE: usize = 0x0C;
-    pub const NV_GPU_FAN_COOLER_OFF_MIN_RPM: usize = 0x18;
-    pub const NV_GPU_FAN_COOLER_OFF_MAX_RPM: usize = 0x1C;
-    pub const NV_GPU_FAN_COOLER_OFF_ENABLE: usize = 0x20;
-    pub const NV_GPU_FAN_COOLER_OFF_LEVEL: usize = 0x24;
-    pub const NV_GPU_FAN_COOLER_OFF_MIN_PWM: usize = 0x28;
-    pub const NV_GPU_FAN_COOLER_OFF_MAX_PWM: usize = 0x2C;
-    pub const NV_GPU_FAN_COOLER_OFF_PWM_ENABLE: usize = 0x30;
-    pub const NV_GPU_FAN_COOLER_OFF_PWM_LEVEL: usize = 0x34;
-    pub const NV_GPU_FAN_COOLER_OFF_TACH_ENABLE: usize = 0x44;
-    pub const NV_GPU_FAN_COOLER_OFF_TACH_LEVEL: usize = 0x48;
+    /// Byte offset of the first entry (= 0; fields index from struct base).
+    pub const NV_GPU_FAN_COOLER_ENTRY0_BASE: usize = 0x00;
+    // Per-cooler field offsets (dword index × 4, from struct base +
+    // cooler * 0x84). RE'd from GPUMon v19[33*v4 + N]:
+    pub const NV_GPU_FAN_COOLER_OFF_TYPE: usize = 11 * 4; // dword 11
+    pub const NV_GPU_FAN_COOLER_OFF_MIN_RPM: usize = 20 * 4; // dword 20
+    pub const NV_GPU_FAN_COOLER_OFF_MAX_RPM: usize = 21 * 4; // dword 21
+    pub const NV_GPU_FAN_COOLER_OFF_ENABLE: usize = 22 * 4; // dword 22
+    pub const NV_GPU_FAN_COOLER_OFF_LEVEL: usize = 23 * 4; // dword 23
+    pub const NV_GPU_FAN_COOLER_OFF_MIN_PWM: usize = 24 * 4; // dword 24
+    pub const NV_GPU_FAN_COOLER_OFF_MAX_PWM: usize = 25 * 4; // dword 25
+    pub const NV_GPU_FAN_COOLER_OFF_PWM_ENABLE: usize = 26 * 4; // dword 26
+    pub const NV_GPU_FAN_COOLER_OFF_PWM_LEVEL: usize = 27 * 4; // dword 27
+    pub const NV_GPU_FAN_COOLER_OFF_TACH_ENABLE: usize = 30 * 4; // dword 30
+    pub const NV_GPU_FAN_COOLER_OFF_TACH_LEVEL: usize = 31 * 4; // dword 31
 
     nvapi! {
         pub type GPU_FanCoolerGetInfoFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u8) -> NvAPI_Status;
 
         /// Undocumented (NDA 0x65CE5BFC). Fills the private cooler info
-        /// struct (magic 0x10888): per-cooler type + min/max RPM range.
+        /// struct (magic 0x108A8): per-cooler type + min/max RPM range.
         /// RE'd from GPUMon setFanSim.
         pub unsafe fn NvAPI_GPU_FanCoolerGetInfo;
     }
