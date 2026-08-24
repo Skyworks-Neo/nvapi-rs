@@ -791,37 +791,48 @@ pub mod private {
     // public ClientFanCoolers family (0xFB85B01E etc.) — different IDs,
     // different structures, richer data (per-cooler type + min/max RPM).
     //
-    // Three IDs (all already in nvid.rs):
+    // Four IDs (all already in nvid.rs):
     //   FanCoolerGetInfo     0x65CE5BFC  struct 0x108A8 (2216B)
-    //   FanCoolerGetControl  0xCF86B990  struct 0x210AC (135340B)
-    //   FanCoolerSetControl  0xEB44E8AA  struct 0x210AC (135340B)
+    //   FanCoolerGetStatus   0x3CC2D181  struct 0x210A8 (4264B)
+    //   FanCoolerGetControl  0xCF86B990  struct 0x210AC (4268B)
+    //   FanCoolerSetControl  0xEB44E8AA  struct 0x210AC (4268B)
     //
     // Info struct (0x108A8 = version 1, size 0x8A8 = 2216B):
     //   +0x00 u32  magic 0x108A8
-    //   +0x04 u32  cooler count
+    //   +0x04 u32  32-bit cooler presence MASK (bit i = cooler i exists;
+    //              NOT a count — popcount it. GPUMon pollFanSpeed iterates
+    //              bits, so a GPU with 2 fans can report bits 0,1,2 set).
     //
     // Control struct (0x210AC, per-cooler stride 33 dword = 0x84):
     //   +0x00 u32  magic 0x210AC
-    //   +0x04 u32  cooler count (copied from info)
-    //   entry[k] @ +0x08 + k*0x84:
-    //     +0x00 (+0x08)  reserved
-    //     ...
-    //     +0x0C (+0x14)  u32 cooler type (0=active, 1=pwm, 2=pwm-tach)
-    //     +0x18 (+0x20)  u32 min RPM
-    //     +0x1C (+0x24)  u32 max RPM
-    //     +0x20 (+0x28)  u32 enable bitmask (bit0 = simulation active)
-    //     +0x24 (+0x2C)  u32 level (RPM mode: ((rpm-min)<<16)/(max-min);
-    //                               PWM mode: (pct<<16)/100;
-    //                               pwm-tach: raw RPM)
-    //     +0x28 (+0x30)  u32 min PWM
-    //     +0x2C (+0x34)  u32 max PWM
-    //     +0x30 (+0x38)  u32 PWM enable bitmask
-    //     +0x34 (+0x3C)  u32 PWM level
-    //     +0x44 (+0x4C)  u32 tach enable bitmask
-    //     +0x48 (+0x50)  u32 tach level (raw RPM)
+    //   +0x04 u32  cooler mask (copied from info+0x04)
+    //   entry[k] fields at dword[33*k + N]:
+    //     dword 11  u32 cooler type (0=active, 1=pwm, 2=pwm-tach)
+    //     dword 20  u32 min (driver scale — on some GPUs this is the
+    //               normalized 0..65536 duty scale, NOT physical RPM)
+    //     dword 21  u32 max (driver scale)
+    //     dword 22  u32 enable bitmask (bit0 = simulation active)
+    //     dword 23  u32 level (RPM mode: ((v-min)<<16)/(max-min) —
+    //               effectively a 0..65536 duty scale; pwm-tach: raw)
+    //     dword 24  u32 min PWM, dword 25 u32 max PWM
+    //     dword 26/27  PWM enable/level
+    //     dword 30/31  tach enable/level
+    //
+    // Status struct (0x210A8, per-cooler stride 33 dword — same indexing):
+    //   dword 10   u32 tach-type (0=active → dword 19 is current RPM)
+    //   dword 19   u32 current speed (driver scale, same unit as min/max)
+    //   dword 24   u32 current PWM level (×100/65536 → percent)
+    //
+    // IMPORTANT: the "RPM" fields are in the DRIVER's scale. On the 2070
+    // desktop the scale is the normalized 0..65536 duty grid (set v =
+    // v/65536 × 100% duty), on other GPUs it may be raw RPM. The SET
+    // value and the physical result are two different numbers by design;
+    // surface min/max/current so the caller can see the actual grid.
     // ------------------------------------------------------------------
     pub const NV_GPU_FAN_COOLER_INFO_MAGIC: u32 = 0x108A8;
     pub const NV_GPU_FAN_COOLER_INFO_SIZE: usize = 0x8A8;
+    pub const NV_GPU_FAN_COOLER_STATUS_MAGIC: u32 = 0x210A8;
+    pub const NV_GPU_FAN_COOLER_STATUS_SIZE: usize = 0x10A8;
     pub const NV_GPU_FAN_COOLER_CONTROL_MAGIC: u32 = 0x210AC;
     pub const NV_GPU_FAN_COOLER_CONTROL_SIZE: usize = 0x10AC;
     /// Per-cooler entry stride (33 dword = 0x84 bytes). Field addressing is
@@ -844,6 +855,10 @@ pub mod private {
     pub const NV_GPU_FAN_COOLER_OFF_PWM_LEVEL: usize = 27 * 4; // dword 27
     pub const NV_GPU_FAN_COOLER_OFF_TACH_ENABLE: usize = 30 * 4; // dword 30
     pub const NV_GPU_FAN_COOLER_OFF_TACH_LEVEL: usize = 31 * 4; // dword 31
+    // Status-struct field offsets (dword index × 4, same 33-dword stride):
+    pub const NV_GPU_FAN_COOLER_OFF_ST_TYPE: usize = 10 * 4; // dword 10 (tach kind)
+    pub const NV_GPU_FAN_COOLER_OFF_ST_CURRENT: usize = 19 * 4; // dword 19 (current speed)
+    pub const NV_GPU_FAN_COOLER_OFF_ST_PWM: usize = 24 * 4; // dword 24 (current PWM Q16)
 
     nvapi! {
         pub type GPU_FanCoolerGetInfoFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u8) -> NvAPI_Status;
@@ -861,6 +876,16 @@ pub mod private {
         /// struct (magic 0x210AC): per-cooler enable/level snapshot.
         /// RE'd from GPUMon setFanSim (RMW baseline).
         pub unsafe fn NvAPI_GPU_FanCoolerGetControl;
+    }
+
+    nvapi! {
+        pub type GPU_FanCoolerGetStatusFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut u8) -> NvAPI_Status;
+
+        /// Undocumented (NDA 0x3CC2D181). Fills the private cooler status
+        /// struct (magic 0x210A8): per-cooler current speed (dword 19,
+        /// driver scale) + current PWM (dword 24, Q16). RE'd from GPUMon
+        /// pollFanSpeed.
+        pub unsafe fn NvAPI_GPU_FanCoolerGetStatus;
     }
 
     nvapi! {
