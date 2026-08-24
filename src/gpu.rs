@@ -3862,23 +3862,27 @@ impl PhysicalGpu {
     /// `GPUHandle::setFanSim`: GET the control snapshot, patch the target
     /// cooler's enable + level per its cooler type, SET back.
     ///
-    /// `cooler_index` picks the cooler (0-based). `rpm` is the target RPM;
-    /// pass `None` to disable simulation (clear the enable bit → return to
-    /// driver/auto control). The input is clamped into the cooler's
+    /// `cooler_index` picks the cooler (0-based); `None` targets EVERY
+    /// cooler present in the info mask (single RMW round-trip). `rpm` is the
+    /// target RPM; pass `None` to disable simulation (clear the enable bit →
+    /// return to driver/auto control). The input is clamped into the cooler's
     /// `[min_rpm, max_rpm]` physical range (queried from the control
     /// struct) and linearly mapped onto the 0..65536 level scale
-    /// (`level = rpm / max × 65536`) — for every cooler type.
+    /// (`level = rpm / max × 65536`) — for every cooler type. Returns one
+    /// entry per targeted cooler.
     pub fn set_fan_rpm(
         &self,
-        cooler_index: u32,
+        cooler_index: Option<u32>,
         rpm: Option<u32>,
-    ) -> crate::NvapiResult<SetFanRpmResult> {
-        trace!("gpu.set_fan_rpm({}, {:?})", cooler_index, rpm);
-        if cooler_index >= 32 {
-            return Err(crate::NvapiError::new(
-                sys::Api::NvAPI_GPU_FanCoolerSetControl,
-                sys::Status::InvalidArgument,
-            ));
+    ) -> crate::NvapiResult<Vec<SetFanRpmResult>> {
+        trace!("gpu.set_fan_rpm({:?}, {:?})", cooler_index, rpm);
+        if let Some(i) = cooler_index {
+            if i >= 32 {
+                return Err(crate::NvapiError::new(
+                    sys::Api::NvAPI_GPU_FanCoolerSetControl,
+                    sys::Status::InvalidArgument,
+                ));
+            }
         }
         use cooler::private::{
             NV_GPU_FAN_COOLER_CONTROL_MAGIC, NV_GPU_FAN_COOLER_CONTROL_SIZE,
@@ -3892,7 +3896,7 @@ impl PhysicalGpu {
         buf[..4].copy_from_slice(&NV_GPU_FAN_COOLER_CONTROL_MAGIC.to_ne_bytes());
         // FanCoolerGetInfo fills the count; mirror GPUMon by querying info
         // first to set count, then GET control.
-        {
+        let mask = {
             let mut info = vec![0u8; NV_GPU_FAN_COOLER_INFO_SIZE];
             info[..4].copy_from_slice(&NV_GPU_FAN_COOLER_INFO_MAGIC.to_ne_bytes());
             unsafe {
@@ -3904,60 +3908,79 @@ impl PhysicalGpu {
             let mask = read_u32(&info, 0x04);
             // Guard: the requested cooler must actually exist (presence
             // mask from info, NOT a count — see pollFanSpeed).
-            if mask & (1u32 << cooler_index) == 0 {
-                return Err(crate::NvapiError::new(
-                    sys::Api::NvAPI_GPU_FanCoolerSetControl,
-                    sys::Status::InvalidArgument,
-                ));
+            if let Some(i) = cooler_index {
+                if mask & (1u32 << i) == 0 {
+                    return Err(crate::NvapiError::new(
+                        sys::Api::NvAPI_GPU_FanCoolerSetControl,
+                        sys::Status::InvalidArgument,
+                    ));
+                }
             }
-            write_u32(&mut buf, 0x04, mask);
-        }
+            mask
+        };
+        write_u32(&mut buf, 0x04, mask);
         unsafe {
             nvcall!(NvAPI_GPU_FanCoolerGetControl(
                 self.0,
                 buf.as_mut_ptr() as *mut _
             ))?;
         }
-        let base = NV_GPU_FAN_COOLER_ENTRY0_BASE + cooler_index as usize * NV_GPU_FAN_COOLER_ENTRY_STRIDE;
-        let cooler_type = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_TYPE);
-        let min_rpm = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MIN_RPM);
-        let max_rpm = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MAX_RPM);
-        match rpm {
-            None => {
-                // Disable simulation: clear enable bit.
-                let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
-                write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en & !1);
-            }
-            Some(target) => {
-                // min/max from the control struct are the cooler's PHYSICAL
-                // RPM range (2070 live-verified: fan0 max = 3300 = full
-                // speed). The level register is a 0..65536 scale where
-                // 65536 = 100% = max RPM, so the conversion is a direct
-                // linear map: raw = rpm / max × 65536. (The relative
-                // interpolation ((v-min)<<16)/(max-min) double-converts —
-                // it first normalizes into the min..max span and then the
-                // driver scales again.)
-                // Guard: clamp the input into [min, max] (u64 math, no
-                // overflow). The 0..65536 level scale applies to ALL cooler
-                // types — 2070 live test showed the pwm-tach (type 2) raw
-                // RPM write lands at rpm/65536 ≈ 5% at full speed.
-                if max_rpm == 0 {
-                    // No range reported: reject rather than divide by 0.
-                    return Err(crate::NvapiError::new(
-                        sys::Api::NvAPI_GPU_FanCoolerSetControl,
-                        sys::Status::InvalidArgument,
-                    ));
+        // Targets: the requested cooler, or every present cooler.
+        let targets: Vec<u32> = match cooler_index {
+            Some(i) => vec![i],
+            None => (0..32u32).filter(|&k| mask & (1u32 << k) != 0).collect(),
+        };
+        let mut out = Vec::with_capacity(targets.len());
+        for k in targets {
+            let base =
+                NV_GPU_FAN_COOLER_ENTRY0_BASE + k as usize * NV_GPU_FAN_COOLER_ENTRY_STRIDE;
+            let cooler_type = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_TYPE);
+            let min_rpm = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MIN_RPM);
+            let max_rpm = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MAX_RPM);
+            match rpm {
+                None => {
+                    // Disable simulation: clear enable bit.
+                    let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
+                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en & !1);
                 }
-                let v = if min_rpm <= max_rpm {
-                    target.clamp(min_rpm, max_rpm)
-                } else {
-                    target
-                };
-                let level = ((v as u64) << 16) / (max_rpm as u64) as u64;
-                let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
-                write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en | 1);
-                write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, level as u32);
+                Some(target) => {
+                    // min/max from the control struct are the cooler's PHYSICAL
+                    // RPM range (2070 live-verified: fan0 max = 3300 = full
+                    // speed). The level register is a 0..65536 scale where
+                    // 65536 = 100% = max RPM, so the conversion is a direct
+                    // linear map: raw = rpm / max × 65536. (The relative
+                    // interpolation ((v-min)<<16)/(max-min) double-converts —
+                    // it first normalizes into the min..max span and then the
+                    // driver scales again.)
+                    // Guard: clamp the input into [min, max] (u64 math, no
+                    // overflow). The 0..65536 level scale applies to ALL cooler
+                    // types — 2070 live test showed the pwm-tach (type 2) raw
+                    // RPM write lands at rpm/65536 ≈ 5% at full speed.
+                    if max_rpm == 0 {
+                        // No range reported: reject rather than divide by 0.
+                        return Err(crate::NvapiError::new(
+                            sys::Api::NvAPI_GPU_FanCoolerSetControl,
+                            sys::Status::InvalidArgument,
+                        ));
+                    }
+                    let v = if min_rpm <= max_rpm {
+                        target.clamp(min_rpm, max_rpm)
+                    } else {
+                        target
+                    };
+                    let level = ((v as u64) << 16) / (max_rpm as u64) as u64;
+                    let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
+                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en | 1);
+                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, level as u32);
+                }
             }
+            out.push(SetFanRpmResult {
+                cooler_index: k,
+                cooler_type,
+                min_rpm,
+                max_rpm,
+                applied_rpm: rpm,
+            });
         }
         unsafe {
             nvcall!(NvAPI_GPU_FanCoolerSetControl(
@@ -3965,13 +3988,7 @@ impl PhysicalGpu {
                 buf.as_ptr() as *const _
             ))?;
         }
-        Ok(SetFanRpmResult {
-            cooler_index,
-            cooler_type,
-            min_rpm,
-            max_rpm,
-            applied_rpm: rpm,
-        })
+        Ok(out)
     }
 
     pub fn getcooler_settings(
