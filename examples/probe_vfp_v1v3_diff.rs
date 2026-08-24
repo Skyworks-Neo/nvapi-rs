@@ -16,11 +16,14 @@
 //! Run: `cargo run --release --example probe_vfp_v1v3_diff`
 
 use nvapi::initialize;
-use nvapi::sys::api::{NvAPI_EnumPhysicalGPUs, NvAPI_GPU_ClockClientClkVfPointsGetInfo, NvVersion, NvAPI_GPU_ClockClientClkVfPointsGetStatus};
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
+use nvapi::sys::api::{
+    NvAPI_EnumPhysicalGPUs, NvAPI_GPU_ClockClientClkVfPointsGetInfo,
+    NvAPI_GPU_ClockClientClkVfPointsGetStatus, NvVersion,
+};
 use nvapi::sys::gpu::clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
 use nvapi::sys::nvapi::VersionedStruct;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use std::ptr;
 
 /// V1 truth: version(4) + mask 8×u32(32) + pad 8×u32(32) = 68; stride 28.
@@ -38,11 +41,14 @@ fn main() {
     let gpu = handles[0];
 
     // 1. GetInfo — mask builder (V1, 6188B)
-    let mut info = Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>() });
+    let mut info =
+        Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>() });
     *info.nvapi_version_mut() = NvVersion::with_struct::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>(1);
     let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetInfo(gpu, ptr::from_mut(&mut *info)) };
     println!("GetInfo st={st} magic=0x{:X}", info.version.data);
-    if st != 0 { return; }
+    if st != 0 {
+        return;
+    }
     let mask_ptr = ptr::from_ref(&info.mask.mask) as *const u8;
 
     // 2. GetStatus V1 (7208B) — ver2 magic 0x21C28 (both ver1 0x11C28 and
@@ -50,18 +56,28 @@ fn main() {
     //    probe_blackwell_vf stage 2 for the full magic matrix)
     let mut v1 = vec![0u8; 7208];
     v1[0..4].copy_from_slice(&0x21C28u32.to_le_bytes());
-    unsafe { std::ptr::copy_nonoverlapping(mask_ptr, v1.as_mut_ptr().add(4), 32); }
+    unsafe {
+        std::ptr::copy_nonoverlapping(mask_ptr, v1.as_mut_ptr().add(4), 32);
+    }
     let st1 = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, v1.as_mut_ptr() as *mut _) };
     println!("GetStatus V1(ver2) st={st1}");
-    if st1 != 0 { println!("  V1 failed: {st1}"); return; }
+    if st1 != 0 {
+        println!("  V1 failed: {st1}");
+        return;
+    }
 
     // 3. GetStatus V3 (88844B, ver3 0x35B0C)
     let mut v3 = vec![0u8; 88844];
     v3[0..4].copy_from_slice(&0x35B0Cu32.to_le_bytes());
-    unsafe { std::ptr::copy_nonoverlapping(mask_ptr, v3.as_mut_ptr().add(4), 32); }
+    unsafe {
+        std::ptr::copy_nonoverlapping(mask_ptr, v3.as_mut_ptr().add(4), 32);
+    }
     let st3 = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, v3.as_mut_ptr() as *mut _) };
     println!("GetStatus V3(ver3) st={st3}");
-    if st3 != 0 { println!("  V3 failed: {st3}"); return; }
+    if st3 != 0 {
+        println!("  V3 failed: {st3}");
+        return;
+    }
 
     let dw = |buf: &[u8], off: usize| u32::from_le_bytes(buf[off..off + 4].try_into().unwrap());
 
@@ -70,24 +86,43 @@ fn main() {
     let mut shown = 0;
     for i in 0..255 {
         let o = HDR_V1 + S1 * i;
-        if o + S1 > v1.len() { break; }
+        if o + S1 > v1.len() {
+            break;
+        }
         let (ct, f, v) = (dw(&v1, o), dw(&v1, o + 4), dw(&v1, o + 8));
-        if ct == 0 && f == 0 && v == 0 { continue; }
+        if ct == 0 && f == 0 && v == 0 {
+            continue;
+        }
         println!("  V1[{}] type={} freq={}kHz volt={}uV", i, ct, f, v);
         shown += 1;
-        if shown >= 5 { break; }
+        if shown >= 5 {
+            break;
+        }
     }
     println!("-- first V3 entries (cur@+4/+8, def@+12/+16) --");
     shown = 0;
     for i in 0..255 {
         let o = HDR_V3 + S3 * i;
-        if o + S3 > v3.len() { break; }
+        if o + S3 > v3.len() {
+            break;
+        }
         let (ct, f, v) = (dw(&v3, o), dw(&v3, o + 4), dw(&v3, o + 8));
-        if ct == 0 && f == 0 && v == 0 { continue; }
-        println!("  V3[{}] type={} cur=({}kHz,{}uV) def=({},{})", i, ct, f, v,
-            dw(&v3, o + 12), dw(&v3, o + 16));
+        if ct == 0 && f == 0 && v == 0 {
+            continue;
+        }
+        println!(
+            "  V3[{}] type={} cur=({}kHz,{}uV) def=({},{})",
+            i,
+            ct,
+            f,
+            v,
+            dw(&v3, o + 12),
+            dw(&v3, o + 16)
+        );
         shown += 1;
-        if shown >= 5 { break; }
+        if shown >= 5 {
+            break;
+        }
     }
 
     // 5. cross-check: V1 (freq@+4/volt@+8) vs V3 current pair, per index
@@ -96,11 +131,17 @@ fn main() {
     let mut first_disagree: Option<usize> = None;
     for i in 0..255 {
         let (o1, o3) = (HDR_V1 + S1 * i, HDR_V3 + S3 * i);
-        if o1 + S1 > v1.len() || o3 + S3 > v3.len() { break; }
+        if o1 + S1 > v1.len() || o3 + S3 > v3.len() {
+            break;
+        }
         let (v1_f, v1_v) = (dw(&v1, o1 + 4), dw(&v1, o1 + 8));
         let (v3_f, v3_v) = (dw(&v3, o3 + 4), dw(&v3, o3 + 8));
-        if v1_f == 0 && v1_v == 0 { continue; }
-        if v1_f == v3_f && v1_v == v3_v { agree += 1; } else {
+        if v1_f == 0 && v1_v == 0 {
+            continue;
+        }
+        if v1_f == v3_f && v1_v == v3_v {
+            agree += 1;
+        } else {
             disagree += 1;
             if first_disagree.is_none() {
                 first_disagree = Some(i);
@@ -114,12 +155,22 @@ fn main() {
     let mut types: std::collections::BTreeMap<u32, (usize, usize, usize)> = Default::default();
     for i in 0..255 {
         let o = HDR_V1 + S1 * i;
-        if o + S1 > v1.len() { break; }
+        if o + S1 > v1.len() {
+            break;
+        }
         let (ct, f, v) = (dw(&v1, o), dw(&v1, o + 4), dw(&v1, o + 8));
-        if ct == 0 && f == 0 && v == 0 { continue; }
+        if ct == 0 && f == 0 && v == 0 {
+            continue;
+        }
         match types.get_mut(&ct) {
-            Some((n, lo, hi)) => { *n += 1; *lo = (*lo).min(i); *hi = (*hi).max(i); }
-            None => { types.insert(ct, (1, i, i)); }
+            Some((n, lo, hi)) => {
+                *n += 1;
+                *lo = (*lo).min(i);
+                *hi = (*hi).max(i);
+            }
+            None => {
+                types.insert(ct, (1, i, i));
+            }
         }
     }
     for (ct, (n, lo, hi)) in &types {

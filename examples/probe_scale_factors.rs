@@ -103,13 +103,19 @@ fn main() {
     let mut info = vec![0u8; INFO_SIZE];
     info[0..4].copy_from_slice(&INFO_MAGIC.to_le_bytes());
     let st = unsafe { info_fn(h, info.as_mut_ptr()) };
-    println!("\nGetInfo  st={st} ({})  magic=0x{INFO_MAGIC:X} size={INFO_SIZE}", status_name(st));
+    println!(
+        "\nGetInfo  st={st} ({})  magic=0x{INFO_MAGIC:X} size={INFO_SIZE}",
+        status_name(st)
+    );
     if st != 0 {
         return;
     }
     let info_status = u32::from_le_bytes(info[4..8].try_into().unwrap());
     let bitmask = u32::from_le_bytes(info[8..12].try_into().unwrap());
-    println!("  status_code={info_status}  bitmask=0x{bitmask:08X} ({}/32 points set)", bitmask.count_ones());
+    println!(
+        "  status_code={info_status}  bitmask=0x{bitmask:08X} ({}/32 points set)",
+        bitmask.count_ones()
+    );
 
     println!("\n  idx  enum  value");
     for idx in 0..32u32 {
@@ -129,7 +135,10 @@ fn main() {
     stat[0..4].copy_from_slice(&STATUS_MAGIC.to_le_bytes());
     stat[4..8].copy_from_slice(&bitmask.to_le_bytes());
     let st = unsafe { status_fn(h, stat.as_mut_ptr()) };
-    println!("\nGetStatus st={st} ({})  magic=0x{STATUS_MAGIC:X} size={STATUS_SIZE}", status_name(st));
+    println!(
+        "\nGetStatus st={st} ({})  magic=0x{STATUS_MAGIC:X} size={STATUS_SIZE}",
+        status_name(st)
+    );
     if st != 0 {
         return;
     }

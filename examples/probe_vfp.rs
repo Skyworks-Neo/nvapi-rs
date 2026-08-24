@@ -18,10 +18,10 @@
 //!     → the OVERRIDE table (mode@+36, value@+56, flag@+96) — the RMW
 //!       snapshot source for SetControl 0xFEC00D04.
 use nvapi::initialize;
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::api::NvAPI_EnumPhysicalGPUs;
 use nvapi::sys::gpu::clock::private::*;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use std::ptr;
 
 fn main() {
@@ -45,7 +45,8 @@ fn main() {
     // 2. GetStatus — full V/F table, header seeded
     let mut status = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1::default());
     info.seed_status_header(&mut status);
-    let st = unsafe { NvAPI_GPU_ClockClkVfPointsGetStatus(gpu, ptr::from_mut(&mut *status).cast()) };
+    let st =
+        unsafe { NvAPI_GPU_ClockClkVfPointsGetStatus(gpu, ptr::from_mut(&mut *status).cast()) };
     println!("GetStatus st={st} (magic 0x{:X})", status.version.data);
     assert_eq!(st, 0);
 

@@ -580,52 +580,247 @@ pub struct ClkVfGPrior {
 /// [`crate::gpu::PhysicalGpu::clk_vf_calibrate_private`].
 pub const CLK_VF_G_PRIOR: &[ClkVfGPrior] = &[
     // def_lo def_hi  C        D0
-    ClkVfGPrior { def_mhz_lo: 200, def_mhz_hi: 330, c_mhz_per_delta: 0.0800, d0_delta: -8.0 },
-    ClkVfGPrior { def_mhz_lo: 345, def_mhz_hi: 480, c_mhz_per_delta: 0.1125, d0_delta: 0.0 },
-    ClkVfGPrior { def_mhz_lo: 495, def_mhz_hi: 510, c_mhz_per_delta: 0.1250, d0_delta: 0.0 },
-    ClkVfGPrior { def_mhz_lo: 540, def_mhz_hi: 570, c_mhz_per_delta: 0.1600, d0_delta: 20.0 },
-    ClkVfGPrior { def_mhz_lo: 600, def_mhz_hi: 690, c_mhz_per_delta: 0.1550, d0_delta: -17.0 },
-    ClkVfGPrior { def_mhz_lo: 720, def_mhz_hi: 745, c_mhz_per_delta: 0.1750, d0_delta: 0.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 200,
+        def_mhz_hi: 330,
+        c_mhz_per_delta: 0.0800,
+        d0_delta: -8.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 345,
+        def_mhz_hi: 480,
+        c_mhz_per_delta: 0.1125,
+        d0_delta: 0.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 495,
+        def_mhz_hi: 510,
+        c_mhz_per_delta: 0.1250,
+        d0_delta: 0.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 540,
+        def_mhz_hi: 570,
+        c_mhz_per_delta: 0.1600,
+        d0_delta: 20.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 600,
+        def_mhz_hi: 690,
+        c_mhz_per_delta: 0.1550,
+        d0_delta: -17.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 720,
+        def_mhz_hi: 745,
+        c_mhz_per_delta: 0.1750,
+        d0_delta: 0.0,
+    },
     // TU104-observed band
-    ClkVfGPrior { def_mhz_lo: 750, def_mhz_hi: 765, c_mhz_per_delta: 0.1875, d0_delta: -240.0 },
-    ClkVfGPrior { def_mhz_lo: 765, def_mhz_hi: 870, c_mhz_per_delta: 0.2025, d0_delta: -9.0 },
-    ClkVfGPrior { def_mhz_lo: 915, def_mhz_hi: 915, c_mhz_per_delta: 0.2500, d0_delta: 15.0 },
-    ClkVfGPrior { def_mhz_lo: 930, def_mhz_hi: 945, c_mhz_per_delta: 0.2575, d0_delta: 21.0 },
-    ClkVfGPrior { def_mhz_lo: 975, def_mhz_hi: 1005, c_mhz_per_delta: 0.2625, d0_delta: 18.0 },
-    ClkVfGPrior { def_mhz_lo: 1020, def_mhz_hi: 1040, c_mhz_per_delta: 0.2700, d0_delta: 19.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 750,
+        def_mhz_hi: 765,
+        c_mhz_per_delta: 0.1875,
+        d0_delta: -240.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 765,
+        def_mhz_hi: 870,
+        c_mhz_per_delta: 0.2025,
+        d0_delta: -9.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 915,
+        def_mhz_hi: 915,
+        c_mhz_per_delta: 0.2500,
+        d0_delta: 15.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 930,
+        def_mhz_hi: 945,
+        c_mhz_per_delta: 0.2575,
+        d0_delta: 21.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 975,
+        def_mhz_hi: 1005,
+        c_mhz_per_delta: 0.2625,
+        d0_delta: 18.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1020,
+        def_mhz_hi: 1040,
+        c_mhz_per_delta: 0.2700,
+        d0_delta: 19.0,
+    },
     // main OC band: long 0.30 plateau, D0 +25
-    ClkVfGPrior { def_mhz_lo: 1050, def_mhz_hi: 1185, c_mhz_per_delta: 0.3000, d0_delta: 25.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 1050,
+        def_mhz_hi: 1185,
+        c_mhz_per_delta: 0.3000,
+        d0_delta: 25.0,
+    },
     // reproducible dip (all datasets)
-    ClkVfGPrior { def_mhz_lo: 1200, def_mhz_hi: 1215, c_mhz_per_delta: 0.2700, d0_delta: -14.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 1200,
+        def_mhz_hi: 1215,
+        c_mhz_per_delta: 0.2700,
+        d0_delta: -14.0,
+    },
     // 0.30 again, D0 flips to −25
-    ClkVfGPrior { def_mhz_lo: 1230, def_mhz_hi: 1365, c_mhz_per_delta: 0.3000, d0_delta: -25.0 },
-    ClkVfGPrior { def_mhz_lo: 1380, def_mhz_hi: 1395, c_mhz_per_delta: 0.3225, d0_delta: -20.0 },
-    ClkVfGPrior { def_mhz_lo: 1410, def_mhz_hi: 1410, c_mhz_per_delta: 0.3250, d0_delta: -21.0 },
-    ClkVfGPrior { def_mhz_lo: 1440, def_mhz_hi: 1440, c_mhz_per_delta: 0.3300, d0_delta: -20.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 1230,
+        def_mhz_hi: 1365,
+        c_mhz_per_delta: 0.3000,
+        d0_delta: -25.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1380,
+        def_mhz_hi: 1395,
+        c_mhz_per_delta: 0.3225,
+        d0_delta: -20.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1410,
+        def_mhz_hi: 1410,
+        c_mhz_per_delta: 0.3250,
+        d0_delta: -21.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1440,
+        def_mhz_hi: 1440,
+        c_mhz_per_delta: 0.3300,
+        d0_delta: -20.0,
+    },
     // def 1470 → 0.3375: identical on CMP 170HX, 4060 GPC and 4060 XBAR
-    ClkVfGPrior { def_mhz_lo: 1470, def_mhz_hi: 1530, c_mhz_per_delta: 0.3375, d0_delta: -19.0 },
-    ClkVfGPrior { def_mhz_lo: 1545, def_mhz_hi: 1620, c_mhz_per_delta: 0.3875, d0_delta: -7.0 },
-    ClkVfGPrior { def_mhz_lo: 1635, def_mhz_hi: 1665, c_mhz_per_delta: 0.3950, d0_delta: -9.0 },
-    ClkVfGPrior { def_mhz_lo: 1710, def_mhz_hi: 1710, c_mhz_per_delta: 0.4100, d0_delta: -4.0 },
-    ClkVfGPrior { def_mhz_lo: 1725, def_mhz_hi: 1740, c_mhz_per_delta: 0.4150, d0_delta: -6.0 },
-    ClkVfGPrior { def_mhz_lo: 1755, def_mhz_hi: 1830, c_mhz_per_delta: 0.4350, d0_delta: -8.0 },
-    ClkVfGPrior { def_mhz_lo: 1845, def_mhz_hi: 1920, c_mhz_per_delta: 0.4500, d0_delta: -8.0 },
-    ClkVfGPrior { def_mhz_lo: 1950, def_mhz_hi: 1950, c_mhz_per_delta: 0.4650, d0_delta: -6.0 },
-    ClkVfGPrior { def_mhz_lo: 1965, def_mhz_hi: 1980, c_mhz_per_delta: 0.4700, d0_delta: -7.0 },
-    ClkVfGPrior { def_mhz_lo: 1995, def_mhz_hi: 2025, c_mhz_per_delta: 0.4900, d0_delta: -2.0 },
-    ClkVfGPrior { def_mhz_lo: 2040, def_mhz_hi: 2055, c_mhz_per_delta: 0.4850, d0_delta: -7.0 },
-    ClkVfGPrior { def_mhz_lo: 2070, def_mhz_hi: 2100, c_mhz_per_delta: 0.4975, d0_delta: -6.0 },
-    ClkVfGPrior { def_mhz_lo: 2115, def_mhz_hi: 2145, c_mhz_per_delta: 0.5125, d0_delta: -3.0 },
-    ClkVfGPrior { def_mhz_lo: 2160, def_mhz_hi: 2175, c_mhz_per_delta: 0.5275, d0_delta: -3.0 },
-    ClkVfGPrior { def_mhz_lo: 2205, def_mhz_hi: 2235, c_mhz_per_delta: 0.5375, d0_delta: -3.0 },
-    ClkVfGPrior { def_mhz_lo: 2265, def_mhz_hi: 2265, c_mhz_per_delta: 0.5475, d0_delta: -3.0 },
-    ClkVfGPrior { def_mhz_lo: 2280, def_mhz_hi: 2340, c_mhz_per_delta: 0.5575, d0_delta: -2.0 },
-    ClkVfGPrior { def_mhz_lo: 2355, def_mhz_hi: 2415, c_mhz_per_delta: 0.5775, d0_delta: -1.0 },
-    ClkVfGPrior { def_mhz_lo: 2430, def_mhz_hi: 2445, c_mhz_per_delta: 0.5625, d0_delta: -5.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 1470,
+        def_mhz_hi: 1530,
+        c_mhz_per_delta: 0.3375,
+        d0_delta: -19.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1545,
+        def_mhz_hi: 1620,
+        c_mhz_per_delta: 0.3875,
+        d0_delta: -7.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1635,
+        def_mhz_hi: 1665,
+        c_mhz_per_delta: 0.3950,
+        d0_delta: -9.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1710,
+        def_mhz_hi: 1710,
+        c_mhz_per_delta: 0.4100,
+        d0_delta: -4.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1725,
+        def_mhz_hi: 1740,
+        c_mhz_per_delta: 0.4150,
+        d0_delta: -6.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1755,
+        def_mhz_hi: 1830,
+        c_mhz_per_delta: 0.4350,
+        d0_delta: -8.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1845,
+        def_mhz_hi: 1920,
+        c_mhz_per_delta: 0.4500,
+        d0_delta: -8.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1950,
+        def_mhz_hi: 1950,
+        c_mhz_per_delta: 0.4650,
+        d0_delta: -6.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1965,
+        def_mhz_hi: 1980,
+        c_mhz_per_delta: 0.4700,
+        d0_delta: -7.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1995,
+        def_mhz_hi: 2025,
+        c_mhz_per_delta: 0.4900,
+        d0_delta: -2.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2040,
+        def_mhz_hi: 2055,
+        c_mhz_per_delta: 0.4850,
+        d0_delta: -7.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2070,
+        def_mhz_hi: 2100,
+        c_mhz_per_delta: 0.4975,
+        d0_delta: -6.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2115,
+        def_mhz_hi: 2145,
+        c_mhz_per_delta: 0.5125,
+        d0_delta: -3.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2160,
+        def_mhz_hi: 2175,
+        c_mhz_per_delta: 0.5275,
+        d0_delta: -3.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2205,
+        def_mhz_hi: 2235,
+        c_mhz_per_delta: 0.5375,
+        d0_delta: -3.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2265,
+        def_mhz_hi: 2265,
+        c_mhz_per_delta: 0.5475,
+        d0_delta: -3.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2280,
+        def_mhz_hi: 2340,
+        c_mhz_per_delta: 0.5575,
+        d0_delta: -2.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2355,
+        def_mhz_hi: 2415,
+        c_mhz_per_delta: 0.5775,
+        d0_delta: -1.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2430,
+        def_mhz_hi: 2445,
+        c_mhz_per_delta: 0.5625,
+        d0_delta: -5.0,
+    },
     // domain-ceiling band: Q doubles to 30 MHz here (observed on both the
     // 4060 GPC ceiling 2640 and XBAR ceiling 2490)
-    ClkVfGPrior { def_mhz_lo: 2460, def_mhz_hi: 2595, c_mhz_per_delta: 0.6000, d0_delta: -25.0 },
-    ClkVfGPrior { def_mhz_lo: 2600, def_mhz_hi: 2700, c_mhz_per_delta: 0.6250, d0_delta: -11.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 2460,
+        def_mhz_hi: 2595,
+        c_mhz_per_delta: 0.6000,
+        d0_delta: -25.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 2600,
+        def_mhz_hi: 2700,
+        c_mhz_per_delta: 0.6250,
+        d0_delta: -11.0,
+    },
 ];
 
 /// Domain family for the mode-1 prior: the skeleton is universal, but the
@@ -648,17 +843,62 @@ pub enum ClkVfDomainClass {
 /// point-for-point; bands absent here fall through to [`CLK_VF_G_PRIOR`]).
 pub const CLK_VF_FABRIC_OVERRIDES: &[ClkVfGPrior] = &[
     // def_lo def_hi  C        D0
-    ClkVfGPrior { def_mhz_lo: 510, def_mhz_hi: 570, c_mhz_per_delta: 0.2000, d0_delta: 62.0 },
-    ClkVfGPrior { def_mhz_lo: 765, def_mhz_hi: 795, c_mhz_per_delta: 0.2250, d0_delta: 25.0 },
-    ClkVfGPrior { def_mhz_lo: 825, def_mhz_hi: 900, c_mhz_per_delta: 0.2400, d0_delta: 19.0 },
-    ClkVfGPrior { def_mhz_lo: 915, def_mhz_hi: 945, c_mhz_per_delta: 0.2500, d0_delta: 15.0 },
-    ClkVfGPrior { def_mhz_lo: 1530, def_mhz_hi: 1620, c_mhz_per_delta: 0.3500, d0_delta: -18.0 },
-    ClkVfGPrior { def_mhz_lo: 1635, def_mhz_hi: 1710, c_mhz_per_delta: 0.3975, d0_delta: -8.0 },
-    ClkVfGPrior { def_mhz_lo: 1725, def_mhz_hi: 1825, c_mhz_per_delta: 0.4250, d0_delta: -3.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 510,
+        def_mhz_hi: 570,
+        c_mhz_per_delta: 0.2000,
+        d0_delta: 62.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 765,
+        def_mhz_hi: 795,
+        c_mhz_per_delta: 0.2250,
+        d0_delta: 25.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 825,
+        def_mhz_hi: 900,
+        c_mhz_per_delta: 0.2400,
+        d0_delta: 19.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 915,
+        def_mhz_hi: 945,
+        c_mhz_per_delta: 0.2500,
+        d0_delta: 15.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1530,
+        def_mhz_hi: 1620,
+        c_mhz_per_delta: 0.3500,
+        d0_delta: -18.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1635,
+        def_mhz_hi: 1710,
+        c_mhz_per_delta: 0.3975,
+        d0_delta: -8.0,
+    },
+    ClkVfGPrior {
+        def_mhz_lo: 1725,
+        def_mhz_hi: 1825,
+        c_mhz_per_delta: 0.4250,
+        d0_delta: -3.0,
+    },
     // reproducible fabric dip at 1830 (both XBAR and HOST)
-    ClkVfGPrior { def_mhz_lo: 1830, def_mhz_hi: 1840, c_mhz_per_delta: 0.4125, d0_delta: -14.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 1830,
+        def_mhz_hi: 1840,
+        c_mhz_per_delta: 0.4125,
+        d0_delta: -14.0,
+    },
     // HOST ceiling 2250 (Q stays 15 there — no ceiling doubling on HOST)
-    ClkVfGPrior { def_mhz_lo: 2250, def_mhz_hi: 2320, c_mhz_per_delta: 0.5700, d0_delta: -1.0 },
+    ClkVfGPrior {
+        def_mhz_lo: 2250,
+        def_mhz_hi: 2320,
+        c_mhz_per_delta: 0.5700,
+        d0_delta: -1.0,
+    },
 ];
 
 /// Look up the universal mode-1 prior (C, D0) for a point with this
@@ -702,10 +942,7 @@ pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
 /// piecewise first-order rule as Graphics (fabric C ≈ def/4000 too —
 /// verified: 2285 MHz fabric → 0.570 vs rule 0.571, near-exact at high
 /// def; the low band runs hot but that region is override-covered).
-pub fn clk_vf_g_prior_class(
-    def_mhz: u32,
-    class: ClkVfDomainClass,
-) -> Option<(f64, f64)> {
+pub fn clk_vf_g_prior_class(def_mhz: u32, class: ClkVfDomainClass) -> Option<(f64, f64)> {
     match class {
         ClkVfDomainClass::Graphics => clk_vf_g_prior(def_mhz),
         ClkVfDomainClass::Fabric => CLK_VF_FABRIC_OVERRIDES
@@ -721,11 +958,7 @@ pub fn clk_vf_g_prior_class(
 /// frequency, per the prior for `class` (Graphics for GPC, Fabric for
 /// XBAR/HOST). Negative results clamp to 0 (backward moves are
 /// slope-capped anyway).
-pub fn clk_vf_effect_for_delta(
-    def_mhz: u32,
-    delta: i32,
-    class: ClkVfDomainClass,
-) -> Option<f64> {
+pub fn clk_vf_effect_for_delta(def_mhz: u32, delta: i32, class: ClkVfDomainClass) -> Option<f64> {
     let (c, d0) = clk_vf_g_prior_class(def_mhz, class)?;
     Some(((delta as f64 - d0) * c).max(0.0))
 }
@@ -823,7 +1056,12 @@ pub fn clk_vf_stair_fit(samples: &[ClkVfStairSample], q_mhz: i64) -> Option<ClkV
     if !(b_lo < b_hi) {
         return None;
     }
-    Some(ClkVfStairFit { c, c_lo: lo, c_hi: hi, d0: (b_lo + b_hi) / 2.0 / c })
+    Some(ClkVfStairFit {
+        c,
+        c_lo: lo,
+        c_hi: hi,
+        d0: (b_lo + b_hi) / 2.0 / c,
+    })
 }
 
 /// Per-point outcome of a sparse mode-1 calibration sweep.

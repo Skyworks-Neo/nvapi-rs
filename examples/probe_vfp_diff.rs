@@ -17,14 +17,14 @@
 //!   defaults: 0 79 4 600 50   (10-series public/private tables span 0..79)
 //! Run as admin. Every point: lock → ladder → restore (mode-0 0) → unlock.
 use nvapi::initialize;
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
+use nvapi::sys::api::NvVersion;
 use nvapi::sys::api::{
     NvAPI_EnumPhysicalGPUs, NvAPI_GPU_ClockClkVfPointsGetControl,
     NvAPI_GPU_ClockClkVfPointsGetInfo, NvAPI_GPU_ClockClkVfPointsSetControl,
 };
 use nvapi::sys::gpu::clock::private::*;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
-use nvapi::sys::api::NvVersion;
 use std::ptr;
 
 fn get_info(gpu: NvPhysicalGpuHandle) -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1> {
@@ -33,8 +33,13 @@ fn get_info(gpu: NvPhysicalGpuHandle) -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_I
     info
 }
 
-fn write_point(gpu: NvPhysicalGpuHandle, idx: usize, freq_mode: bool, value: u32,
-               info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1) {
+fn write_point(
+    gpu: NvPhysicalGpuHandle,
+    idx: usize,
+    freq_mode: bool,
+    value: u32,
+    info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1,
+) {
     let mut snap: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
         Box::new(unsafe { std::mem::zeroed() });
     snap.version = NvVersion::with_version(clk_vfp_control::MAGIC);
@@ -42,8 +47,11 @@ fn write_point(gpu: NvPhysicalGpuHandle, idx: usize, freq_mode: bool, value: u32
     unsafe { NvAPI_GPU_ClockClkVfPointsGetControl(gpu, ptr::from_mut(&mut *snap).cast()) };
     snap.set_mask_bit(0, idx);
     snap.set_record_type(0, idx, 8);
-    if freq_mode { snap.set_absolute(0, idx, value); }
-    else { snap.set_delta(0, idx, value as i16); }
+    if freq_mode {
+        snap.set_absolute(0, idx, value);
+    } else {
+        snap.set_delta(0, idx, value as i16);
+    }
     unsafe { NvAPI_GPU_ClockClkVfPointsSetControl(gpu, ptr::from_ref(&*snap).cast()) };
 }
 
@@ -99,15 +107,23 @@ fn main() {
     };
 
     let ladder: Vec<i64> = (0..=dmax).step_by(d_step as usize).collect();
-    println!("=== Pascal batch locked-voltage calibration: idx {idx_lo}..{idx_hi} every {pt_step}, ladder 0..={dmax} step {d_step} ===");
+    println!(
+        "=== Pascal batch locked-voltage calibration: idx {idx_lo}..{idx_hi} every {pt_step}, ladder 0..={dmax} step {d_step} ==="
+    );
     println!("idx,volt_mV,def_mHz,C,C_lo,C_hi,D0,prior_C,dev");
 
     let mut row = 0usize;
     for idx in idx_lo..=idx_hi {
-        let Some((_, e)) = entries.iter().find(|(i, _)| *i == idx) else { continue };
-        if info.point_present(0, idx) != Some(true) { continue; }
+        let Some((_, e)) = entries.iter().find(|(i, _)| *i == idx) else {
+            continue;
+        };
+        if info.point_present(0, idx) != Some(true) {
+            continue;
+        }
         row += 1;
-        if (row - 1) % pt_step != 0 { continue; }
+        if (row - 1) % pt_step != 0 {
+            continue;
+        }
 
         let p = e.configured();
         let volt_uv = p.voltage.0 as u32;
@@ -119,7 +135,11 @@ fn main() {
 
         // lock → baseline (offset must be small: the lock pins the op point)
         if let Err(err) = volt_lock(Some(volt_uv)) {
-            println!("{idx},{},{},LOCK-FAILED {err:?}", volt_uv / 1000, def_pub as i64);
+            println!(
+                "{idx},{},{},LOCK-FAILED {err:?}",
+                volt_uv / 1000,
+                def_pub as i64
+            );
             continue;
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
@@ -129,8 +149,12 @@ fn main() {
             continue;
         };
         if (live0 - def_pub).abs() > 100.0 {
-            println!("{idx},{},{},UNPINNED off={:+.0}", volt_uv / 1000, def_pub as i64,
-                live0 - def_pub);
+            println!(
+                "{idx},{},{},UNPINNED off={:+.0}",
+                volt_uv / 1000,
+                def_pub as i64,
+                live0 - def_pub
+            );
             let _ = volt_lock(None);
             continue;
         }
@@ -148,27 +172,37 @@ fn main() {
         let _ = volt_lock(None);
 
         // trim clamped flats at both ends, then require >=3 levels
-        while samples.len() > 2 && samples[0].1 == samples[1].1 { samples.remove(0); }
-        while samples.len() > 2
-            && samples[samples.len() - 1].1 == samples[samples.len() - 2].1
-        {
+        while samples.len() > 2 && samples[0].1 == samples[1].1 {
+            samples.remove(0);
+        }
+        while samples.len() > 2 && samples[samples.len() - 1].1 == samples[samples.len() - 2].1 {
             samples.pop();
         }
         let mut levels: Vec<i64> = Vec::new();
         for &(_, e) in &samples {
-            if levels.last() != Some(&e) { levels.push(e); }
+            if levels.last() != Some(&e) {
+                levels.push(e);
+            }
         }
         if levels.len() < 3 {
-            println!("{idx},{},{},PINNED flat={}", volt_uv / 1000, def_pub as i64,
-                samples.first().map(|&(_, e)| e).unwrap_or(0));
+            println!(
+                "{idx},{},{},PINNED flat={}",
+                volt_uv / 1000,
+                def_pub as i64,
+                samples.first().map(|&(_, e)| e).unwrap_or(0)
+            );
             continue;
         }
         // saturation guard: near-ceiling points cap early and the trimmed
         // remnant fits a FAKE small C (observed: def 1987 -> "0.25")
         let span = *levels.last().unwrap() - *levels.first().unwrap();
         if span < 4 * 25 {
-            println!("{idx},{},{},SATURATED span={:.0}MHz", volt_uv / 1000, def_pub as i64,
-                span as f64 / 2.0);
+            println!(
+                "{idx},{},{},SATURATED span={:.0}MHz",
+                volt_uv / 1000,
+                def_pub as i64,
+                span as f64 / 2.0
+            );
             continue;
         }
 
@@ -190,7 +224,9 @@ fn main() {
                 q2 = g;
             }
         }
-        for s in &mut samples { s.1 = ((s.1 as f64) / q2 as f64).round() as i64 * q2; }
+        for s in &mut samples {
+            s.1 = ((s.1 as f64) / q2 as f64).round() as i64 * q2;
+        }
 
         match nvapi::clk_vf_stair_fit(&samples, q2) {
             // C came out in half-MHz effect units — halve back
@@ -202,11 +238,24 @@ fn main() {
                 let prior = nvapi::clk_vf_g_prior(def_pub as u32)
                     .map(|(pc, _)| pc)
                     .unwrap_or(f64::NAN);
-                println!("{idx},{},{},{:.4},{:.4},{:.4},{:.0},{:.4},{:+.4}",
-                    volt_uv / 1000, def_pub as i64, c, lo, hi, d0, prior, c - prior);
+                println!(
+                    "{idx},{},{},{:.4},{:.4},{:.4},{:.0},{:.4},{:+.4}",
+                    volt_uv / 1000,
+                    def_pub as i64,
+                    c,
+                    lo,
+                    hi,
+                    d0,
+                    prior,
+                    c - prior
+                );
             }
-            None => println!("{idx},{},{},FIT-FAILED n={}", volt_uv / 1000, def_pub as i64,
-                samples.len()),
+            None => println!(
+                "{idx},{},{},FIT-FAILED n={}",
+                volt_uv / 1000,
+                def_pub as i64,
+                samples.len()
+            ),
         }
     }
     std::thread::sleep(std::time::Duration::from_millis(200));

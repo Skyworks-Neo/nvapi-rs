@@ -855,10 +855,16 @@ mod rail_name_tests {
         // Every rail the scan-gate accepts must resolve through the merged
         // resolver: outputs 1..=11, inputs 222..=255 (plus 0 = Unknown).
         for rail in 0u32..=11 {
-            assert!(rail_display_name(rail).is_some(), "output rail {rail} unnamed");
+            assert!(
+                rail_display_name(rail).is_some(),
+                "output rail {rail} unnamed"
+            );
         }
         for rail in 222u32..=255 {
-            assert!(rail_display_name(rail).is_some(), "input rail {rail} unnamed");
+            assert!(
+                rail_display_name(rail).is_some(),
+                "input rail {rail} unnamed"
+            );
         }
     }
 

@@ -6,16 +6,15 @@
 //! Run: cargo run --release --example probe_illumination
 
 use nvapi::initialize;
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::api::{
     NvAPI_EnumPhysicalGPUs, NvAPI_GPU_GetIllumination, NvAPI_GPU_QueryIlluminationSupport,
 };
 use nvapi::sys::gpu::illumination::{
-    IlluminationAttrib, NV_GPU_GET_ILLUMINATION_PARM,
-    NV_GPU_QUERY_ILLUMINATION_SUPPORT_PARM,
+    IlluminationAttrib, NV_GPU_GET_ILLUMINATION_PARM, NV_GPU_QUERY_ILLUMINATION_SUPPORT_PARM,
 };
 use nvapi::sys::handles::NvPhysicalGpuHandle;
 use nvapi::sys::nvapi::StructVersion;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use std::ptr;
 
 fn main() {
@@ -40,7 +39,9 @@ fn main() {
                 continue;
             }
             println!("GPU{i} {name}: supported={}", q.bSupported);
-            if q.bSupported == 0 { continue; }
+            if q.bSupported == 0 {
+                continue;
+            }
             let mut g = NV_GPU_GET_ILLUMINATION_PARM::versioned();
             g.hPhysicalGpu = gpu;
             g.attribute = attr.into();

@@ -7,20 +7,21 @@
 //! Run: cargo run --release -p nvapi --example probe_misc_ids
 
 use nvapi::initialize;
-use nvapi::sys::api::{
-    NvAPI_EnumPhysicalGPUs, NvAPI_GPU_GetPerfClocks, NvAPI_GPU_GetSerialNumber,
-};
-use nvapi::sys::gpu::clock::NV_GPU_PERF_CLOCKS;
-use nvapi::sys::handles::NvPhysicalGpuHandle;
-use nvapi::sys::nvapi::StructVersion;
 use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::api::NvAPI_RestartDisplayDriver;
 use nvapi::sys::api::private::NvAPI_GPU_SetForcePstate;
+use nvapi::sys::api::{NvAPI_EnumPhysicalGPUs, NvAPI_GPU_GetPerfClocks, NvAPI_GPU_GetSerialNumber};
+use nvapi::sys::gpu::clock::NV_GPU_PERF_CLOCKS;
+use nvapi::sys::handles::NvPhysicalGpuHandle;
+use nvapi::sys::nvapi::StructVersion;
 use nvapi::sys::nvapi_QueryInterface;
 
 fn resolve(id: u32, name: &str) {
     let p = unsafe { nvapi_QueryInterface(id) };
-    let ok = match p { Ok(_) => "RESOLVED", Err(_) => "NULL/Err" };
+    let ok = match p {
+        Ok(_) => "RESOLVED",
+        Err(_) => "NULL/Err",
+    };
     println!("{name:24} 0x{id:08X} -> {ok}");
 }
 

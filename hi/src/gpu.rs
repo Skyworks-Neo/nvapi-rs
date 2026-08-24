@@ -24,14 +24,13 @@ pub use nvapi::{
     ClockLockEntry, ClockLockValue, ComputeCapabilities, ConnectedIdsFlags, CoolerControl,
     CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings, CoolerStatus, CoolerTarget,
     CoolerType, DisplayId, DriverModel, EccErrors, EffectiveClocks, FanArbiterControl,
-    FanArbiterStatus, FanCoolerId, FanCurve, FanCurvePoint, Foundry, GpuType, Kibibytes,
-    Kilohertz, KilohertzDelta,
-    MemoryInfo, Microvolts, MicrovoltsDelta, PState, PStateNativeLock, PciIdentifiers, Percentage,
-    PerfFreqCap, PerfFreqCapEntry, PerfInfo, PerfLimitId, PerfStatus, PerformanceDecreaseReason,
-    PffCurve, PffPoint, PhysicalGpu,
-    PowerMonitor, PowerRails, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType,
-    ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalTarget, UtilizationDomain,
-    Utilizations, Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
+    FanArbiterStatus, FanCoolerId, FanCurve, FanCurvePoint, Foundry, GpuType, Kibibytes, Kilohertz,
+    KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState, PStateNativeLock,
+    PciIdentifiers, Percentage, PerfFreqCap, PerfFreqCapEntry, PerfInfo, PerfLimitId, PerfStatus,
+    PerformanceDecreaseReason, PffCurve, PffPoint, PhysicalGpu, PowerMonitor, PowerRails,
+    PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType, ThermalChannelInfo,
+    ThermalChannelStatus, ThermalController, ThermalTarget, UtilizationDomain, Utilizations,
+    Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
 };
 
 pub struct Gpu {
@@ -694,7 +693,10 @@ impl Gpu {
     /// ID 0xFB8F61EC) via two-sample Δcounter/Δtimestamp. `domain_bit` is the
     /// sequential domain index (GPC=0, XBAR=1, SYS=2, MCLK=4). `Ok(None)`
     /// where the driver doesn't expose the private interface.
-    pub fn clk_domain_freq(&self, domain_bit: u32) -> nvapi::Result<Option<nvapi::ClockDomainFreq>> {
+    pub fn clk_domain_freq(
+        &self,
+        domain_bit: u32,
+    ) -> nvapi::Result<Option<nvapi::ClockDomainFreq>> {
         match self.gpu.clk_domain_freq(domain_bit) {
             Ok(v) => Ok(Some(v)),
             Err(nvapi::Error::Nvapi(e))
@@ -794,7 +796,10 @@ impl Gpu {
         end: usize,
         deltas: &[i16],
     ) -> nvapi::Result<Option<()>> {
-        match self.gpu.set_vfp_range_per_point_private(bank, start, end, deltas) {
+        match self
+            .gpu
+            .set_vfp_range_per_point_private(bank, start, end, deltas)
+        {
             Ok(()) => Ok(Some(())),
             Err(nvapi::Error::Nvapi(e))
                 if matches!(
@@ -846,7 +851,10 @@ impl Gpu {
         slot: u32,
         temporary: bool,
     ) -> nvapi::Result<Option<nvapi::ClkDomainControlEntry>> {
-        match self.gpu.set_clk_domain_offset(domain_bit, offset_kHz, slot, temporary) {
+        match self
+            .gpu
+            .set_clk_domain_offset(domain_bit, offset_kHz, slot, temporary)
+        {
             Ok(v) => Ok(Some(v)),
             Err(nvapi::Error::Nvapi(e))
                 if matches!(
@@ -895,7 +903,10 @@ impl Gpu {
         d_step: i64,
         dmax: i64,
     ) -> nvapi::Result<Option<Vec<nvapi::ClkVfCalPoint>>> {
-        match self.gpu.clk_vf_calibrate_private(idx_lo, idx_hi, pt_step, d_step, dmax) {
+        match self
+            .gpu
+            .clk_vf_calibrate_private(idx_lo, idx_hi, pt_step, d_step, dmax)
+        {
             Ok(v) => Ok(Some(v)),
             Err(nvapi::Error::Nvapi(e))
                 if matches!(
@@ -1178,7 +1189,9 @@ impl Gpu {
     /// (live-tested 4060L); none release. nvapioc uses 2. To unlock, use
     /// SetPstateClientLimits or EnableDynamicPstates instead.
     pub fn set_force_pstate(&self, pstate: u32, set_type: u32) -> nvapi::Result<()> {
-        self.gpu.set_force_pstate(pstate, set_type).map_err(Into::into)
+        self.gpu
+            .set_force_pstate(pstate, set_type)
+            .map_err(Into::into)
     }
 
     /// Restart the display driver (legacy "apply OC" trigger).
@@ -1203,7 +1216,10 @@ impl Gpu {
     }
 
     /// Whisper Mode 2.0 acoustic mode (Quieter/Quiet/Balanced). GPUMonCmd `-wmMode`.
-    pub fn set_wm2_mode(&self, mode: nvapi::sys::gpu::power::private::Wm2AcousticMode) -> nvapi::Result<()> {
+    pub fn set_wm2_mode(
+        &self,
+        mode: nvapi::sys::gpu::power::private::Wm2AcousticMode,
+    ) -> nvapi::Result<()> {
         self.gpu.set_wm2_mode(mode).map_err(Into::into)
     }
 }

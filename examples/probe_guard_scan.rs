@@ -54,14 +54,24 @@ fn single(id: u32, ver: u32, size: usize) -> i32 {
     let content = ((size + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
     let region = PAGE_SIZE + content + PAGE_SIZE;
     let base = unsafe {
-        VirtualAlloc(std::ptr::null_mut(), region, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
+        VirtualAlloc(
+            std::ptr::null_mut(),
+            region,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        )
     };
     assert!(!base.is_null(), "VirtualAlloc failed");
     let mut old = 0u32;
     // guard sandwich: first and last page PAGE_NOACCESS
     unsafe {
         VirtualProtect(base, PAGE_SIZE, PAGE_NOACCESS, &mut old);
-        VirtualProtect(base.add(PAGE_SIZE + content), PAGE_SIZE, PAGE_NOACCESS, &mut old);
+        VirtualProtect(
+            base.add(PAGE_SIZE + content),
+            PAGE_SIZE,
+            PAGE_NOACCESS,
+            &mut old,
+        );
     }
     // buffer ends exactly at the trailing guard page
     let buf = unsafe { base.add(PAGE_SIZE + content - size) };
@@ -81,9 +91,7 @@ fn single(id: u32, ver: u32, size: usize) -> i32 {
     let dt = t0.elapsed().as_micros();
     // count nonzero dwords the driver left (format fingerprint)
     let mut nz = 0usize;
-    let words = unsafe {
-        std::slice::from_raw_parts(buf as *const u32, size / 4)
-    };
+    let words = unsafe { std::slice::from_raw_parts(buf as *const u32, size / 4) };
     for (i, w) in words.iter().enumerate() {
         if i == 0 {
             continue; // our own magic
@@ -97,7 +105,10 @@ fn single(id: u32, ver: u32, size: usize) -> i32 {
 }
 
 fn env_num(name: &str, default: u32) -> u32 {
-    env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 fn main() {

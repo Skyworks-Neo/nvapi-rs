@@ -18,19 +18,17 @@
 //! Run: `cargo run --release --example probe_boost_curve_echo`
 
 use nvapi::initialize;
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::api::{NvAPI_EnumPhysicalGPUs, NvVersion};
 use nvapi::sys::gpu::clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL;
 use nvapi::sys::gpu::clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO;
 use nvapi::sys::gpu::power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
 use nvapi::sys::nvapi::VersionedStruct;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use std::ptr;
 
 fn nz(buf: &[u8]) -> usize {
-    buf.chunks(4)
-        .filter(|c| c.iter().any(|&b| b != 0))
-        .count()
+    buf.chunks(4).filter(|c| c.iter().any(|&b| b != 0)).count()
 }
 
 fn main() {
@@ -45,9 +43,9 @@ fn main() {
     let gpu = handles[0];
 
     // ---- 1. GetInfo (mask builder) ------------------------------------
-    let mut info = Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>() });
-    *info.nvapi_version_mut() =
-        NvVersion::with_struct::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>(1);
+    let mut info =
+        Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>() });
+    *info.nvapi_version_mut() = NvVersion::with_struct::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>(1);
     let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetInfo(gpu, ptr::from_mut(&mut *info)) };
     println!("GetInfo  st={st} magic=0x{:X}", info.version.data);
     if st != 0 {
@@ -56,7 +54,10 @@ fn main() {
     }
     let info_bytes =
         unsafe { std::slice::from_raw_parts(ptr::from_ref(&*info).cast::<u8>(), 6188) };
-    println!("  info.mask  = {:08X?}", info.mask.mask.iter().map(|v| v).take(2).collect::<Vec<_>>());
+    println!(
+        "  info.mask  = {:08X?}",
+        info.mask.mask.iter().map(|v| v).take(2).collect::<Vec<_>>()
+    );
     println!("  info.unknown32 (+36..+68) = {:08X?}", {
         let mut v = [0u32; 8];
         for (i, w) in v.iter_mut().enumerate() {
@@ -78,12 +79,12 @@ fn main() {
     // HYDRA uses ver1 magic 0x12420 on the 9248B table; our alias is ver2
     // (0x22420). Try mask-set vs zero, and ver2 vs ver1.
     for (do_echo, ver) in [(true, 2u32), (false, 2), (true, 1), (false, 1)] {
-        let mut ctrl = Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL>() });
+        let mut ctrl =
+            Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL>() });
         *ctrl.nvapi_version_mut() = NvVersion::with_version(ver << 16 | 9248);
-        let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetControl(gpu, ptr::from_mut(&mut *ctrl)) };
-        let bytes = unsafe {
-            std::slice::from_raw_parts(ptr::from_ref(&*ctrl).cast::<u8>(), 9248)
-        };
+        let st =
+            unsafe { NvAPI_GPU_ClockClientClkVfPointsGetControl(gpu, ptr::from_mut(&mut *ctrl)) };
+        let bytes = unsafe { std::slice::from_raw_parts(ptr::from_ref(&*ctrl).cast::<u8>(), 9248) };
         println!(
             "GetControl echo={do_echo:<5} st={st}  nonzero dwords={} (of {})  hdr36..68={:08X?}",
             nz(bytes),
@@ -100,7 +101,9 @@ fn main() {
             // dump first 2 entries (entries @+68, 36B stride): clock_type, rsvd, freqDelta @+20
             for e in 0..2 {
                 let base = 68 + 36 * e;
-                let d = |o: usize| u32::from_le_bytes(bytes[base + o..base + o + 4].try_into().unwrap());
+                let d = |o: usize| {
+                    u32::from_le_bytes(bytes[base + o..base + o + 4].try_into().unwrap())
+                };
                 println!(
                     "    entry[{e}] clock_type={} freqDeltaKHz={} raw={:08X?}",
                     d(0),
@@ -114,13 +117,20 @@ fn main() {
     // ---- 3. GetStatus A/B (V3 88588B our default; HYDRA uses V1 7208B) --
     use nvapi::sys::gpu::power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1;
     for do_echo in [false, true] {
-        let mut status = Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS>() });
+        let mut status =
+            Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS>() });
         *status.nvapi_version_mut() =
             NvVersion::with_struct::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS>(3);
         let size = std::mem::size_of::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS>();
-        seed(ptr::from_mut(&mut *status).cast(), ptr::from_ref(&info.mask.mask).cast(), do_echo);
-        let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, ptr::from_mut(&mut *status)) };
-        let bytes = unsafe { std::slice::from_raw_parts(ptr::from_ref(&*status).cast::<u8>(), size) };
+        seed(
+            ptr::from_mut(&mut *status).cast(),
+            ptr::from_ref(&info.mask.mask).cast(),
+            do_echo,
+        );
+        let st =
+            unsafe { NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, ptr::from_mut(&mut *status)) };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(ptr::from_ref(&*status).cast::<u8>(), size) };
         println!(
             "GetStatusV3 echo={do_echo:<5} st={st}  nonzero dwords={} (of {}) size={size}",
             nz(bytes),
@@ -128,13 +138,21 @@ fn main() {
         );
     }
     for do_echo in [false, true] {
-        let mut status = Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>() });
+        let mut status =
+            Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>() });
         *status.nvapi_version_mut() =
             NvVersion::with_struct::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>(2);
         let size = std::mem::size_of::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>();
-        seed(ptr::from_mut(&mut *status).cast(), ptr::from_ref(&info.mask.mask).cast(), do_echo);
-        let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, ptr::from_mut(&mut *status).cast()) };
-        let bytes = unsafe { std::slice::from_raw_parts(ptr::from_ref(&*status).cast::<u8>(), size) };
+        seed(
+            ptr::from_mut(&mut *status).cast(),
+            ptr::from_ref(&info.mask.mask).cast(),
+            do_echo,
+        );
+        let st = unsafe {
+            NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, ptr::from_mut(&mut *status).cast())
+        };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(ptr::from_ref(&*status).cast::<u8>(), size) };
         println!(
             "GetStatusV1 echo={do_echo:<5} st={st}  nonzero dwords={} (of {}) size={size}",
             nz(bytes),

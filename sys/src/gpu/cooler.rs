@@ -682,10 +682,18 @@ pub mod private {
     }
 
     unsafe impl zerocopy::AsBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
-        fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {}
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
     }
     unsafe impl zerocopy::FromBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
-        fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized {}
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
     }
 
     /// Versionless alias used by the NVAPI function signatures (this NDA

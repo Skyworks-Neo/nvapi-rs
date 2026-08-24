@@ -23,6 +23,7 @@
 //! Run: cargo run --release --example probe_blackwell_vf [-- --write] [-- --point 40]
 
 use nvapi::initialize;
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::api::{
     NvAPI_EnumPhysicalGPUs, NvAPI_GPU_ClockClientClkVfPointsGetControl,
     NvAPI_GPU_ClockClientClkVfPointsGetInfo, NvAPI_GPU_ClockClientClkVfPointsGetStatus,
@@ -32,12 +33,11 @@ use nvapi::sys::api::{
 };
 use nvapi::sys::gpu::clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO;
 use nvapi::sys::gpu::clock::private::{
-    clk_vfp_control, NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
-    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
+    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
+    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE, clk_vfp_control,
 };
 use nvapi::sys::handles::NvPhysicalGpuHandle;
 use nvapi::sys::nvapi::VersionedStruct;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use std::ptr;
 
 fn dw(buf: &[u8], off: usize) -> u32 {
@@ -61,10 +61,14 @@ fn main() {
     let gpu = handles[0];
 
     // ---- public GetInfo (6188): point mask seed ----
-    let mut info = Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>() });
+    let mut info =
+        Box::new(unsafe { std::mem::zeroed::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>() });
     *info.nvapi_version_mut() = NvVersion::with_struct::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO>(1);
     let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetInfo(gpu, ptr::from_mut(&mut *info)) };
-    if st != 0 { println!("public GetInfo failed: {st}"); return; }
+    if st != 0 {
+        println!("public GetInfo failed: {st}");
+        return;
+    }
     let mask_ptr = ptr::from_ref(&info.mask.mask) as *const u8;
     let n_points = info.mask.mask.iter().map(|m| m.count_ones()).sum::<u32>();
     println!("public GetInfo ok, mask bits = {n_points}");
@@ -73,8 +77,11 @@ fn main() {
     let ctrl_get = |magic: u32| -> (i32, Vec<u8>) {
         let mut buf = vec![0u8; 9248];
         buf[0..4].copy_from_slice(&magic.to_le_bytes());
-        unsafe { std::ptr::copy_nonoverlapping(mask_ptr, buf.as_mut_ptr().add(4), 32); }
-        let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetControl(gpu, buf.as_mut_ptr() as *mut _) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(mask_ptr, buf.as_mut_ptr().add(4), 32);
+        }
+        let st =
+            unsafe { NvAPI_GPU_ClockClientClkVfPointsGetControl(gpu, buf.as_mut_ptr() as *mut _) };
         (st, buf)
     };
     let (st, base) = ctrl_get(0x22420);
@@ -86,13 +93,21 @@ fn main() {
         let mut other = 0;
         for off in (68..9244).step_by(4) {
             let v = dw(&base, off);
-            if v == 0 { continue; }
+            if v == 0 {
+                continue;
+            }
             nz += 1;
             let rel36 = (off - 68) % 36;
             let on72 = off >= 32 && (off - 32) % 72 == 0;
-            if rel36 == 0 || rel36 == 20 { grid36 += 1; }
-            if on72 { grid72 += 1; }
-            if !(rel36 == 0 || rel36 == 20) && !on72 { other += 1; }
+            if rel36 == 0 || rel36 == 20 {
+                grid36 += 1;
+            }
+            if on72 {
+                grid72 += 1;
+            }
+            if !(rel36 == 0 || rel36 == 20) && !on72 {
+                other += 1;
+            }
         }
         println!("    nonzero dwords in entry region: {nz}");
         println!("    fit R610 grid (0x44+36i, flag@+0/delta@+0x14): {grid36}");
@@ -113,32 +128,49 @@ fn main() {
         ("ver1 0x11C28, +0x14=0", 0x11C28u32, 0u32),
         ("ver2 0x21C28, +0x14=0", 0x21C28, 0),
         ("ver2 0x21C28, +0x14=15 (NumClocks?)", 0x21C28, 15),
-        ("ver2 0x21C28, +0x14=0xFFFFFFFF (mask dw4)", 0x21C28, 0xFFFF_FFFF),
+        (
+            "ver2 0x21C28, +0x14=0xFFFFFFFF (mask dw4)",
+            0x21C28,
+            0xFFFF_FFFF,
+        ),
     ] {
         let mut buf = vec![0u8; 7208];
         buf[0..4].copy_from_slice(&magic.to_le_bytes());
-        unsafe { std::ptr::copy_nonoverlapping(mask_ptr, buf.as_mut_ptr().add(4), 32); }
+        unsafe {
+            std::ptr::copy_nonoverlapping(mask_ptr, buf.as_mut_ptr().add(4), 32);
+        }
         buf[0x14..0x18].copy_from_slice(&dword14.to_le_bytes());
-        let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, buf.as_mut_ptr() as *mut _) };
+        let st =
+            unsafe { NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, buf.as_mut_ptr() as *mut _) };
         let first = if st == 0 {
             format!(" pt0=({},{})", dw(&buf, 68 + 4), dw(&buf, 68 + 8))
-        } else { String::new() };
+        } else {
+            String::new()
+        };
         println!("    {label:42} st={st}{first}");
     }
 
     // ---- stage 3: controlled private write + public diff (definitive) ----
     if do_write {
-        println!("\n[3] grid discrimination via private set (+90 MHz on point {point}) + public diff");
+        println!(
+            "\n[3] grid discrimination via private set (+90 MHz on point {point}) + public diff"
+        );
         // private GetInfo + snapshot (Default stamps the accepted magic)
         let mut pinfo = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
         let st = unsafe { PrivGetInfo(gpu, ptr::from_mut(&mut *pinfo).cast()) };
-        if st != 0 { println!("    private GetInfo failed: {st}"); return; }
+        if st != 0 {
+            println!("    private GetInfo failed: {st}");
+            return;
+        }
         let mut snap: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
             Box::new(unsafe { std::mem::zeroed() });
         snap.version = NvVersion::with_version(clk_vfp_control::MAGIC);
         snap.seed_masks_from_info(&pinfo);
         let st = unsafe { PrivGetControl(gpu, ptr::from_mut(&mut *snap).cast()) };
-        if st != 0 { println!("    private GetControl failed: {st}"); return; }
+        if st != 0 {
+            println!("    private GetControl failed: {st}");
+            return;
+        }
         // remember original record for restore
         let orig_type = snap.record_type(0, point).unwrap_or(8);
         let orig_mode = snap.mode(0, point).unwrap_or(0);
@@ -164,13 +196,17 @@ fn main() {
             for (off, was, now) in diffs.iter().take(12) {
                 let rel36 = off.checked_sub(68).map(|r| r % 36);
                 let on72 = *off >= 32 && (*off - 32) % 72 == 0;
-                println!("      @+0x{off:04X} ({off:5}): {was:#x} -> {now:#x}   [mod36={rel36:?}{}]",
-                    if on72 { ", on72grid" } else { "" });
+                println!(
+                    "      @+0x{off:04X} ({off:5}): {was:#x} -> {now:#x}   [mod36={rel36:?}{}]",
+                    if on72 { ", on72grid" } else { "" }
+                );
             }
             if let Some(&(off, _, _)) = diffs.first() {
                 let idx36 = off.checked_sub(0x58).map(|r| r / 36);
                 let idx72 = off.checked_sub(0x20).map(|r| r / 72);
-                println!("    delta-slot verdict: 0x58+36*i ⇒ i={idx36:?} (want {point}); 0x20+72*i ⇒ i={idx72:?}");
+                println!(
+                    "    delta-slot verdict: 0x58+36*i ⇒ i={idx36:?} (want {point}); 0x20+72*i ⇒ i={idx72:?}"
+                );
             }
         }
 
@@ -179,8 +215,11 @@ fn main() {
         let _ = snap.set_mask_bit(0, point);
         let _ = snap.set_record_type(0, point, orig_type);
         if orig_type == 8 || orig_type == 6 {
-            if orig_mode == 0 { let _ = snap.set_absolute(0, point, orig_value); }
-            else { let _ = snap.set_delta(0, point, orig_value as i16); }
+            if orig_mode == 0 {
+                let _ = snap.set_absolute(0, point, orig_value);
+            } else {
+                let _ = snap.set_delta(0, point, orig_value as i16);
+            }
         } else {
             let _ = snap.set_absolute(0, point, 0);
         }
@@ -203,9 +242,7 @@ fn main() {
     if do_write {
         println!("\n[4] public SetControl single-point (+90 MHz @ point {point}) round-trip");
         use nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsSetControl;
-        use nvapi::sys::gpu::clock::private::{
-            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL as CtrlStruct,
-        };
+        use nvapi::sys::gpu::clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL as CtrlStruct;
         let predict = 0x58 + 36 * point;
 
         let mut ctrl = Box::new(unsafe { std::mem::zeroed::<CtrlStruct>() });
@@ -217,7 +254,9 @@ fn main() {
         // one bit = only our point is validated/written.
         ctrl.mask.set_bit(point);
         ctrl.points[point].freqDeltaKHz = 90_000;
-        let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsSetControl(gpu, ptr::from_ref(&*ctrl).cast()) };
+        let st = unsafe {
+            NvAPI_GPU_ClockClientClkVfPointsSetControl(gpu, ptr::from_ref(&*ctrl).cast())
+        };
         println!("    public SetControl st={st}");
 
         if st == 0 {
@@ -226,22 +265,37 @@ fn main() {
             println!("    GetControl delta @+0x{predict:X} (predicted slot) = {got} (want 90000)");
             for off in (4..9244).step_by(4) {
                 if dw(&base, off) != dw(&after, off) && off != predict {
-                    println!("    UNEXPECTED diff @+0x{off:X}: {:#x} -> {:#x}", dw(&base, off), dw(&after, off));
+                    println!(
+                        "    UNEXPECTED diff @+0x{off:X}: {:#x} -> {:#x}",
+                        dw(&base, off),
+                        dw(&after, off)
+                    );
                 }
             }
             // does the public V3 GetStatus current pair move?
             let mut v3 = vec![0u8; 88844];
             v3[0..4].copy_from_slice(&0x35B0Cu32.to_le_bytes());
-            unsafe { std::ptr::copy_nonoverlapping(mask_ptr, v3.as_mut_ptr().add(4), 32); }
-            let st3 = unsafe { NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, v3.as_mut_ptr() as *mut _) };
+            unsafe {
+                std::ptr::copy_nonoverlapping(mask_ptr, v3.as_mut_ptr().add(4), 32);
+            }
+            let st3 = unsafe {
+                NvAPI_GPU_ClockClientClkVfPointsGetStatus(gpu, v3.as_mut_ptr() as *mut _)
+            };
             if st3 == 0 {
                 let o = 104 + 348 * point;
-                println!("    V3[{point}] cur=({},{}) def=({},{})",
-                    dw(&v3, o + 4), dw(&v3, o + 8), dw(&v3, o + 12), dw(&v3, o + 16));
+                println!(
+                    "    V3[{point}] cur=({},{}) def=({},{})",
+                    dw(&v3, o + 4),
+                    dw(&v3, o + 8),
+                    dw(&v3, o + 12),
+                    dw(&v3, o + 16)
+                );
             }
             // restore: delta 0
             ctrl.points[point].freqDeltaKHz = 0;
-            let st = unsafe { NvAPI_GPU_ClockClientClkVfPointsSetControl(gpu, ptr::from_ref(&*ctrl).cast()) };
+            let st = unsafe {
+                NvAPI_GPU_ClockClientClkVfPointsSetControl(gpu, ptr::from_ref(&*ctrl).cast())
+            };
             println!("    restore st={st}");
             let (_, re) = ctrl_get(0x22420);
             let same = (4..9244).step_by(4).all(|o| dw(&base, o) == dw(&re, o));

@@ -161,9 +161,15 @@ fn main() {
     println!("=== ClockClient private family (XBAR article path) ===");
     let get_info = resolve(CLK_DOMAINS_GET_INFO, "ClockClkDomainsGetInfo");
     let get_control = resolve(CLK_DOMAINS_GET_CONTROL, "ClockClkDomainsGetControl");
-    resolve(CLK_DOMAINS_SET_CONTROL, "ClockClkDomainsSetControl (SET — never called)");
+    resolve(
+        CLK_DOMAINS_SET_CONTROL,
+        "ClockClkDomainsSetControl (SET — never called)",
+    );
     let measure = resolve(CLK_MEASURE_FREQ, "ClockCounterMeasureAvgFreq");
-    resolve(CLK_VF_POINTS_GET_STATUS, "ClockClkVfPointsGetStatus (private V/F)");
+    resolve(
+        CLK_VF_POINTS_GET_STATUS,
+        "ClockClkVfPointsGetStatus (private V/F)",
+    );
 
     if get_info.is_none() && get_control.is_none() && measure.is_none() {
         println!("\nall key IDs unresolved — nothing more to do");
@@ -258,8 +264,15 @@ fn main() {
                     let base = rec_base + rec_stride * idx;
                     if base + 0x40 <= buf.len() {
                         let rec = &buf[base..base + 0x40];
-                        let dname = DOMAIN_NAMES.iter().find(|(b,_)| *b==dbit).map(|(_,n)|*n).unwrap_or("?");
-                        println!("  {dname:8} (bit 0x{dbit:X}, idx {idx}) @0x{base:04X}: {}", hexdump(rec));
+                        let dname = DOMAIN_NAMES
+                            .iter()
+                            .find(|(b, _)| *b == dbit)
+                            .map(|(_, n)| *n)
+                            .unwrap_or("?");
+                        println!(
+                            "  {dname:8} (bit 0x{dbit:X}, idx {idx}) @0x{base:04X}: {}",
+                            hexdump(rec)
+                        );
                     }
                 }
                 break;
@@ -342,9 +355,18 @@ fn main() {
     }
 
     println!("\n=== summary ===");
-    println!("GET_INFO magic:    {:?}", info_magic_used.map(|m| format!("0x{m:X}")));
-    println!("GET_CONTROL magic: {:?}", ctrl_magic_used.map(|m| format!("0x{m:X}")));
-    println!("controllable mask: {:?}", controllable_mask.map(|m| domain_name(m)));
+    println!(
+        "GET_INFO magic:    {:?}",
+        info_magic_used.map(|m| format!("0x{m:X}"))
+    );
+    println!(
+        "GET_CONTROL magic: {:?}",
+        ctrl_magic_used.map(|m| format!("0x{m:X}"))
+    );
+    println!(
+        "controllable mask: {:?}",
+        controllable_mask.map(|m| domain_name(m))
+    );
     println!("\nNOTE: SET_CONTROL (0xD14B69CF) was resolved-only, NEVER called.");
     println!("NOTE: live-verified mask 0xFF on Ada 4060 Laptop INCLUDES XBARCLK bit");
     println!("      0x2 — XBAR-as-controllable is NOT Blackwell-only (the article's");

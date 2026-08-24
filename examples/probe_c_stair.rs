@@ -28,6 +28,8 @@
 //!   meaningless since each domain has its own scaling.
 //! Run as admin; every point restored (mode-0 value 0) after its ladder.
 use nvapi::initialize;
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
+use nvapi::sys::api::NvVersion;
 use nvapi::sys::api::{
     NvAPI_EnumPhysicalGPUs, NvAPI_GPU_ClockClkVfPointsGetControl,
     NvAPI_GPU_ClockClkVfPointsGetInfo, NvAPI_GPU_ClockClkVfPointsGetStatus,
@@ -35,8 +37,6 @@ use nvapi::sys::api::{
 };
 use nvapi::sys::gpu::clock::private::*;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
-use nvapi::sys::api::NvVersion;
 use std::ptr;
 
 fn get_info(gpu: NvPhysicalGpuHandle) -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1> {
@@ -45,16 +45,23 @@ fn get_info(gpu: NvPhysicalGpuHandle) -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_I
     info
 }
 
-fn get_status(gpu: NvPhysicalGpuHandle, info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1)
-    -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1> {
+fn get_status(
+    gpu: NvPhysicalGpuHandle,
+    info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1,
+) -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1> {
     let mut s = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1::default());
     info.seed_status_header(&mut s);
     unsafe { NvAPI_GPU_ClockClkVfPointsGetStatus(gpu, ptr::from_mut(&mut *s).cast()) };
     s
 }
 
-fn write_point(gpu: NvPhysicalGpuHandle, idx: usize, freq_mode: bool, value: u32,
-               info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1) {
+fn write_point(
+    gpu: NvPhysicalGpuHandle,
+    idx: usize,
+    freq_mode: bool,
+    value: u32,
+    info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1,
+) {
     let mut snap: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
         Box::new(unsafe { std::mem::zeroed() });
     snap.version = NvVersion::with_version(clk_vfp_control::MAGIC);
@@ -62,12 +69,13 @@ fn write_point(gpu: NvPhysicalGpuHandle, idx: usize, freq_mode: bool, value: u32
     unsafe { NvAPI_GPU_ClockClkVfPointsGetControl(gpu, ptr::from_mut(&mut *snap).cast()) };
     snap.set_mask_bit(0, idx);
     snap.set_record_type(0, idx, 8);
-    if freq_mode { snap.set_absolute(0, idx, value); }
-    else { snap.set_delta(0, idx, value as i16); }
+    if freq_mode {
+        snap.set_absolute(0, idx, value);
+    } else {
+        snap.set_delta(0, idx, value as i16);
+    }
     unsafe { NvAPI_GPU_ClockClkVfPointsSetControl(gpu, ptr::from_ref(&*snap).cast()) };
 }
-
-
 
 /// Exact staircase fit: samples (d, E), saturation-trimmed. Constraint form
 /// with B = C*D0:
@@ -80,12 +88,16 @@ fn write_point(gpu: NvPhysicalGpuHandle, idx: usize, freq_mode: bool, value: u32
 /// RTX 4060 is k/400 (0.3, 0.3375, 0.625, 0.28, 0.4525, ...), strongly
 /// suggesting RM stores C as a /400 fixed-point.
 fn stair_fit(pts: &[(i64, i64)], q: f64) -> Option<(f64, f64, f64, f64)> {
-    if pts.len() < 2 { return None; }
+    if pts.len() < 2 {
+        return None;
+    }
     let mut lo = 0.0f64;
     let mut hi = f64::INFINITY;
     for i in 0..pts.len() {
         for j in 0..pts.len() {
-            if i == j { continue; }
+            if i == j {
+                continue;
+            }
             let (di, ei) = pts[i];
             let (dj, ej) = pts[j];
             let dd = (di - dj) as f64;
@@ -99,10 +111,14 @@ fn stair_fit(pts: &[(i64, i64)], q: f64) -> Option<(f64, f64, f64, f64)> {
             }
         }
     }
-    if !(lo < hi) { return None; }
+    if !(lo < hi) {
+        return None;
+    }
     let mut c = (lo + hi) / 2.0;
     let snapped = (c * 400.0).round() / 400.0;
-    if snapped >= lo && snapped <= hi { c = snapped; }
+    if snapped >= lo && snapped <= hi {
+        c = snapped;
+    }
     let mut b_hi = f64::MAX;
     let mut b_lo = f64::MIN;
     for &(d, e) in pts {
@@ -110,19 +126,37 @@ fn stair_fit(pts: &[(i64, i64)], q: f64) -> Option<(f64, f64, f64, f64)> {
         b_hi = b_hi.min(x);
         b_lo = b_lo.max(x - q);
     }
-    if !(b_lo < b_hi) { return None; }
+    if !(b_lo < b_hi) {
+        return None;
+    }
     let b = (b_lo + b_hi) / 2.0;
     Some((c, lo, hi, b / c))
 }
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let pt_step: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(16).max(1);
-    let d_step: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(50).max(10);
+    let pt_step: usize = args
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16)
+        .max(1);
+    let d_step: i64 = args
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50)
+        .max(10);
     let dmax: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(600);
-    let dmin: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(-dmax).min(0);
+    let dmin: i64 = args
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(-dmax)
+        .min(0);
     let idx_lo: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let idx_hi: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(127).max(idx_lo);
+    let idx_hi: usize = args
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(127)
+        .max(idx_lo);
 
     let _ = initialize();
     let mut h = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
@@ -137,8 +171,11 @@ fn main() {
     let present: Vec<usize> = (idx_lo..=idx_hi.min(clk_vfp_info::POINTS - 1))
         .filter(|&i| info.point_present(0, i) == Some(true))
         .collect();
-    eprintln!("=== staircase C fit: idx {idx_lo}..{idx_hi} ({} present), every {pt_step}, ladder {:?} ===",
-        present.len(), &ladder[..ladder.len().min(6)]);
+    eprintln!(
+        "=== staircase C fit: idx {idx_lo}..{idx_hi} ({} present), every {pt_step}, ladder {:?} ===",
+        present.len(),
+        &ladder[..ladder.len().min(6)]
+    );
     eprintln!("idx,volt_mV,def_mHz,Q,n_used,C,C_lo,C_hi,D0,E_range");
 
     let mut results: Vec<(f64, f64)> = Vec::new(); // (volt_mV, C)
@@ -157,8 +194,12 @@ fn main() {
         // skip with diagnostics instead of feeding E = -def into the fit
         let base_cur = baseline.freq_current_mhz(0, idx).unwrap_or(0) as i64 / div;
         if base_cur == 0 || def == 0 {
-            eprintln!("{idx},{},{},CUR-ABSENT t={typ} def={def} cur0={base_cur} volt={}",
-                volt / 1000, def, baseline.voltage_uv(0, idx).unwrap_or(0));
+            eprintln!(
+                "{idx},{},{},CUR-ABSENT t={typ} def={def} cur0={base_cur} volt={}",
+                volt / 1000,
+                def,
+                baseline.voltage_uv(0, idx).unwrap_or(0)
+            );
             continue;
         }
 
@@ -171,7 +212,10 @@ fn main() {
             let cur = get_status(gpu, &info).freq_current_mhz(0, idx).unwrap_or(0) as i64 / div;
             let e = cur - def; // may be negative — allowed in the fit
             match first_e {
-                None => { first_e = Some(e); flat_from_start = 1; }
+                None => {
+                    first_e = Some(e);
+                    flat_from_start = 1;
+                }
                 Some(fe) if e == fe => flat_from_start += 1,
                 _ => flat_from_start = 0,
             }
@@ -179,13 +223,17 @@ fn main() {
             // normal with a negative ladder (most points clamp to -15/0
             // downward within one grid step) — break only if still flat at
             // d >= +200 (genuinely dead point)
-            if flat_from_start >= 5 && d >= 200 { break; }
+            if flat_from_start >= 5 && d >= 200 {
+                break;
+            }
             samples.push((d, e));
         }
         write_point(gpu, idx, true, 0, &info); // restore
 
         // trim floor/flatten-clamped flats at both ends (E stops changing)
-        while samples.len() > 2 && samples[0].1 == samples[1].1 { samples.remove(0); }
+        while samples.len() > 2 && samples[0].1 == samples[1].1 {
+            samples.remove(0);
+        }
         while samples.len() > 2 && samples[samples.len() - 1].1 == samples[samples.len() - 2].1 {
             samples.pop();
         }
@@ -193,7 +241,14 @@ fn main() {
         // running max contradicts the staircase within any small Q)
         {
             let mut max_e = i64::MIN;
-            samples.retain(|&(_, e)| if e >= max_e { max_e = e; true } else { false });
+            samples.retain(|&(_, e)| {
+                if e >= max_e {
+                    max_e = e;
+                    true
+                } else {
+                    false
+                }
+            });
         }
 
         if samples.len() < 2 {
@@ -205,19 +260,24 @@ fn main() {
         // not a C; a 2-sample zero fit is pure noise)
         let mut levels: Vec<i64> = Vec::new();
         for &(_, e) in &samples {
-            if levels.last() != Some(&e) { levels.push(e); }
+            if levels.last() != Some(&e) {
+                levels.push(e);
+            }
         }
         if levels.len() < 3 {
-            eprintln!("{idx},{},{},NO-RESPONSE (flat E={}),pinned/clamped",
-                volt / 1000, def, samples.first().map(|&(_, e)| e).unwrap_or(0));
+            eprintln!(
+                "{idx},{},{},NO-RESPONSE (flat E={}),pinned/clamped",
+                volt / 1000,
+                def,
+                samples.first().map(|&(_, e)| e).unwrap_or(0)
+            );
             continue;
         }
         // grid pick by MIN SNAP ERROR in HALF-MHz units, not GCD: GA102 is
         // suspected to use a 7.5 MHz grid (unrepresentable in whole MHz;
         // alternating 7/8 gaps alone degenerate the GCD to 1), and +-1-2
         // MHz cur noise starves the exact fit of slack either way
-        let mut samples2: Vec<(i64, i64)> =
-            samples.iter().map(|&(d, e)| (d, e * 2)).collect();
+        let mut samples2: Vec<(i64, i64)> = samples.iter().map(|&(d, e)| (d, e * 2)).collect();
         let mut g_best = 30i64; // half-MHz units (= 15 MHz)
         let mut best_err = i64::MAX;
         // candidates in half-MHz units = 7.5, 10, 13, 14, 15, 20, 25, 30 MHz
@@ -248,24 +308,47 @@ fn main() {
                 // C/interval came out in half-MHz effect units — halve back
                 let (c, lo, hi) = (c2 / 2.0, lo2 / 2.0, hi2 / 2.0);
                 results.push((volt as f64 / 1000.0, c));
-                let (emin, emax) = samples2.iter().fold((i64::MAX, i64::MIN),
-                    |(a, b), &(_, e)| (a.min(e), b.max(e)));
-                eprintln!("{idx},{},{},{:.1},{},{:.4},{:.4},{:.4},{:.0},E[{:.0},{:.0}]",
-                    volt / 1000, def, q / 2.0, samples2.len(), c, lo, hi, d0,
-                    emin as f64 / 2.0, emax as f64 / 2.0);
+                let (emin, emax) = samples2
+                    .iter()
+                    .fold((i64::MAX, i64::MIN), |(a, b), &(_, e)| (a.min(e), b.max(e)));
+                eprintln!(
+                    "{idx},{},{},{:.1},{},{:.4},{:.4},{:.4},{:.0},E[{:.0},{:.0}]",
+                    volt / 1000,
+                    def,
+                    q / 2.0,
+                    samples2.len(),
+                    c,
+                    lo,
+                    hi,
+                    d0,
+                    emin as f64 / 2.0,
+                    emax as f64 / 2.0
+                );
             }
             None => {
-                eprintln!("{idx},{},{},{},{},FIT-FAILED (inconsistent staircase)",
-                    volt / 1000, def, q, samples.len());
+                eprintln!(
+                    "{idx},{},{},{},{},FIT-FAILED (inconsistent staircase)",
+                    volt / 1000,
+                    def,
+                    q,
+                    samples.len()
+                );
             }
         }
     }
 
-    if results.is_empty() { return; }
+    if results.is_empty() {
+        return;
+    }
     let mut vals: Vec<f64> = results.iter().map(|&(_, c)| c).collect();
     vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    eprintln!("\nC stats: n={} median={:.4} min={:.4} max={:.4}",
-        vals.len(), vals[vals.len() / 2], vals[0], *vals.last().unwrap());
+    eprintln!(
+        "\nC stats: n={} median={:.4} min={:.4} max={:.4}",
+        vals.len(),
+        vals[vals.len() / 2],
+        vals[0],
+        *vals.last().unwrap()
+    );
     eprintln!("volt_mV -> C (read top-to-bottom: constant == global C; monotone == C(V))");
     for &(v, c) in &results {
         eprintln!("  {v:5.0} -> {c:.4}");

@@ -63,9 +63,9 @@ fn run(log: &mut dyn FnMut(String)) {
         }
         match gpu.enable_overclocked_pstates(false) {
             Ok(()) => log("  EnableOverclockedPstates(enable=0) -> OK  [restore]".into()),
-            Err(e) => {
-                log(format!("  EnableOverclockedPstates(enable=0) -> Err {e:?}  [restore]"))
-            }
+            Err(e) => log(format!(
+                "  EnableOverclockedPstates(enable=0) -> Err {e:?}  [restore]"
+            )),
         }
 
         // PSTATES20 V2 OV-array path: a neutral 0 uV write verifies the SET

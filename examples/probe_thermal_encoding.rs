@@ -12,9 +12,12 @@
 //!      `cargo run --release --example probe_thermal_encoding -- 85` (write, admin)
 
 use nvapi::initialize;
-use nvapi::sys::api::{NvAPI_EnumPhysicalGPUs, NvAPI_GPU_ClientThermalPoliciesGetStatus, NvAPI_GPU_ClientThermalPoliciesSetStatus};
-use nvapi::sys::handles::NvPhysicalGpuHandle;
 use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
+use nvapi::sys::api::{
+    NvAPI_EnumPhysicalGPUs, NvAPI_GPU_ClientThermalPoliciesGetStatus,
+    NvAPI_GPU_ClientThermalPoliciesSetStatus,
+};
+use nvapi::sys::handles::NvPhysicalGpuHandle;
 
 const GET_THERMAL_POLICIES: u32 = 0xE9C425A1;
 const SET_THERMAL_POLICIES: u32 = 0x34C0B13D;
@@ -27,7 +30,10 @@ type GetFn = unsafe extern "C" fn(NvPhysicalGpuHandle, *mut core::ffi::c_void) -
 type SetFn = unsafe extern "C" fn(NvPhysicalGpuHandle, *const core::ffi::c_void) -> i32;
 
 fn dump(label: &str, buf: &[u8], entry_off: usize) -> Option<u32> {
-    println!("{label}: magic=0x{:X}", u32::from_le_bytes(buf[0..4].try_into().unwrap()));
+    println!(
+        "{label}: magic=0x{:X}",
+        u32::from_le_bytes(buf[0..4].try_into().unwrap())
+    );
     let mut first_temp: Option<u32> = None;
     // entries {policy_id, temp, pstate} 12B from entry_off
     let mut e = 0;
@@ -36,12 +42,20 @@ fn dump(label: &str, buf: &[u8], entry_off: usize) -> Option<u32> {
         let pid = u32::from_le_bytes(buf[o..o + 4].try_into().unwrap());
         let temp = u32::from_le_bytes(buf[o + 4..o + 8].try_into().unwrap());
         let ps = u32::from_le_bytes(buf[o + 8..o + 12].try_into().unwrap());
-        if pid == 0 && temp == 0 && ps == 0 { break; }
-        if e == 0 { first_temp = Some(temp); }
-        println!("  entry[{e}]: policy={pid} temp_raw={temp} (0x{temp:X}){}",
+        if pid == 0 && temp == 0 && ps == 0 {
+            break;
+        }
+        if e == 0 {
+            first_temp = Some(temp);
+        }
+        println!(
+            "  entry[{e}]: policy={pid} temp_raw={temp} (0x{temp:X}){}",
             if (0o0..40000).contains(&temp) {
                 format!("  -> int:{temp}C  Q8:{:.1}C", temp as f64 / 256.0)
-            } else { String::new() });
+            } else {
+                String::new()
+            }
+        );
         e += 1;
     }
     first_temp
@@ -82,11 +96,18 @@ fn main() {
                     if st3 == 0 {
                         let after = dump("  post-SET", &rb, entry_off);
                         if let Some(a) = after {
-                            println!("  VERDICT: wrote {t}, read {a} -> {}",
-                                if a == t { "INTEGER C" }
-                                else if a == (t << 8) { "Q8 (x256)" }
-                                else if a == raw_before { "driver clamped (unchanged)" }
-                                else { "driver remapped" });
+                            println!(
+                                "  VERDICT: wrote {t}, read {a} -> {}",
+                                if a == t {
+                                    "INTEGER C"
+                                } else if a == (t << 8) {
+                                    "Q8 (x256)"
+                                } else if a == raw_before {
+                                    "driver clamped (unchanged)"
+                                } else {
+                                    "driver remapped"
+                                }
+                            );
                         }
                     }
                     // restore: write back original

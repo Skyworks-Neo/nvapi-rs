@@ -1036,22 +1036,26 @@ pub mod private {
 
         /// Signed kHz offset (i32 @record+44) for domain `bit`.
         pub fn offset_khz(&self, bit: u32) -> Option<i32> {
-            self.record_u32(bit, clk_ctrl_entry::OFFSET_KHZ).map(|v| v as i32)
+            self.record_u32(bit, clk_ctrl_entry::OFFSET_KHZ)
+                .map(|v| v as i32)
         }
 
         /// Range minimum (i32 @record+48) for domain `bit`.
         pub fn range_min(&self, bit: u32) -> Option<i32> {
-            self.record_u32(bit, clk_ctrl_entry::RANGE_MIN).map(|v| v as i32)
+            self.record_u32(bit, clk_ctrl_entry::RANGE_MIN)
+                .map(|v| v as i32)
         }
 
         /// Range maximum (i32 @record+52) for domain `bit`.
         pub fn range_max(&self, bit: u32) -> Option<i32> {
-            self.record_u32(bit, clk_ctrl_entry::RANGE_MAX).map(|v| v as i32)
+            self.record_u32(bit, clk_ctrl_entry::RANGE_MAX)
+                .map(|v| v as i32)
         }
 
         /// Applied value (i32 @record+56) for domain `bit`.
         pub fn applied(&self, bit: u32) -> Option<i32> {
-            self.record_u32(bit, clk_ctrl_entry::APPLIED).map(|v| v as i32)
+            self.record_u32(bit, clk_ctrl_entry::APPLIED)
+                .map(|v| v as i32)
         }
 
         /// Write the signed kHz offset (i32 @record+44) for domain `bit`.
@@ -1063,9 +1067,7 @@ pub mod private {
         /// every domain the driver actually filled a record for (record type
         /// != 0). This derives the TRUE controllable set from filled records
         /// rather than trusting the echoed +8 mask (which is just the seed).
-        pub fn entries(
-            &self,
-        ) -> impl Iterator<Item = (u32, u8, i32, i32, i32, i32)> + '_ {
+        pub fn entries(&self) -> impl Iterator<Item = (u32, u8, i32, i32, i32, i32)> + '_ {
             let this = self;
             (0..32u32).filter_map(move |bit| {
                 let typ = this.record_type(bit).filter(|&t| t != 0)?;
@@ -1183,10 +1185,13 @@ pub mod private {
             if i >= clk_measure_v3::MAX_ENTRIES {
                 return None;
             }
-            let off = clk_measure_v3::ENTRIES + clk_measure_v3::STRIDE * i + field_off
-                - 4;
+            let off = clk_measure_v3::ENTRIES + clk_measure_v3::STRIDE * i + field_off - 4;
             let end = off.checked_add(len)?;
-            if end <= self.entries.len() { Some(off) } else { None }
+            if end <= self.entries.len() {
+                Some(off)
+            } else {
+                None
+            }
         }
 
         /// number of entries (u8 @+11)
@@ -1201,7 +1206,13 @@ pub mod private {
         }
 
         /// Program entry `i`: domain index + counter/timestamp seeds.
-        pub fn set_entry(&mut self, i: usize, domain: u32, counter: u64, timestamp_ns: u64) -> Option<()> {
+        pub fn set_entry(
+            &mut self,
+            i: usize,
+            domain: u32,
+            counter: u64,
+            timestamp_ns: u64,
+        ) -> Option<()> {
             let d = self.ent_off(i, clk_measure_v3::DOMAIN, 1)?;
             self.entries[d] = domain as u8;
             let c = self.ent_off(i, clk_measure_v3::COUNTER, 8)?;
@@ -1291,7 +1302,11 @@ pub mod private {
                 .checked_add(field_off)?;
             let off = abs.checked_sub(4)?;
             let end = off.checked_add(len)?;
-            if end <= self.rest.len() { Some(off) } else { None }
+            if end <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
         }
 
         /// Record type low byte (u32 @rec+0) for domain `bit`.
@@ -1305,13 +1320,14 @@ pub mod private {
             if i >= clk_ctrl_entry_v2::VALUE_COUNT {
                 return None;
             }
-            self.rec_off(bit, clk_ctrl_entry_v2::VALUES + 4 * i, 4).and_then(|off| {
-                self.rest
-                    .get(off..off + 4)
-                    .and_then(|s| s.try_into().ok())
-                    .map(u32::from_le_bytes)
-                    .map(|v| v as i32)
-            })
+            self.rec_off(bit, clk_ctrl_entry_v2::VALUES + 4 * i, 4)
+                .and_then(|off| {
+                    self.rest
+                        .get(off..off + 4)
+                        .and_then(|s| s.try_into().ok())
+                        .map(u32::from_le_bytes)
+                        .map(|v| v as i32)
+                })
         }
 
         /// Write value dword `i` (0..8) for domain `bit`.
@@ -1421,7 +1437,8 @@ pub mod private {
     // family's magic dwords are NOT `version<<16 | sizeof` (0x78604 and
     // 0x1E8604 both exceed 16 size bits — the driver's own "size" field is
     // just 0x8604). Stamp the raw literal the IDA handlers compare against.
-    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1;
+    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE =
+        NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1;
 
     impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1 {
         /// Literal magic dword the GetInfo handler accepts (live-verified).
@@ -1430,7 +1447,10 @@ pub mod private {
 
     impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1 {
         fn default() -> Self {
-            Self { version: NvVersion::with_version(Self::MAGIC), rest: [0; 493056] }
+            Self {
+                version: NvVersion::with_version(Self::MAGIC),
+                rest: [0; 493056],
+            }
         }
     }
 
@@ -1438,7 +1458,11 @@ pub mod private {
         fn off(&self, abs: usize, len: usize) -> Option<usize> {
             let off = abs.checked_sub(4)?;
             let end = off.checked_add(len)?;
-            if end <= self.rest.len() { Some(off) } else { None }
+            if end <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
         }
 
         fn u32_at(&self, abs: usize) -> Option<u32> {
@@ -1454,7 +1478,11 @@ pub mod private {
             if bank > 1 || idx >= clk_vfp_info::POINTS {
                 return None;
             }
-            let mask_base = if bank == 0 { clk_vfp_info::MASK1 } else { clk_vfp_info::MASK2 };
+            let mask_base = if bank == 0 {
+                clk_vfp_info::MASK1
+            } else {
+                clk_vfp_info::MASK2
+            };
             let dword = self.u32_at(mask_base + 4 * (idx >> 5))?;
             Some(dword & (1 << (idx & 31)) != 0)
         }
@@ -1464,14 +1492,21 @@ pub mod private {
             if bank > 1 || idx >= clk_vfp_info::POINTS {
                 return None;
             }
-            let base = if bank == 0 { clk_vfp_info::DESC1 } else { clk_vfp_info::DESC2 };
+            let base = if bank == 0 {
+                clk_vfp_info::DESC1
+            } else {
+                clk_vfp_info::DESC2
+            };
             let off = self.off(base + clk_vfp_info::DESC_STRIDE * idx, 1)?;
             self.rest.get(off).copied()
         }
 
         /// Copy the +4..+132 mask output into `status`' +4..+132 header —
         /// GetStatus REQUIRES this seed (zero → no records, garbage → -1).
-        pub fn seed_status_header(&self, status: &mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1) {
+        pub fn seed_status_header(
+            &self,
+            status: &mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1,
+        ) {
             let src = self.off(clk_vfp_info::MASK1, 128).unwrap_or(0);
             let dst = status.off_mut(clk_vfp_info::MASK1, 128).unwrap_or(0);
             let n = 128.min(self.rest.len() - src).min(status.rest.len() - dst);
@@ -1526,7 +1561,8 @@ pub mod private {
         }
     }
 
-    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1;
+    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE =
+        NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1;
 
     impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1 {
         /// Literal magic dword the GetStatus handler accepts: the largest of
@@ -1537,7 +1573,10 @@ pub mod private {
 
     impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1 {
         fn default() -> Self {
-            Self { version: NvVersion::with_version(Self::MAGIC), rest: [0; 2000384] }
+            Self {
+                version: NvVersion::with_version(Self::MAGIC),
+                rest: [0; 2000384],
+            }
         }
     }
 
@@ -1545,13 +1584,21 @@ pub mod private {
         fn off(&self, abs: usize, len: usize) -> Option<usize> {
             let off = abs.checked_sub(4)?;
             let end = off.checked_add(len)?;
-            if end <= self.rest.len() { Some(off) } else { None }
+            if end <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
         }
 
         fn off_mut(&mut self, abs: usize, len: usize) -> Option<usize> {
             let off = abs.checked_sub(4)?;
             let end = off.checked_add(len)?;
-            if end <= self.rest.len() { Some(off) } else { None }
+            if end <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
         }
 
         fn u32_at(&self, abs: usize) -> Option<u32> {
@@ -1566,8 +1613,13 @@ pub mod private {
             if bank > 1 || idx >= clk_vfp_status::POINTS {
                 return None;
             }
-            Some(if bank == 0 { clk_vfp_status::REC1 } else { clk_vfp_status::REC2 }
-                + clk_vfp_status::STRIDE * idx)
+            Some(
+                if bank == 0 {
+                    clk_vfp_status::REC1
+                } else {
+                    clk_vfp_status::REC2
+                } + clk_vfp_status::STRIDE * idx,
+            )
         }
 
         /// Record type byte (u8 @rec+0) for point `idx` in bank `bank`.
@@ -1679,19 +1731,28 @@ pub mod private {
         }
     }
 
-    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE_V1;
+    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE =
+        NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE_V1;
 
     impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE_V1 {
         fn off(&self, abs: usize, len: usize) -> Option<usize> {
             let off = abs.checked_sub(4)?;
             let end = off.checked_add(len)?;
-            if end <= self.rest.len() { Some(off) } else { None }
+            if end <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
         }
 
         fn off_mut(&mut self, abs: usize, len: usize) -> Option<usize> {
             let off = abs.checked_sub(4)?;
             let end = off.checked_add(len)?;
-            if end <= self.rest.len() { Some(off) } else { None }
+            if end <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
         }
 
         fn u32_at(&self, abs: usize) -> Option<u32> {
@@ -1714,9 +1775,7 @@ pub mod private {
             ] {
                 let dst = self.off_mut(dst_abs, 128).unwrap_or(0);
                 let src = info.off(src_abs, 128).unwrap_or(0);
-                let n = 128
-                    .min(self.rest.len() - dst)
-                    .min(info.rest.len() - src);
+                let n = 128.min(self.rest.len() - dst).min(info.rest.len() - src);
                 self.rest[dst..dst + n].copy_from_slice(&info.rest[src..src + n]);
             }
         }
@@ -1725,8 +1784,13 @@ pub mod private {
             if bank > 1 || idx >= clk_vfp_control::POINTS {
                 return None;
             }
-            Some(if bank == 0 { clk_vfp_control::REC1 } else { clk_vfp_control::REC2 }
-                + clk_vfp_control::STRIDE * idx)
+            Some(
+                if bank == 0 {
+                    clk_vfp_control::REC1
+                } else {
+                    clk_vfp_control::REC2
+                } + clk_vfp_control::STRIDE * idx,
+            )
         }
 
         /// Record type low byte for point `idx` in bank `bank`.
@@ -1785,7 +1849,11 @@ pub mod private {
             if bank > 1 || idx >= clk_vfp_control::POINTS {
                 return None;
             }
-            let mask_base = if bank == 0 { clk_vfp_control::MASK1 } else { clk_vfp_control::MASK2 };
+            let mask_base = if bank == 0 {
+                clk_vfp_control::MASK1
+            } else {
+                clk_vfp_control::MASK2
+            };
             let dword_idx = idx >> 5;
             let bit_idx = idx & 31;
             let off = self.off_mut(mask_base + 4 * dword_idx, 4)?;
