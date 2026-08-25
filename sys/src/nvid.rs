@@ -328,6 +328,19 @@ NvAPI_GPU_ClientPowerTopologyGetStatus = 0xedcf624e,
 NvAPI_GPU_ClientPowerPoliciesGetInfo = 0x34206d86,
 NvAPI_GPU_ClientPowerPoliciesGetStatus = 0x70916171,
 NvAPI_GPU_ClientPowerPoliciesSetStatus = 0xad95f5ed,
+/// ClientPowerPoliciesSetInfo — PRIVATE variant (ID 0xAD9A2E6D, from PNY
+/// VelocityX v0.1.3.5 `NVpower_wrapper.dll` Nvpower_GPU_SetPowerCap). NOT in
+/// nvid.rs before 2026-08-25. Distinct from the public SetStatus (0xAD95F5ED,
+/// 1368B V2 entries struct): this one takes the minimal V1 layout —
+/// `{version: 0x10088 (v1|136B), flags@+4 (u32=1 to select the TGP policy),
+/// power_target mW @+8}` — and VelocityX precedes it with a public GetInfo
+/// (0x34206D86) call using the 188B magic-0x100F8 V1 layout.
+NvAPI_GPU_ClientPowerPoliciesSetInfoPrivate = 0xad9a2e6d,
+/// MemoryInfo private variant (ID 0xC03C31E8, from PNY VelocityX v0.1.3.5
+/// `NVpower_wrapper.dll` Nvpower_GPU_GetMemoryInfoEx). NOT in nvid.rs before
+/// 2026-08-25. Out-struct `{version: 0x10090 (v1|144B), then 9×u64}` — the
+/// wrapper copies the 9 qwords straight out as VRAM info fields.
+NvAPI_GPU_ClientMemoryInfoPrivate = 0xc03c31e8,
 /// ClientPowerModes GetInfo (NVIDIA App's power-mode switcher — the UI's
 /// Balanced/Max toggle). RE'd from NVIDIA App nvxdapix.dll; struct magic
 /// 0x1150C. Live-RESOLVED on Windows R610.74.
@@ -733,6 +746,23 @@ NvAPI_GPU_ClientVoltRailsGetStatus = 0x465f9bcf, // aka NVAPI_ID_VOLTAGE_GET / N
 /// YOFOO alias: `NvAPI_GPU_GetVoltageDomainsInfo` (same ID 0x28766157). Our wrapper
 /// reads it as NV_VOLT_STATUS (voltage-step semantics); YOFOO's name is broader.
 NvAPI_GPU_GetVoltageStep = 0x28766157, // unsure of the name
+// --- ClockClientClkVfPoints family (V/F-curve private surface) ---
+// green-curve-main v0.24 (aufkrawall, MIT, reverse/green-curve-main) empirically
+// confirms this family works UNIFORMLY across Pascal/Turing/Ampere/Lovelace/
+// Blackwell — NOT GB202-only as earlier aiup/MinerLamp probing suggested. Layout
+// (from vf_backends.cpp + gpu_backend.cpp, all families identical):
+//   GetStatus  0x21537AD4  buf 0x1C28  v1: ver@(1<<16)|0x1C28@0, mask[32]@0x04,
+//              numClocks@0x24, entries@0x48 stride 0x1C, each [freq_kHz:4][volt_uV:4]
+//   GetInfo    0x507B4B59  buf 0x182C  v1: mask@0x04, numClocks@0x14
+//   GetControl 0x23F1B133  buf 0x2420  v1 (== our 9248B NV_GPU_CLOCK_CLIENT_CLK_
+//              VF_POINTS_CONTROL_V1): mask[32]@0x04, entryBase@0x44, stride 0x24,
+//              delta@0x14. SetControl write protocol: fresh full-block preimage →
+//              CLEAR mask[32] → set only bit `pointIndex` (ClockMask=8 dword, same
+//              as our existing wrap) → write delta@offset → SET → re-read → verify.
+//              defaultNumClocks=15.
+// Distinct from the *private-path* ClockClkVfPoints family below (0xda025c3e/
+// 0xfec00d04 etc.) which nvoc also wraps via clk_vf_points_private(); the
+// ClockClient family is the PUBLIC/documented boost-table surface.
 NvAPI_GPU_ClockClientClkDomainsGetInfo = 0x64b43a6a, // aka NVAPI_ID_CLK_RANGE_GET / NvAPI_{DLL,GPU}_GetClockBoostRanges
 NvAPI_GPU_ClockClientClkVfPointsGetInfo = 0x507b4b59, // aka NVAPI_ID_CLK_BOOST_MASK / NvAPI_{DLL,GPU}_GetClockBoostMask
 NvAPI_GPU_ClockClientClkVfPointsGetControl = 0x23f1b133, // aka NVAPI_ID_CLK_BOOST_TABLE_GET / NvAPI_{DLL,GPU}_GetClockBoostTable
@@ -1778,6 +1808,17 @@ Unknown_593E8644_LifecycleInit = 0x593e8644,
     NvAPI_GPU_ClockClkVoltControllersSetControl = 0xf9833206,
     NvAPI_GPU_ClockClkProgsGetInfo = 0xfaceb39b,
     NvAPI_GPU_ClockCounterMeasureAvgFreq = 0xfb8f61ec,
+    /// Direct (non-counter) clock-frequency read for one ClkDomains measure domain.
+    /// green-curve-main (aufkrawall, MIT) uses this ID exclusively for XBar/SYS
+    /// measurement — it is a DIFFERENT sub-family from `ClockCounterMeasureAvgFreq`
+    /// above (0xfb8f61ec), NOT a misattribution: this one is a 3-dword / 12-byte
+    /// direct read `{ version=0x0001000C@0, measure_domain_id@4, result_kHz@8 }`
+    /// where domain_id is sequential (XBAR=1, SYS=2); 0xfb8f61ec is counter-based
+    /// (caller computes Δcounter/Δtimestamp over a large 0x10020-byte struct with
+    /// bitmask domain selection). green-curve never calls 0xfb8f61ec. Currently
+    /// unbound to an FFI struct here — simpler than the counter variant for ad-hoc
+    /// per-domain kHz probing (e.g. verifying an XBar/SYS/VIDEO offset took effect).
+    NvAPI_GPU_ClockClkDomainsMeasureFreq = 0x527fc458,
     NvAPI_GPU_ClockClkProgsGetStatus = 0xfbffaf22,
     NvAPI_GPU_ClockClkFreqControllersGetControl = 0xfd7c0ac3,
     NvAPI_GPU_ClockClkVfPointsSetControl = 0xfec00d04,

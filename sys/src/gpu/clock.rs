@@ -655,6 +655,78 @@ pub mod private {
 
     nvversion! { @=NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1(1) = 152 }
 
+    pub type NV_OC_SCANNER_STATUS_CALLBACK = unsafe extern "system" fn(
+        ctx: *mut std::os::raw::c_void,
+        pStatus: *const NV_GPU_OC_SCANNER_STATUS,
+    ) -> u32;
+
+    nvstruct! {
+        /// OC Scanner status payload handed to the Register callback. The
+        /// driver owns the buffer; we only read through the pointer. Two
+        /// independent RE sources agree on the layout:
+        /// - nvapi64_impl handler 0x180072470 (MSI path): eventType (0/1) at
+        ///   +24, status byte +28, flags +32; eventType 1 carries a ~9KB
+        ///   per-point V/F payload starting at +0x6C.
+    /// - PNY VelocityX `NVpower_wrapper.dll` (RE'd 2026-08-25, live
+    ///   instruction-verified): the wrapper's callback reads state dword at
+    ///   +0x48 (0 = idle, 1 = scanning, other = failed/finished), progress
+    ///   at +0x50 (byte + dword mirror), and dwords at +0x60/+0x64 (last
+    ///   dword is the HRESULT-ish code returned from the callback).
+        pub struct NV_GPU_OC_SCANNER_STATUS_V1 {
+            pub pad0: Padding<[u8; 0x48]>,
+            /// +0x48: scanner state (VelocityX mapping: 0 = idle, 1 =
+            /// scanning, other = failed/finished).
+            pub state: u32,
+            pub gap: Padding<[u8; 4]>,
+            /// +0x50: progress (byte mirror + dword).
+            pub progress: u32,
+            pub pad1: Padding<[u8; 0x0C]>,
+            /// +0x60: unknown status dword.
+            pub status_0x60: u32,
+            /// +0x64: unknown status dword (returned as the callback result
+            /// by the VelocityX handler).
+            pub status_0x64: u32,
+            pub pad2: Padding<[u8; 4]>,
+            /// +0x6C: per-point V/F payload on eventType-1 notifications
+            /// (~9KB), opaque here.
+            pub payload: Padding<[u8; 0x2400]>,
+        }
+    }
+
+    impl NV_GPU_OC_SCANNER_STATUS_V1 {
+        /// VelocityX's derived 3-state mapping from the raw +0x48 dword:
+        /// 0 → 0 (idle), 1 → 1 (scanning), other → 2 (failed/finished).
+        pub fn scan_state(&self) -> u32 {
+            match self.state {
+                0 => 0,
+                1 => 1,
+                _ => 2,
+            }
+        }
+    }
+
+    pub type NV_GPU_OC_SCANNER_STATUS = NV_GPU_OC_SCANNER_STATUS_V1;
+
+
+    nvstruct! {
+        /// OC Scanner status-update registration — V1-EX variant (RE'd from
+        /// PNY VelocityX `NVpower_wrapper.dll` Subscribe/Unsubscribe exports,
+        /// 2026-08-25). 216 bytes, version magic 0x100D8 (v1|216B — the
+        /// newer sibling of the MSI 0x10098/152B layout above). The callback
+        /// fn pointer sits at +0x50; UNREGISTER = the same call with a NULL
+        /// callback. The callback receives (ctx, pStatus: *const
+        /// NV_GPU_OC_SCANNER_STATUS) and returns u32.
+        pub struct NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX {
+            pub version: NvVersion,
+            pub pad0: Padding<[u8; 0x4C]>,
+            /// +0x50: status callback (NULL = unregister).
+            pub callback: Option<NV_OC_SCANNER_STATUS_CALLBACK>,
+            pub tail: Padding<[u8; 216 - 0x58]>,
+        }
+    }
+
+    nvversion! { NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX(1) = 216 }
+
     nvapi! {
         /// Undocumented (NDA, ID 0xBC4AEE25). Start the DRIVER-side OC
         /// scanner (drivers >= 455.00). 68-byte control struct, magic
@@ -1135,6 +1207,43 @@ pub mod private {
 
     nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE2 NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_V2(2) = 0x20 }
 
+    nvstruct! {
+        /// Direct (non-counter) single-domain clock-frequency read, the
+        /// green-curve-main (aufkrawall, MIT) MEASURE path. ID 0x527FC458 —
+        /// a DIFFERENT sub-family from `ClockCounterMeasureAvgFreq` (0xFB8F61EC,
+        /// which returns a {counter, timestamp} pair needing two samples).
+        /// This struct is the driver's direct answer: caller supplies the
+        /// version word + sequential domain INDEX, driver writes `freq_khz` at
+        /// +8. Magic 0x0001000C = (1<<16)|0xC; 12 bytes / 3 dwords. Domain
+        /// index encoding matches the counter variant (XBAR=1, SYS=2; the
+        /// entry→measure-domain map is 1→1, 3→2 per green-curve's empirical
+        /// differential-write identification on RTX 5070 / 610.88). VIDEO
+        /// (entry 4) has NO measure domain — verify it via exact control-block
+        /// readback instead.
+        ///
+        /// LIVE-VERIFIED on RTX 4060 Laptop / R610: under GPU load, all four
+        /// measurable domains (GPC/XBAR/SYS/MCLK) agree with the counter-based
+        /// `0xFB8F61EC` within <2%, confirming both IDs read the same RM clock
+        /// state through different sub-families. NOTE: at IDLE / aggressive
+        /// GCOFF, GPC and XBAR return transient anomalously-low or zero kHz
+        /// (gate cycling) while SYS/MCLK stay stable — this is real hardware
+        /// state, not an API error. For post-offset verification, read under
+        /// load (green-curve also measures XBAR in the apply path, which is a
+        /// load scenario); the counter variant's 50 ms window can SMOOTH gate
+        /// transients or return 0 when Δcounter=0 across the sample, so the
+        /// direct form is the more robust single-sample read under load.
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT_V1 {
+            pub version: NvVersion,
+            /// +4 sequential domain INDEX in (GPC=0, XBAR=1, SYS=2, MCLK=4)
+            pub domain_index: u32,
+            /// +8 OUT: measured frequency in kHz (0 on refused/unmeasurable,
+            /// or transient GCOFF gate-cycling at idle for GPC/XBAR)
+            pub freq_khz: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT_V1(1) = 0xC }
+
     /// V3 batch MEASURE_FREQ (magic 196984 = 0x30038; IDA sub_18021DC90
     /// V3 arm + disasm @0x18021DF03). One RM round-trip measures MANY
     /// domains: header 16B (magic@+0, count u8@+11), then `count` packed
@@ -1395,6 +1504,17 @@ pub mod private {
         /// Returns {counter, timestamp}; sample twice and divide for physical
         /// Hz. WORKS live on Ada 4060 Laptop.
         pub unsafe fn NvAPI_GPU_ClockCounterMeasureAvgFreq(hPhysicalGPU: NvPhysicalGpuHandle, pMeasure: *mut NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Direct clock-frequency read for one ClkDomains measure domain
+        /// (ID 0x527FC458). A DIFFERENT, simpler sub-family than
+        /// `ClockCounterMeasureAvgFreq` (0xFB8F61EC) above: the driver writes
+        /// `freq_khz` directly at +8 — no two-sample Δcounter/Δt computation.
+        /// green-curve-main uses this exclusively for XBar/SYS measurement and
+        /// for verifying a ClkDomains offset took effect (XBAR=domain 1,
+        /// SYS=domain 2). 12-byte V1 struct, magic 0x0001000C.
+        pub unsafe fn NvAPI_GPU_ClockClkDomainsMeasureFreq(hPhysicalGPU: NvPhysicalGpuHandle, pMeasure: *mut NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT) -> NvAPI_Status;
     }
 
     /// Byte offsets into the private ClockClient V/F-POINTS GetInfo block

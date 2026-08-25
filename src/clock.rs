@@ -408,6 +408,24 @@ pub struct ClockDomainFreqDetail {
     pub extra: u32,
 }
 
+/// Direct single-domain clock-frequency read from the green-curve MEASURE
+/// path (ID 0x527FC458). Unlike [`ClockDomainFreq`] / [`ClockDomainFreqDetail`]
+/// (which use the counter-based `0xFB8F61EC` and require two samples +
+/// Δcounter/Δt computation), this API returns `freq_khz` directly — no
+/// sampling, no sleep, no division. Best for an immediate post-write
+/// verification read of an XBar/SYS clock offset (XBAR=domain 1, SYS=domain
+/// 2). Returns `freq_khz == 0` when the driver refuses or the domain is not
+/// measurable (VIDEO/entry 4 has no measure domain — use control-block
+/// readback there).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct ClockDomainFreqDirect {
+    /// the measured domain
+    pub domain: ClockDomainId,
+    /// physical frequency in kHz (driver-direct; 0 = refused/unmeasurable)
+    pub freq_khz: u32,
+}
+
 /// One V/F curve point from the private ClockClient V/F-POINTS GetStatus
 /// (RM 0x20809062, ID 0x7FEE9032, 488B type-08 records). Records are
 /// INDEXED BY VOLTAGE; units live-calibrated against the public GPC VFP

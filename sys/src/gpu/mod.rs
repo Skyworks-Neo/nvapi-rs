@@ -90,6 +90,30 @@ nvapi! {
 }
 
 nvapi! {
+    pub type GPU_ClientMemoryInfoPrivateFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pMemoryInfo: *mut NV_GPU_CLIENT_MEMORY_INFO_PRIVATE) -> NvAPI_Status;
+
+    /// Undocumented (ID 0xC03C31E8, PNY VelocityX `NVpower_wrapper.dll`
+    /// Nvpower_GPU_GetMemoryInfoEx, RE'd 2026-08-25). Private MemoryInfo
+    /// variant — NOT the deprecated public NvAPI_GPU_GetMemoryInfo /
+    /// GetMemoryInfoEx family. Out-struct: version magic 0x10090 (v1|144B)
+    /// followed by 9×u64 the wrapper copies straight out as VRAM fields
+    /// (semantics of each qword not yet decoded — desktop-driver family;
+    /// QI NULL on R610.74 mobile 4060).
+    pub unsafe fn NvAPI_GPU_ClientMemoryInfoPrivate;
+}
+
+nvstruct! {
+    pub struct NV_GPU_CLIENT_MEMORY_INFO_PRIVATE_V1 {
+        pub version: NvVersion,
+        pub reserved: u32,
+        pub values: [u64; 9],
+        pub padding: Padding<[u32; (144 - 8 - 72) / 4]>,
+    }
+}
+
+nvversion! { @=NV_GPU_CLIENT_MEMORY_INFO_PRIVATE NV_GPU_CLIENT_MEMORY_INFO_PRIVATE_V1(1) = 144 }
+
+nvapi! {
     pub type GPU_GetPhysicalFrameBufferSizeFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pSize: *mut u32) -> NvAPI_Status;
 
     /// This function returns the physical size of framebuffer in KB.  This does NOT include any

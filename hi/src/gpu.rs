@@ -814,6 +814,32 @@ impl Gpu {
         }
     }
 
+    /// Reset every present V/F curve point on `bank` to default by clearing
+    /// its mode-0 (absolute kHz) override in a single private SetControl
+    /// RMW cycle (one GET → patch all present points to mode 0 / value 0 →
+    /// SET → readback). This is the only way to clear raw/converted mode-0
+    /// offsets written via `set_vfp_point_private(freq_mode=true)` or the
+    /// `set-vfp-range-private` default/--freq-mode path — the public
+    /// `reset_vfp` and `core_reset_vfp` route through the pstate20 / public
+    /// Client VfPoints families and cannot reach private mode-0 state.
+    ///
+    /// Returns `Ok(Some(count))` with the number of points written, or
+    /// `Ok(None)` where the private family is absent.
+    pub fn reset_vfp_private(&self, bank: usize) -> nvapi::Result<Option<usize>> {
+        match self.gpu.reset_vfp_private(bank) {
+            Ok(n) => Ok(Some(n)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Batch physical clocks for many domains via the V3 MEASURE_FREQ
     /// (magic 0x30038) — one RM round-trip per sample instead of one per
     /// domain. Per-domain V1/V2 fallback when the driver rejects the batch

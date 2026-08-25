@@ -1527,6 +1527,39 @@ impl PhysicalGpu {
         })
     }
 
+    /// DIRECT physical clock for one domain — the green-curve MEASURE path
+    /// (ID 0x527FC458). Unlike [`clk_domain_freq`](Gpu::clk_domain_freq) /
+    /// [`clk_domain_freq_detail`](Gpu::clk_domain_freq_detail) (counter-based
+    /// `0xFB8F61EC`, two samples + 50 ms sleep + Δcounter/Δt), this API
+    /// returns `freq_khz` in one call: the driver writes the value directly.
+    /// Best for an immediate post-write verification of an XBar/SYS offset
+    /// (XBAR=`domain_bit` 1, SYS=`domain_bit` 2). `domain_bit` is the same
+    /// sequential domain INDEX the counter variant uses (GPC=0, XBAR=1,
+    /// SYS=2, MCLK=4). Returns `freq_khz == 0` when the driver refuses or the
+    /// domain is not measurable through this interface (VIDEO/entry 4 has no
+    /// measure domain — verify it via exact control-block readback instead).
+    pub fn clk_domain_freq_direct(
+        &self,
+        domain_bit: u32,
+    ) -> crate::Result<crate::clock::ClockDomainFreqDirect> {
+        trace!("gpu.clk_domain_freq_direct({domain_bit})");
+        use crate::sys::api::NvAPI_GPU_ClockClkDomainsMeasureFreq;
+        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT;
+
+        let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT::default();
+        // magic 0x0001000C = (1<<16)|0xC — version 1, 12-byte struct
+        m.version = sys::api::NvVersion::new(0xC, 1);
+        m.domain_index = domain_bit;
+        let st = unsafe { NvAPI_GPU_ClockClkDomainsMeasureFreq(self.0, ptr::from_mut(&mut m).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsMeasureFreq, st)
+            .map_err(crate::Error::from)?;
+        Ok(crate::clock::ClockDomainFreqDirect {
+            domain: crate::clock::ClockDomainId::from_raw(domain_bit as i32)
+                .unwrap_or(crate::clock::ClockDomainId::Gpc),
+            freq_khz: m.freq_khz,
+        })
+    }
+
     /// Batch physical clocks for many domains in ONE RM round-trip family —
     /// the V3 MEASURE_FREQ (magic 0x30038): up to 32 packed 24B entries,
     /// each carrying its own {counter, timestamp} seed. Two calls ~50 ms
@@ -2402,6 +2435,120 @@ impl PhysicalGpu {
             )));
         }
         Ok(())
+    }
+
+    /// Reset every present V/F curve point on `bank` to its default
+    /// frequency by clearing any applied mode-0 (absolute kHz) override —
+    /// i.e. write mode 0 / value 0 to each present point in a single RMW
+    /// cycle (one GetControl → patch all → SetControl → readback verify).
+    ///
+    /// This is the private-family analogue of the public `reset_vfp` /
+    /// `core_reset_vfp`, but unlike those (which route through the pstate20
+    /// or public Client VfPoints families and therefore cannot clear
+    /// private mode-0 overrides), it writes the SAME 0xFEC00D04
+    /// SetControl that `set_vfp_point_private` uses — so it actually clears
+    /// the mode-0 raw/converted offsets the private write paths apply.
+    ///
+    /// Only points the driver reports as present (per GetInfo's per-bank
+    /// masks) are touched; absent points keep their (zero) mask bit and
+    /// are skipped by the SET handler. `bank` 0 is the V/F curve bank;
+    /// bank 1 holds pstate-class records and is reset the same way.
+    ///
+    /// Returns the count of points written (present points patched), for
+    /// caller-side diagnostics. `Ok(0)` means the family is present but
+    /// the bank has no points (an empty GPU, e.g. during hot-remove).
+    pub fn reset_vfp_private(&self, bank: usize) -> crate::Result<usize> {
+        trace!("gpu.reset_vfp_private(bank={bank})");
+        use crate::sys::api::{
+            NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
+            NvAPI_GPU_ClockClkVfPointsSetControl,
+        };
+        use clock::private::{
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
+            NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
+        };
+
+        if bank > 1 {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+
+        // 1. GetInfo → point masks + descriptors (mandatory seed).
+        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let st =
+            unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from)?;
+
+        // 2. GetControl snapshot with seeded masks — the RMW source.
+        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
+            Box::new(unsafe { std::mem::zeroed() });
+        snapshot.version =
+            sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+        snapshot.seed_masks_from_info(&info);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // 3. Patch every PRESENT point to mode 0 / value 0 (clear override).
+        // The record type byte (8 for bank 0, 6 for bank 1) is the
+        // CONTROL-family user type, not the GetStatus type — same as the
+        // single-point setter. `seed_masks_from_info` already set the mask
+        // bits for present points, so we only need to patch the record body.
+        let user_type = if bank == 0 { 8 } else { 6 };
+        let mut written = 0usize;
+        for idx in 0..clock::private::clk_vfp_control::POINTS {
+            if !info.point_present(bank, idx).unwrap_or(false) {
+                continue;
+            }
+            snapshot
+                .set_record_type(bank, idx, user_type)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            snapshot
+                .set_absolute(bank, idx, 0)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            written += 1;
+        }
+
+        // 4. SetControl — pass the Box's inner pointer.
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsSetControl(self.0, ptr::from_ref(&*snapshot).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // 5. Readback + verify the first present point took mode 0 / value 0.
+        // A present-but-empty bank (written==0) skips verification: there is
+        // no point to read back, and the SET was a no-op snapshot round-trip.
+        if written > 0 {
+            let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
+                Box::new(unsafe { std::mem::zeroed() });
+            verify.version =
+                sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+            verify.seed_masks_from_info(&info);
+            let st = unsafe {
+                NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
+            };
+            crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+                .map_err(crate::Error::from)?;
+
+            // find the first present point and confirm mode==0, value==0
+            let first = (0..clock::private::clk_vfp_control::POINTS)
+                .find(|&idx| info.point_present(bank, idx).unwrap_or(false));
+            if let Some(idx) = first {
+                let mode = verify.mode(bank, idx).unwrap_or(1);
+                let value = verify.value(bank, idx).unwrap_or(1);
+                if mode != 0 || value != 0 {
+                    return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                        sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl,
+                        Status::NotSupported,
+                    )));
+                }
+            }
+        }
+
+        Ok(written)
     }
 
     #[allow(unused_assignments)]

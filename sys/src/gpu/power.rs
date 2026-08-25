@@ -988,6 +988,32 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE) -> NvAPI_Status;
     }
 
+    nvstruct! {
+        /// ClientPowerPoliciesSetInfo PRIVATE V1 (ID 0xAD9A2E6D, PNY VelocityX
+        /// `NVpower_wrapper.dll` Nvpower_GPU_SetPowerCap, RE'd 2026-08-25).
+        /// Minimal TGP-watt SET layout — the struct the wrapper builds
+        /// instruction-verified: version magic 0x10088, +4 dword = 1 (policy
+        /// selector), +8 dword = power target in mW. VelocityX precedes the
+        /// SET with a public GetInfo (0x34206D86) using the 188B 0x100F8 V1
+        /// layout. Live-probe R610.74 mobile 4060: QI NULL (desktop-driver
+        /// family — untested there).
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_SET_INFO_V1 {
+            pub version: NvVersion,
+            pub selector: u32,
+            pub power_target_mw: u32,
+            pub padding: Padding<[u32; 136/4 - 3]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_POWER_POLICIES_SET_INFO NV_GPU_CLIENT_POWER_POLICIES_SET_INFO_V1(1) = 136 }
+
+    nvapi! {
+        /// Undocumented (ID 0xAD9A2E6D). ClientPowerPoliciesSetInfo private
+        /// variant — minimal V1 TGP-watt setter (PNY VelocityX SetPowerCap).
+        /// Sibling of the public SetStatus (0xAD95F5ED); struct magic 0x10088.
+        pub unsafe fn NvAPI_GPU_ClientPowerPoliciesSetInfoPrivate(hPhysicalGPU: NvPhysicalGpuHandle, pSetInfo: *const NV_GPU_CLIENT_POWER_POLICIES_SET_INFO) -> NvAPI_Status;
+    }
+
     nvapi! {
         /// Undocumented (NDA-private, ID 0x48E0847D). D-Notifier (D0-notify)
         /// "extern power state" SETTER — the write half of the ref tool's
