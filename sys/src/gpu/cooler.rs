@@ -741,6 +741,42 @@ pub mod private {
         pub unsafe fn NvAPI_GPU_ClientFanPoliciesSetControl;
     }
 
+    /// ClientFanPolicies GetInfo capabilities block (structure magic
+    /// `0x2004C`, 76 bytes). Size/magic corroborated by EVGA Precision X1
+    /// 1.3.7 (ManagedNvApi.dll `getFanCurve` GetInfo path); field layout
+    /// beyond the version dword is opaque until live-decoded.
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
+    pub struct NV_GPU_CLIENT_FAN_POLICIES_INFO_V1 {
+        /// structure magic — `0x2004C` (v2 | 76)
+        pub version: u32,
+        /// opaque driver-filled capability fields (72 bytes)
+        pub data: [u8; 72],
+    }
+
+    /// Versionless alias used by the NVAPI function signatures.
+    pub type NV_GPU_CLIENT_FAN_POLICIES_INFO = NV_GPU_CLIENT_FAN_POLICIES_INFO_V1;
+
+    impl NV_GPU_CLIENT_FAN_POLICIES_INFO_V1 {
+        /// The `0x2004C` structure magic for `ClientFanPoliciesGetInfo`.
+        pub const MAGIC: u32 = 0x2004C;
+
+        pub fn new() -> Self {
+            Self {
+                version: Self::MAGIC,
+                data: [0u8; 72],
+            }
+        }
+    }
+
+    nvapi! {
+        pub type GPU_ClientFanPoliciesGetInfoFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLIENT_FAN_POLICIES_INFO) -> NvAPI_Status;
+
+        /// Undocumented. Returns the fan-policy capabilities block
+        /// (version `0x2004C`, 76 bytes).
+        pub unsafe fn NvAPI_GPU_ClientFanPoliciesGetInfo;
+    }
+
     // ------------------------------------------------------------------
     // FanPolicy whole-block reset family (NDA). RE'd from GPUMon.exe
     // `GPUHandle::resetFanCurve` (sub_140030830): GET the full 0x14AC-byte

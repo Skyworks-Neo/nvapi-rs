@@ -3635,6 +3635,22 @@ impl PhysicalGpu {
             .map(|c| c.into_iter().map(|(i, c)| (i, c.control)).collect())
     }
 
+    /// Read the fan-policy capabilities block (`ClientFanPoliciesGetInfo` NDA
+    /// 0x52B76D12, structure magic `0x2004C`, 76 bytes). Size/magic
+    /// corroborated by EVGA Precision X1 (ManagedNvApi.dll). Field layout
+    /// beyond the version dword is opaque — returned raw for decoding.
+    pub fn fan_policy_info(&self) -> crate::NvapiResult<cooler::private::NV_GPU_CLIENT_FAN_POLICIES_INFO> {
+        trace!("gpu.fan_policy_info()");
+
+        let raw = unsafe {
+            nvcall!(NvAPI_GPU_ClientFanPoliciesGetInfo@get{
+                cooler::private::NV_GPU_CLIENT_FAN_POLICIES_INFO::new()
+            }(self.0))?
+        };
+
+        Ok(raw)
+    }
+
     /// Read the GPU fan-curve table (`ClientFanPoliciesGetControl` NDA
     /// 0xE543C540, structure magic `0x200DC`). RE'd from GPUMon.exe
     /// `pollFanCurve`: one table snapshot holds up to 4 curve slots, each
