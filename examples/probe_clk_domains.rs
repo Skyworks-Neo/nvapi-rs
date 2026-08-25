@@ -59,8 +59,8 @@ const CLK_VF_POINTS_GET_STATUS: u32 = 0x7FEE9032;
 //
 // We probe the LARGEST accepted magic of each (newest layout) first, then
 // fall back. MEASURE V1 (0x10020) is the simplest single-domain read.
-const GET_INFO_MAGICS: &[(u32, usize)] = &[
-    (0x5058C, 0x5058C as usize & 0xFFFFF), // 329356 — but struct size is the magic's low bits+?
+const _GET_INFO_MAGICS: &[(u32, usize)] = &[
+    (0x5058C, 0x5058C_usize & 0xFFFFF), // 329356 — but struct size is the magic's low bits+?
 ];
 // NOTE: the NVAPI version-magic convention (nvversion!) encodes (version<<16)|size
 // in some structs. We pass the magic at +0 and size the buffer to the magic value
@@ -68,7 +68,7 @@ const GET_INFO_MAGICS: &[(u32, usize)] = &[
 // (623168) internal scratch buf regardless; the USER buffer just needs the magic
 // at +0 and enough room for the per-domain payload. We allocate generously.
 const GET_INFO_BUF_SIZE: usize = 0x5058C + 0x1000; // headroom past largest magic
-const GET_CONTROL_MAGICS: &[(u32, usize)] = &[(0x26154, 0x26154), (0x10964, 0x10964)];
+const _GET_CONTROL_MAGICS: &[(u32, usize)] = &[(0x26154, 0x26154), (0x10964, 0x10964)];
 const GET_CONTROL_BUF_SIZE: usize = 0x26154 + 0x1000;
 const MEASURE_V1: u32 = 0x10020;
 const MEASURE_V1_BUF_SIZE: usize = 0x10020 + 0x100;
@@ -251,7 +251,7 @@ fn main() {
                 let mask = u32::from_le_bytes(buf[8..12].try_into().unwrap());
                 println!("  controllable mask @+8 = {}", domain_name(mask));
                 // dump per-domain records for the known clock domains
-                let (rec_stride, rec_base, val_off) = if magic == 0x26154 {
+                let (rec_stride, rec_base, _val_off) = if magic == 0x26154 {
                     (772usize, 292usize, 67) // V2: a2+292+772*idx, vals at v27[67..]
                 } else {
                     (72, 0, 36) // V1: a2+72*idx, vals at v21[36..]
@@ -304,7 +304,7 @@ fn main() {
         //  - if +8 is a direct frequency: reading2 ≈ reading1 (stable clock)
         //  - if +8 is a cycle counter: reading2 = reading1 + freq*Δt (grows)
         // +16 is a ns timestamp (QPC). freq = Δcounter / Δtime_ns (GHz) if counter.
-        for (didx, dbit, dname) in [
+        for (didx, _dbit, dname) in [
             (0u32, 0x1u32, "GPCCLK"),
             (1u32, 0x2u32, "XBARCLK"),
             (2u32, 0x4u32, "SYSCLK"),
@@ -365,7 +365,7 @@ fn main() {
     );
     println!(
         "controllable mask: {:?}",
-        controllable_mask.map(|m| domain_name(m))
+        controllable_mask.map(domain_name)
     );
     println!("\nNOTE: SET_CONTROL (0xD14B69CF) was resolved-only, NEVER called.");
     println!("NOTE: live-verified mask 0xFF on Ada 4060 Laptop INCLUDES XBARCLK bit");

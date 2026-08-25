@@ -111,7 +111,7 @@ fn stair_fit(pts: &[(i64, i64)], q: f64) -> Option<(f64, f64, f64, f64)> {
             }
         }
     }
-    if !(lo < hi) {
+    if !matches!(lo.partial_cmp(&hi), Some(std::cmp::Ordering::Less)) {
         return None;
     }
     let mut c = (lo + hi) / 2.0;
@@ -126,7 +126,7 @@ fn stair_fit(pts: &[(i64, i64)], q: f64) -> Option<(f64, f64, f64, f64)> {
         b_hi = b_hi.min(x);
         b_lo = b_lo.max(x - q);
     }
-    if !(b_lo < b_hi) {
+    if !matches!(b_lo.partial_cmp(&b_hi), Some(std::cmp::Ordering::Less)) {
         return None;
     }
     let b = (b_lo + b_hi) / 2.0;

@@ -1,7 +1,7 @@
 //! Live probe: OC Scanner status-callback subscription (0x1CB41116, V1EX 0x100D8).
 //! VelocityX protocol: subscribe -> start -> poll snapshot -> stop -> unsubscribe.
-use nvapi::initialize;
 use nvapi::PhysicalGpu;
+use nvapi::initialize;
 fn main() {
     println!("initialize: {:?}", initialize());
     let gpus = PhysicalGpu::enumerate().expect("enumerate");

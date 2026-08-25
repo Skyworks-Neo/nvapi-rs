@@ -33,7 +33,7 @@ fn nz(buf: &[u8]) -> usize {
 
 fn main() {
     let _ = initialize();
-    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS as usize];
+    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
     let mut count = 0u32;
     use nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsGetControl;
     use nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsGetInfo;
@@ -56,7 +56,7 @@ fn main() {
         unsafe { std::slice::from_raw_parts(ptr::from_ref(&*info).cast::<u8>(), 6188) };
     println!(
         "  info.mask  = {:08X?}",
-        info.mask.mask.iter().map(|v| v).take(2).collect::<Vec<_>>()
+        info.mask.mask.iter().take(2).collect::<Vec<_>>()
     );
     println!("  info.unknown32 (+36..+68) = {:08X?}", {
         let mut v = [0u32; 8];

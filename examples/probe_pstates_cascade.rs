@@ -8,14 +8,17 @@ fn main() {
         println!("--- {} ---", gpu.full_name().unwrap_or_default());
         match gpu.pstates() {
             Ok(p) => {
-                println!("editable={} pstates={} overvolt={}", p.editable, p.pstates.len(), p.overvolt.len());
+                println!(
+                    "editable={} pstates={} overvolt={}",
+                    p.editable,
+                    p.pstates.len(),
+                    p.overvolt.len()
+                );
                 for ps in &p.pstates {
                     let clocks: Vec<String> = ps
                         .clocks
                         .iter()
-                        .map(|c| {
-                            format!("{:?}={:?}", c.domain(), c.frequency_delta())
-                        })
+                        .map(|c| format!("{:?}={:?}", c.domain(), c.frequency_delta()))
                         .collect();
                     println!("  {:?} clocks=[{}]", ps.id, clocks.join(", "));
                 }

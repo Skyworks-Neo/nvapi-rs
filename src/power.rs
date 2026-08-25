@@ -574,6 +574,7 @@ pub fn disambiguate_power_rails(
 ///   - `InputTotalBoard2` (223) ≈ GPU-Z "Board Power" (a second board-total
 ///     channel, same semantic as 245; present on some SKUs alongside 245).
 ///   - `OutputNvvdd` (1) ≈ GPU-Z "Chip" output regulator.
+///
 /// Other rails (PEX3V3, Misc, Ext12v connectors, …) have no clean GPU-Z
 /// single-rail equivalent → `None` (label by `rail_name` instead).
 pub fn gpu_z_rail_name(rail: u32) -> Option<&'static str> {

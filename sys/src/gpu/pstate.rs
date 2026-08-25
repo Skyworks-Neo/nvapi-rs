@@ -301,8 +301,8 @@ mod pstates20_size_tests {
     /// cannot silently drift.
     #[test]
     fn pstates20_layout_sizes() {
-        use crate::api::{NV_GPU_PERF_PSTATES20_INFO_V1, NV_GPU_PERF_PSTATES20_INFO_V2};
         use crate::api::NV_GPU_PERF_PSTATES20_PSTATE;
+        use crate::api::{NV_GPU_PERF_PSTATES20_INFO_V1, NV_GPU_PERF_PSTATES20_INFO_V2};
         assert_eq!(std::mem::size_of::<NV_GPU_PERF_PSTATES20_PSTATE>(), 456);
         assert_eq!(std::mem::size_of::<NV_GPU_PERF_PSTATES20_INFO_V1>(), 7316);
         assert_eq!(std::mem::size_of::<NV_GPU_PERF_PSTATES20_INFO_V2>(), 7416);

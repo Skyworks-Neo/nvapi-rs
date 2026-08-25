@@ -1,7 +1,8 @@
 //! Live QI resolution probe for PNY VelocityX NVpower_wrapper.dll-discovered IDs.
 use nvapi::initialize;
 fn main() {
-    let st = initialize(); println!("initialize: {st:?}");
+    let st = initialize();
+    println!("initialize: {st:?}");
     let ids = [
         ("0xAD9A2E6D ClientPowerPoliciesSetInfo(NEW)", 0xAD9A2E6Du32),
         ("0xC03C31E8 MemoryInfoEx-private(NEW)", 0xC03C31E8),
@@ -15,7 +16,10 @@ fn main() {
         ("0xCC727B22 ClientRevertOc", 0xCC727B22),
         ("0x593E8E72 ClientGetLastOcScannerResults", 0x593E8E72),
         ("0x210F1841 ClientGetOcConfig", 0x210F1841),
-        ("0x1CB41116 ClientRegisterForOcScannerStatusUpdates", 0x1CB41116),
+        (
+            "0x1CB41116 ClientRegisterForOcScannerStatusUpdates",
+            0x1CB41116,
+        ),
         ("0xD7C61344 unload-internal", 0xD7C61344),
         ("0xE543C540 ClientFanPoliciesGetControl(ctrl)", 0xE543C540),
         ("0x0FE87B7F FanPolicyGetInfo(ctrl)", 0x0FE87B7F),

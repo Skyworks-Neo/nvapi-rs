@@ -1056,7 +1056,7 @@ pub fn clk_vf_stair_fit(samples: &[ClkVfStairSample], q_mhz: i64) -> Option<ClkV
             }
         }
     }
-    if !(lo < hi) {
+    if !matches!(lo.partial_cmp(&hi), Some(std::cmp::Ordering::Less)) {
         return None;
     }
     let mut c = (lo + hi) / 2.0;
@@ -1071,7 +1071,7 @@ pub fn clk_vf_stair_fit(samples: &[ClkVfStairSample], q_mhz: i64) -> Option<ClkV
         b_hi = b_hi.min(x);
         b_lo = b_lo.max(x - q);
     }
-    if !(b_lo < b_hi) {
+    if !matches!(b_lo.partial_cmp(&b_hi), Some(std::cmp::Ordering::Less)) {
         return None;
     }
     Some(ClkVfStairFit {

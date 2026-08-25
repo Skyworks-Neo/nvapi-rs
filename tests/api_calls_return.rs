@@ -8,7 +8,7 @@ use nvapi::{ConnectedIdsFlags, PhysicalGpu};
 
 #[test]
 fn physicalgpu_display_ids_connected() {
-    if let Ok(_) = nvapi::initialize() {
+    if nvapi::initialize().is_ok() {
         if let Ok(gpus) = PhysicalGpu::enumerate() {
             for gpu in gpus {
                 // Bug: if there are zero connected displays this may crash.
@@ -20,7 +20,7 @@ fn physicalgpu_display_ids_connected() {
 
 #[test]
 fn physicalgpu_display_ids_all() {
-    if let Ok(_) = nvapi::initialize() {
+    if nvapi::initialize().is_ok() {
         if let Ok(gpus) = PhysicalGpu::enumerate() {
             for gpu in gpus {
                 // Bug: if there are zero connected displays this may crash.

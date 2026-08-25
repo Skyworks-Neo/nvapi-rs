@@ -862,9 +862,9 @@ impl RawConversion for thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO {
         trace!("convert_raw({:#?})", self);
         // Mirror the raw struct's mask-aware primary_index() into the typed array.
         let mut primary = [None; thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX];
-        for ty in 0..primary.len() {
+        for (ty, slot) in primary.iter_mut().enumerate() {
             if let Some(idx) = self.primary_index(ty) {
-                primary[ty] = Some(idx as u8);
+                *slot = Some(idx as u8);
             }
         }
         // Decode per-channel metadata for every populated channel.

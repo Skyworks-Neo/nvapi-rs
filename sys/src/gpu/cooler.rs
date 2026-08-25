@@ -727,6 +727,12 @@ pub mod private {
         }
     }
 
+    impl Default for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     nvapi! {
         pub type GPU_ClientFanPoliciesGetControlFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_CLIENT_FAN_POLICIES_CONTROL) -> NvAPI_Status;
 
@@ -766,6 +772,12 @@ pub mod private {
                 version: Self::MAGIC,
                 data: [0u8; 72],
             }
+        }
+    }
+
+    impl Default for NV_GPU_CLIENT_FAN_POLICIES_INFO_V1 {
+        fn default() -> Self {
+            Self::new()
         }
     }
 

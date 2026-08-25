@@ -55,7 +55,7 @@ fn main() {
         .unwrap_or(40);
 
     let _ = initialize();
-    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS as usize];
+    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
     let mut count = 0u32;
     unsafe { NvAPI_EnumPhysicalGPUs(&mut handles, &mut count) };
     let gpu = handles[0];
@@ -105,7 +105,7 @@ fn main() {
             if on72 {
                 grid72 += 1;
             }
-            if !(rel36 == 0 || rel36 == 20) && !on72 {
+            if (rel36 != 0 && rel36 != 20) && !on72 {
                 other += 1;
             }
         }

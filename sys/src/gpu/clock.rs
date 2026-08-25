@@ -707,7 +707,6 @@ pub mod private {
 
     pub type NV_GPU_OC_SCANNER_STATUS = NV_GPU_OC_SCANNER_STATUS_V1;
 
-
     nvstruct! {
         /// OC Scanner status-update registration — V1-EX variant (RE'd from
         /// PNY VelocityX `NVpower_wrapper.dll` Subscribe/Unsubscribe exports,
@@ -766,6 +765,36 @@ pub mod private {
         /// struct. Per-point result data flows through the Register callback
         /// (eventType 1, ~9KB payload) or the internal selector-2002 RPC.
         pub unsafe fn NvAPI_GPU_ClientGetLastOcScannerResults(hPhysicalGPU: NvPhysicalGpuHandle, pScanner: *mut NV_GPU_OC_SCANNER_CONTROL) -> NvAPI_Status;
+    }
+
+    nvstruct! {
+        /// Background-scanner enable struct (RE'd R610.74 @0x1800717C0:
+        /// 72B, magic 0x10048 — one step above the 0x10044 control family).
+        /// Enable flag byte @+4; a 9-byte feature GUID @+10..21 =
+        /// 0B 0A 0E 08 E8 72 9D D9 F3 (checked by the RPC, cmd id 7).
+        pub struct NV_GPU_OC_BACKGROUND_SCANNER_CONTROL_V1 {
+            pub version: NvVersion,
+            pub enable: u8,
+            pub pad_05: Padding<[u8; 5]>,
+            pub feature_guid: [u8; 9],
+            pub pad_1a: Padding<[u8; 53]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_OC_BACKGROUND_SCANNER_CONTROL NV_GPU_OC_BACKGROUND_SCANNER_CONTROL_V1(1) = 72 }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0x06DC7CE8, @0x1800717C0). Enable the
+        /// background OC scanner. 72-byte struct, magic 0x10048; reads the
+        /// enable byte @+4 and validates the feature GUID @+10..21.
+        pub unsafe fn NvAPI_GPU_ClientEnableBackgroundOcScanner(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_OC_BACKGROUND_SCANNER_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0xBE371D0A, @0x180073550). Query the last
+        /// INCOMPLETE OC-scanner run's partial results. Same 68-byte control
+        /// struct as GetLast (magic 0x10044); RPC cmd 13 (2→-104, 4→-191).
+        pub unsafe fn NvAPI_GPU_GetLastIncompleteOcScannerResults(hPhysicalGPU: NvPhysicalGpuHandle, pScanner: *mut NV_GPU_OC_SCANNER_CONTROL) -> NvAPI_Status;
     }
 
     // ------------------------------------------------------------------
@@ -990,6 +1019,63 @@ pub mod private {
         /// version magic 0x1000C (v1). the ref tool calls this (mode 0) before every
         /// P-State/frequency lock via 0x39442CFB.
         pub unsafe fn NvAPI_GPU_ClientRatedTdpControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_RATED_TDP_CONTROL) -> NvAPI_Status;
+    }
+
+    // ------------------------------------------------------------------
+    // Rated-TDP GET trio (RE'd R610.74; RM cmd 0x7000048, 0x81868 work
+    // buffer, hGpu @buf+0x30, sub-cmd @buf+0x34). Readback halves of the
+    // SET above.
+    // ------------------------------------------------------------------
+
+    nvstruct! {
+        /// GetStatus output (36B, magic 0x10024). Fill order from the
+        /// workbuf: +4 u32 (buf+0x38), +8 u8 (buf+0x3C), +12 u32 decoded
+        /// (buf+0x40), then five mode dwords from the buf+0x48 array into
+        /// +16, +32, +20, +24, +28 (each mapped 0-4).
+        pub struct NV_GPU_RATED_TDP_STATUS_V1 {
+            pub version: NvVersion,
+            pub dword_04: u32,
+            pub byte_08: u8,
+            pub pad_09: Padding<[u8; 3]>,
+            pub dword_0c: u32,
+            pub mode_0: u32,
+            pub mode_1: u32,
+            pub mode_2: u32,
+            pub mode_3: u32,
+            pub mode_4: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_RATED_TDP_STATUS NV_GPU_RATED_TDP_STATUS_V1(1) = 36 }
+
+    nvstruct! {
+        /// GetInfo output (8B, magic 0x10008): single byte of capability.
+        pub struct NV_GPU_RATED_TDP_INFO_V1 {
+            pub version: NvVersion,
+            pub capabilities: u8,
+            pub pad: Padding<[u8; 3]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_RATED_TDP_INFO NV_GPU_RATED_TDP_INFO_V1(1) = 8 }
+
+    nvapi! {
+        /// Rated-TDP control GET (0xED2BEA09 @0x1802A90F0): reuses the SET
+        /// struct (12B, magic 0x1000C) — reads the mode dword @+4, fills the
+        /// current mode @+8. Sub-cmd 0x207E004E.
+        pub unsafe fn NvAPI_GPU_PerfRatedTdpGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_RATED_TDP_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Rated-TDP info (0x87BD35EF @0x1802A93D0): 8B struct, magic
+        /// 0x10008, fills one capability byte. Sub-cmd 0x207F000C.
+        pub unsafe fn NvAPI_GPU_PerfRatedTdpGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_RATED_TDP_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Rated-TDP status (0xFCBDF642 @0x1802A96A0): 36B struct, magic
+        /// 0x10024. Sub-cmd 0x207F000D.
+        pub unsafe fn NvAPI_GPU_PerfRatedTdpGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_RATED_TDP_STATUS) -> NvAPI_Status;
     }
 
     // ------------------------------------------------------------------

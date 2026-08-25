@@ -27,11 +27,11 @@ pub use nvapi::{
     FanArbiterStatus, FanCoolerId, FanCurve, FanCurvePoint, Foundry, GpuType, Kibibytes, Kilohertz,
     KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState, PStateNativeLock,
     PciIdentifiers, Percentage, PerfFreqCap, PerfFreqCapEntry, PerfInfo, PerfLimitId, PerfStatus,
-    PerformanceDecreaseReason, PffCurve, PffPoint, PhysicalGpu, PrivateCoolerInfo,
-    PowerMonitor, PowerRails, SetFanRpmResult,
-    PowerTopologyChannelId, RamMaker, RamType, Range, Rpm, SystemType, ThermalChannelInfo,
-    ThermalChannelStatus, ThermalController, ThermalTarget, UtilizationDomain, Utilizations,
-    Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
+    PerformanceDecreaseReason, PffCurve, PffPoint, PhysicalGpu, PowerMonitor, PowerRails,
+    PowerTopologyChannelId, PrivateCoolerInfo, RamMaker, RamType, Range, Rpm, SetFanRpmResult,
+    SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalTarget,
+    UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain, VoltageStatus,
+    VoltageTable,
 };
 
 pub struct Gpu {
@@ -699,6 +699,30 @@ impl Gpu {
         domain_bit: u32,
     ) -> nvapi::Result<Option<nvapi::ClockDomainFreq>> {
         match self.gpu.clk_domain_freq(domain_bit) {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Direct physical clock for one domain — the green-curve MEASURE path
+    /// (ID 0x527FC458). One call returns `freq_khz` directly (no two-sample
+    /// Δcounter/Δtimestamp sleep). `Ok(None)` where the driver refuses the
+    /// domain or the family is absent. `freq_khz == 0` also means the domain
+    /// isn't measurable through this interface — callers should treat 0 as
+    /// "no live point" rather than NotSupported (the call succeeded).
+    pub fn clk_domain_freq_direct(
+        &self,
+        domain_bit: u32,
+    ) -> nvapi::Result<Option<nvapi::ClockDomainFreqDirect>> {
+        match self.gpu.clk_domain_freq_direct(domain_bit) {
             Ok(v) => Ok(Some(v)),
             Err(nvapi::Error::Nvapi(e))
                 if matches!(

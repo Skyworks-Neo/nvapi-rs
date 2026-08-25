@@ -15,8 +15,10 @@ fn main() {
     let gpu = handles[0];
 
     let domains = [0u32, 1, 2, 4, 5];
-    let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3::default();
-    m.version = nvapi::sys::api::NvVersion::new(0x178, 3);
+    let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3 {
+        version: nvapi::sys::api::NvVersion::new(0x178, 3),
+        ..Default::default()
+    };
     m.set_count(domains.len() as u8);
     for (i, &d) in domains.iter().enumerate() {
         m.set_entry(i, d, 0, 0).unwrap();
@@ -24,8 +26,10 @@ fn main() {
     let st = unsafe { NvAPI_GPU_ClockCounterMeasureAvgFreq(gpu, ptr::from_mut(&mut m).cast()) };
     println!("V3 st={st}");
     // RMW second sample: seed each entry with the FIRST call's raw output
-    let mut m2 = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3::default();
-    m2.version = nvapi::sys::api::NvVersion::new(0x178, 3);
+    let mut m2 = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3 {
+        version: nvapi::sys::api::NvVersion::new(0x178, 3),
+        ..Default::default()
+    };
     m2.set_count(domains.len() as u8);
     for (i, &d) in domains.iter().enumerate() {
         m2.set_entry(i, d, 0, 0).unwrap();
@@ -35,7 +39,7 @@ fn main() {
     let st2 = unsafe { NvAPI_GPU_ClockCounterMeasureAvgFreq(gpu, ptr::from_mut(&mut m2).cast()) };
     println!("V3 second-sample st={st2}");
     // candidate per-entry u32 fields: +4 (extra), +8/+12 (q1 halves), +16 low, +20
-    for i in 0..domains.len() {
+    for (i, _d) in domains.iter().enumerate() {
         let f = |mm: &NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3, k: usize| {
             let off = 24 * i + k - 4;
             u32::from_le_bytes(mm.entries[off..off + 4].try_into().unwrap())

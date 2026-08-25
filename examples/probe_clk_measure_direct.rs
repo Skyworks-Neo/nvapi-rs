@@ -34,12 +34,7 @@ fn main() {
     // Sequential domain INDEX shared by both measure sub-families
     // (green-curve self_test_clk_domain_survey, RTX 5070 / 610.88):
     //   GPC=0, XBAR=1, SYS=2, MCLK=4.  VIDEO (entry 4) has NO measure domain.
-    let domains: &[(u32, &str)] = &[
-        (0, "GPC"),
-        (1, "XBAR"),
-        (2, "SYS"),
-        (4, "MCLK"),
-    ];
+    let domains: &[(u32, &str)] = &[(0, "GPC"), (1, "XBAR"), (2, "SYS"), (4, "MCLK")];
 
     println!(
         "{:<6} {:>14} {:>16} {:>10}",
@@ -66,11 +61,7 @@ fn main() {
             // Treat <2% drift as agreement (DVFS idle/boost swing).
             if direct_mhz > 0.0 && cmhz > 0.0 {
                 let drift = (direct_mhz - cmhz).abs() / direct_mhz.max(cmhz);
-                if drift < 0.02 {
-                    "yes"
-                } else {
-                    "drift"
-                }
+                if drift < 0.02 { "yes" } else { "drift" }
             } else {
                 "?"
             }
@@ -93,5 +84,3 @@ fn main() {
 
     let _ = nvapi::unload();
 }
-
-

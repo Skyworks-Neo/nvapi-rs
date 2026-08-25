@@ -14,7 +14,7 @@ use nvapi::sys::api::private::{
 use nvapi::sys::nvapi_QueryInterface;
 
 fn resolve(id: u32, name: &str) {
-    let ok = match unsafe { nvapi_QueryInterface(id) } {
+    let ok = match nvapi_QueryInterface(id) {
         Ok(_) => "RESOLVED",
         Err(_) => "NULL/Err",
     };

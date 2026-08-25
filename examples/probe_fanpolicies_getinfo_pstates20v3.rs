@@ -51,7 +51,7 @@ fn main() {
         type GetPstates20Fn = unsafe extern "C" fn(NvPhysicalGpuHandle, *mut u8) -> i32;
         let f: GetPstates20Fn = unsafe {
             match nvapi_QueryInterface(0x6FF81213) {
-                Ok(p) => std::mem::transmute(p),
+                Ok(p) => std::mem::transmute::<usize, GetPstates20Fn>(p),
                 Err(_) => {
                     println!("GetPstates20 (0x6FF81213) UNRESOLVED");
                     continue;

@@ -120,10 +120,7 @@ fn main() {
                     .min_by_key(|&&(_, _, f)| (f as i64 - target_freq as i64).abs())
             })
             .copied();
-        let (lookup_volt, lookup_idx, lookup_def) = match lookup {
-            Some(x) => x,
-            None => (0, 0, 0),
-        };
+        let (lookup_volt, lookup_idx, lookup_def) = lookup.unwrap_or_default();
         let voltage_shift = (lookup_volt as i64 - src_volt as i64) / 1000; // mV
         let delta_per_mv = if voltage_shift != 0 {
             delta as f64 / voltage_shift as f64
@@ -169,10 +166,7 @@ fn main() {
                     .min_by_key(|&&(_, _, f)| (f as i64 - cur as i64).abs())
             })
             .copied();
-        let (lv, _, _) = match lookup {
-            Some(x) => x,
-            None => (0, 0, 0),
-        };
+        let (lv, _, _) = lookup.unwrap_or_default();
         let vshift = (lv as i64 - src_volt as i64) / 1000;
         let dpm = if vshift != 0 {
             d as f64 / vshift as f64

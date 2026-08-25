@@ -8,7 +8,6 @@
 
 use nvapi::initialize;
 use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
-use nvapi::sys::api::NvAPI_RestartDisplayDriver;
 use nvapi::sys::api::private::NvAPI_GPU_SetForcePstate;
 use nvapi::sys::api::{NvAPI_EnumPhysicalGPUs, NvAPI_GPU_GetPerfClocks, NvAPI_GPU_GetSerialNumber};
 use nvapi::sys::gpu::clock::NV_GPU_PERF_CLOCKS;
@@ -17,7 +16,7 @@ use nvapi::sys::nvapi::StructVersion;
 use nvapi::sys::nvapi_QueryInterface;
 
 fn resolve(id: u32, name: &str) {
-    let p = unsafe { nvapi_QueryInterface(id) };
+    let p = nvapi_QueryInterface(id);
     let ok = match p {
         Ok(_) => "RESOLVED",
         Err(_) => "NULL/Err",
@@ -31,14 +30,12 @@ fn main() {
     resolve(0x025BFB10, "SetForcePstate");
     resolve(0xB4B26B65, "RestartDisplayDriver"); // resolve only; never call here
 
-    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS as usize];
+    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
     let mut count = 0u32;
     unsafe { NvAPI_EnumPhysicalGPUs(&mut handles, &mut count) };
     println!("{count} physical GPU(s)");
 
-    for i in 0..count as usize {
-        let gpu = handles[i];
-
+    for (i, &gpu) in handles[..count as usize].iter().enumerate() {
         let mut serial = nvapi::sys::NvAPI_ShortString::default();
         let st = unsafe { NvAPI_GPU_GetSerialNumber(gpu, &mut serial) };
         let raw: Vec<u8> = serial.as_bytes()[..16].to_vec();
@@ -70,14 +67,14 @@ fn main() {
     resolve(0x1AB0724B, "SetClocksShmoo");
     resolve(0xFDFC7D49, "SetPstateClientLimits");
 
-    let mut sys_handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS as usize];
+    let mut sys_handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
     let mut sys_count = 0u32;
-    let st = unsafe { nvapi::sys::api::NvAPI_SYS_GetPhysicalGPUs(&mut sys_handles, &mut sys_count) };
+    let st =
+        unsafe { nvapi::sys::api::NvAPI_SYS_GetPhysicalGPUs(&mut sys_handles, &mut sys_count) };
     println!("SYS_GetPhysicalGPUs st={st} count={sys_count} (legacy fallback path)");
 
     // GET half of the ClientLimits clamp family (read-only, safe to call)
-    for i in 0..count as usize {
-        let gpu = handles[i];
+    for (i, &gpu) in handles[..count as usize].iter().enumerate() {
         let mut limits = <NV_GPU_PSTATE_CLIENT_LIMITS as StructVersion<1>>::versioned();
         let st =
             unsafe { nvapi::sys::api::private::NvAPI_GPU_GetPstateClientLimits(gpu, &mut limits) };

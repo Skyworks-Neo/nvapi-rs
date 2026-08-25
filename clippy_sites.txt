@@ -1,0 +1,16 @@
+error: empty line after doc comment
+error: the use of negated comparison operators on partially ordered types produces code that is hard to read and refactor, please consider using the `partial_cmp` method instead, to make it clear that the two values could be incomparable
+error: the use of negated comparison operators on partially ordered types produces code that is hard to read and refactor, please consider using the `partial_cmp` method instead, to make it clear that the two values could be incomparable
+error: field assignment outside of initializer for an instance created with Default::default()
+error: field assignment outside of initializer for an instance created with Default::default()
+error: field assignment outside of initializer for an instance created with Default::default()
+error: field assignment outside of initializer for an instance created with Default::default()
+error: field assignment outside of initializer for an instance created with Default::default()
+error: field assignment outside of initializer for an instance created with Default::default()
+error: field assignment outside of initializer for an instance created with Default::default()
+error: field assignment outside of initializer for an instance created with Default::default()
+error: doc list item without indentation
+error: doc list item without indentation
+error: the loop variable `ty` is used to index `primary`
+error: could not compile `nvapi` (lib) due to 14 previous errors
+error: could not compile `nvapi` (lib test) due to 14 previous errors

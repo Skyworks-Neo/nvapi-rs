@@ -25,8 +25,10 @@ fn main() {
     let gpus = PhysicalGpu::enumerate().expect("enumerate");
     let gpu = gpus.into_iter().next().expect("no GPU");
 
-    let mut info = NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
-    info.version = <NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as StructVersion>::NVAPI_VERSION;
+    let mut info = NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO {
+        version: <NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as StructVersion>::NVAPI_VERSION,
+        ..Default::default()
+    };
 
     // Debug: struct size + computed magic (the ref tool uses 0x33D58 = v3 | 15704).
     println!(
@@ -40,8 +42,10 @@ fn main() {
 
     // Compare against the documented GetInfo (0x0D258BB5, V3 struct 1400 B) to
     // isolate whether the -9 is handle-related or specific to the private ID.
-    let mut doc = NV_GPU_CLIENT_THERMAL_POLICIES_INFO::default();
-    doc.version = <NV_GPU_CLIENT_THERMAL_POLICIES_INFO as StructVersion>::NVAPI_VERSION;
+    let mut doc = NV_GPU_CLIENT_THERMAL_POLICIES_INFO {
+        version: <NV_GPU_CLIENT_THERMAL_POLICIES_INFO as StructVersion>::NVAPI_VERSION,
+        ..Default::default()
+    };
     let doc_status = unsafe { NvAPI_GPU_ClientThermalPoliciesGetInfo(*gpu.handle(), &mut doc) };
     println!(
         "documented GetInfo (0x0D258BB5) status = {} (0 = OK), count = {}",

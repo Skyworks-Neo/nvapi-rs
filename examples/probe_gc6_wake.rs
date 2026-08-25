@@ -8,6 +8,7 @@
 //!      hard enough that no device is visible),
 //!   2. for the first GPU: queries GC6 state, calls force_gc6_exit, queries
 //!      GC6 state again, then tries the struct-based gc6_force_wake too.
+//!
 //! State decode: 3 = D0/active (awake), 2 = GC6/idle (down), 0 = OK/no report.
 //!
 //! If the GPU is so deep in GCOFF that even enumerate fails, the probe prints

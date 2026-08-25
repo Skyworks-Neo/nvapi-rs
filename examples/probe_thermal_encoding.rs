@@ -13,10 +13,7 @@
 
 use nvapi::initialize;
 use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
-use nvapi::sys::api::{
-    NvAPI_EnumPhysicalGPUs, NvAPI_GPU_ClientThermalPoliciesGetStatus,
-    NvAPI_GPU_ClientThermalPoliciesSetStatus,
-};
+use nvapi::sys::api::NvAPI_EnumPhysicalGPUs;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
 
 const GET_THERMAL_POLICIES: u32 = 0xE9C425A1;
@@ -64,7 +61,7 @@ fn dump(label: &str, buf: &[u8], entry_off: usize) -> Option<u32> {
 fn main() {
     let target: Option<u32> = std::env::args().nth(1).and_then(|s| s.parse().ok());
     let _ = initialize();
-    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS as usize];
+    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
     let mut count = 0u32;
     unsafe { NvAPI_EnumPhysicalGPUs(&mut handles, &mut count) };
     let gpu = handles[0];

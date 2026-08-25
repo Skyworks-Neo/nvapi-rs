@@ -87,7 +87,7 @@ fn main() {
 
     let info = get_info(gpu);
     let live = |pgpu: &nvapi::PhysicalGpu| -> Option<f64> {
-        if let Some(map) = pgpu.all_clocks().ok() {
+        if let Ok(map) = pgpu.all_clocks() {
             if let Some(khz) = map.get(&nvapi::ClockDomainId::Gpc) {
                 return Some(khz.0 as f64 / 1000.0);
             }
@@ -121,12 +121,12 @@ fn main() {
             continue;
         }
         row += 1;
-        if (row - 1) % pt_step != 0 {
+        if !(row - 1).is_multiple_of(pt_step) {
             continue;
         }
 
         let p = e.configured();
-        let volt_uv = p.voltage.0 as u32;
+        let volt_uv = p.voltage.0;
         let def_pub = p.frequency.0 as f64 / 1000.0;
         if volt_uv == 0 || def_pub == 0.0 {
             println!("{idx},,,,MISSING public point");

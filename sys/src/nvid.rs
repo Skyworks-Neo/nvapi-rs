@@ -1208,6 +1208,17 @@ NvAPI_GPU_PowerMonitorGetInfo = 0xc12eb19e,
 /// collapsed) but that was because ch0 is an input/16-pin summation channel,
 /// not the board total — resolved by GPU-Z cross-validation.
 NvAPI_GPU_PowerMonitorGetStatus = 0xf40238ef,
+/// PowerMonitor GetStatus V4/V5 sibling entry point (NDA, ID 0x2AD3DBAB).
+/// Distinct handler @0x1802A14F0 (the wrapped `0xF40238EF` is @0x180258170)
+/// that accepts version magics `0x50188` (v5|392) and `0x40188` (v4|392) —
+/// alternate version negotiations of the SAME 392-byte per-rail power
+/// struct. nvoc already reads per-rail power live via `0xF40238EF`
+/// (which accepts v1|392..v5|9072), so this sibling offers no new data —
+/// kept registered so the IID is reserved/documented. Found by triaging the
+/// 229 unregistered non-stub IIDs in nvapi64_impl.dll's QI table (R610.74):
+/// it was the ONLY OC-relevant ID among them; the rest are display/D3D/
+/// migration/grid/system subsystems nvoc does not call.
+Unknown_2AD3DBAB_PowerMonitorGetStatusV45 = 0x2ad3dbab,
 /// Internal NVAPI unload/cleanup function — the sibling of `NvAPI_Unload`
 /// (`0xD22BDD7E`). MSI Afterburner's RTHAL.dll `CNVAPIInterface::Uninit`
 /// (handler `?Uninit@CNVAPIInterface@@QAEXXZ_0` @0x10029D00) resolves BOTH

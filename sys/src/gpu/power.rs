@@ -732,8 +732,87 @@ pub mod private {
     }
 
     nvapi! {
-        /// NVCP power-mode GET (struct, layout not yet probed).
-        pub unsafe fn NvAPI_GPU_GetPowerMizerInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u32) -> NvAPI_Status;
+        /// NVCP power-mode GET (RE'd R610.74 @0x1802392A0: 4-ARG, not 2).
+        /// `fn(hGpu, powerSource∈{1,2}, queryType=3, *outMode)` — output mode
+        /// ∈ {6,7} only (internal 0→6, 1→7). queryType must be 3; RM/DI escape
+        /// 0x700003A with a 0x48-byte private struct, op=3.
+        pub unsafe fn NvAPI_GPU_GetPowerMizerInfo(hPhysicalGPU: NvPhysicalGpuHandle, powerSource: u32, queryType: u32, pMode: *mut u32) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// NVCP power-mode SET (RE'd R610.74 @0x180261BC0). 4-arg by-value
+        /// mirror of the GET: `fn(hGpu, powerSource∈{1,2}, queryType=3,
+        /// mode∈{6,7})` — validated `queryType==3 && (mode-6)<=1`, mapped
+        /// 6→0 / 7→1 internally. Same 0x700003A escape, op=2.
+        pub unsafe fn NvAPI_GPU_SetPowerMizerInfo(hPhysicalGPU: NvPhysicalGpuHandle, powerSource: u32, queryType: u32, mode: u32) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// PPAB / Dynamic-Boost enable GET (RE'd R610.74 @0x180069CC0).
+        /// `fn(active: *mut bool)` — single byte out, NO GPU handle (mirrors
+        /// the by-value SET 0x1504FC3D). `*active = (statusByte != 2 &&
+        /// statusByte2 != 2)` from the PCF private table (cmd 0x10C68).
+        pub unsafe fn NvAPI_PCF_DynamicBoostGetStatus(pActive: *mut BoolU32) -> NvAPI_Status;
+    }
+
+    // ------------------------------------------------------------------
+    // Core-voltage scalar triplet (RE'd R610.74; escape 0x07000043/44/45,
+    // 56-byte buffer, selector @esc+0x28, value @esc+0x34). Distinct RM
+    // surface from VoltVoltRails (0x07000191) — plain scalars, no version
+    // magic, no GPU handle (selector-scoped).
+    // ------------------------------------------------------------------
+
+    nvapi! {
+        /// Direct core-voltage read (0x58337FA3 @0x1801C9CE0):
+        /// `fn(selector: u32, *value: u32)`.
+        pub unsafe fn NvAPI_GPU_GetCoreVoltage(selector: u32, pValue: *mut u32) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Core-voltage control-object read (0xA91F88EB @0x1801C9E30):
+        /// `fn(selector: u32, *value: u32)` — same shape, escape 0x07000045.
+        pub unsafe fn NvAPI_GPU_GetCoreVoltageControl(selector: u32, pValue: *mut u32) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Core-voltage control SET (0xDC2BD4A6 @0x1801CB300):
+        /// `fn(selector: u32, value: u32)` — both packed into the 56-byte
+        /// escape (0x07000044). Elevation-gated (-104 without admin).
+        pub unsafe fn NvAPI_GPU_SetCoreVoltageControl(selector: u32, value: u32) -> NvAPI_Status;
+    }
+
+    // ------------------------------------------------------------------
+    // PMGR voltage-request arbiter (RE'd R610.74; escape 0x0700019F,
+    // 112-byte buffer: gpuSelector@+0x30, get/set flag@+0x34). Versioned
+    // struct: v1 magic 0x10024 (8 payload dwords), v2 0x20030 (+3 dwords).
+    // Escape dword map: [1..4]@+0x38..0x44, [5..8]@+0x50..0x5C;
+    // v2-only [9..10]@+0x48..0x4C, [11]@+0x60. Distinct from VoltVoltRails.
+    // ------------------------------------------------------------------
+
+    nvstruct! {
+        /// v2 (48B): version + 11 payload dwords. Use this for both GET and
+        /// SET (the driver accepts v1 0x10024 and v2 0x20030; v2 is the
+        /// superset).
+        pub struct NV_PMGR_VOLTAGE_ARBITER_VALUES_V2 {
+            pub version: NvVersion,
+            /// dwords[1..=11]: opaque arbiter values; the GET copies the
+            /// driver's 8 (v1) or 11 (v2) dwords back, the SET forwards them.
+            pub values: [u32; 11],
+        }
+    }
+
+    nvversion! { @=NV_PMGR_VOLTAGE_ARBITER_VALUES NV_PMGR_VOLTAGE_ARBITER_VALUES_V2(2) = 48 }
+
+    nvapi! {
+        /// PMGR voltage-request arbiter GET (0x717648FD @0x1801C9F80):
+        /// `fn(gpuSelector: u32, pVals)` — escape 0x0700019F with get-flag 0.
+        pub unsafe fn NvAPI_GPU_GetPMGRVoltageRequestArbiterValues(gpuSelector: u32, pValues: *mut NV_PMGR_VOLTAGE_ARBITER_VALUES) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// PMGR voltage-request arbiter SET (0x9C4BB8D0 @0x1801CB480):
+        /// same signature, escape get/set flag 1. Elevation-gated (-104).
+        pub unsafe fn NvAPI_GPU_SetPMGRVoltageRequestArbiterValues(gpuSelector: u32, pValues: *const NV_PMGR_VOLTAGE_ARBITER_VALUES) -> NvAPI_Status;
     }
 
     nvapi! {
@@ -1520,7 +1599,7 @@ pub mod private {
         pub fn channel(&self, idx: usize) -> Option<&NV_GPU_POWER_MONITOR_POWER_CHANNEL_STATUS_V2> {
             (idx < NV_GPU_POWER_MONITOR_POWER_CHANNELS_MAX
                 && self.channel_mask & (1u32 << idx) != 0)
-                .then(|| ())
+                .then_some(())
                 .and_then(|_| self.channels.get(idx))
         }
     }

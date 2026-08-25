@@ -16,7 +16,7 @@ use std::ptr;
 
 fn main() {
     let _ = initialize();
-    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS as usize];
+    let mut handles = [NvPhysicalGpuHandle::default(); NVAPI_MAX_PHYSICAL_GPUS];
     let mut count = 0u32;
     unsafe { NvAPI_EnumPhysicalGPUs(&mut handles, &mut count) };
     let gpu = handles[0];

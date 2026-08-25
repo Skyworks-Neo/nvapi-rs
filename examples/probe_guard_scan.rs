@@ -51,7 +51,7 @@ fn qi(id: u32) -> QIFn {
 /// guard page, so any handler access past `size` faults immediately.
 fn single(id: u32, ver: u32, size: usize) -> i32 {
     let size = size.max(4) & !3; // dword-aligned
-    let content = ((size + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
+    let content = size.div_ceil(PAGE_SIZE) * PAGE_SIZE;
     let region = PAGE_SIZE + content + PAGE_SIZE;
     let base = unsafe {
         VirtualAlloc(
@@ -86,7 +86,7 @@ fn single(id: u32, ver: u32, size: usize) -> i32 {
 
     let t0 = std::time::Instant::now();
     let h = *gpus[0].handle();
-    let hptr = unsafe { std::mem::transmute::<_, *const core::ffi::c_void>(h) } as usize;
+    let hptr = h.as_ptr() as usize;
     let st = unsafe { f(hptr, buf as *mut core::ffi::c_void) };
     let dt = t0.elapsed().as_micros();
     // count nonzero dwords the driver left (format fingerprint)
