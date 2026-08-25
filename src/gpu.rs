@@ -741,9 +741,8 @@ impl PhysicalGpu {
     /// e.g. 1080Ti channel_mask=0x03, priChIdx GPU_AVG=0/GPU_MAX=1.)
     pub fn thermal_channel_info(
         &self,
-    ) -> crate::Result<
-        <thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO as RawConversion>::Target,
-    > {
+    ) -> crate::Result<<thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO as RawConversion>::Target>
+    {
         trace!("gpu.thermal_channel_info()");
         let data = thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2 {
             version: NvVersion::new(

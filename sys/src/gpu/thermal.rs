@@ -424,7 +424,9 @@ pub mod private {
                 .get(ty)
                 .copied()
                 .map(|i| i as usize)
-                .filter(|&i| i < NV_GPU_THERMAL_THERM_CHANNEL_MAX && self.channel_mask & (1u32 << i) != 0)
+                .filter(|&i| {
+                    i < NV_GPU_THERMAL_THERM_CHANNEL_MAX && self.channel_mask & (1u32 << i) != 0
+                })
         }
 
         /// Hot spot (GPU_MAX) primary channel index.
@@ -441,8 +443,7 @@ pub mod private {
         /// if present. Use to read `ch_type`/`offset_sw`/`offset_hw`/`scaling`/
         /// `min_temp`/`max_temp` for that type's sensor.
         pub fn primary_info(&self, ty: usize) -> Option<&NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1> {
-            self.primary_index(ty)
-                .and_then(|i| self.channel.get(i))
+            self.primary_index(ty).and_then(|i| self.channel.get(i))
         }
     }
 

@@ -26,9 +26,9 @@ pub use nvapi::{
     FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts,
     MicrovoltsDelta, PState, PciIdentifiers, Percentage, PerfInfo, PerfLimitId, PerfStatus,
     PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker, RamType, Range, Rpm,
-    SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController,
-    ThermalTarget, UtilizationDomain, Utilizations,
-    Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
+    SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalTarget,
+    UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain, VoltageStatus,
+    VoltageTable,
 };
 
 pub struct Gpu {
@@ -309,8 +309,8 @@ impl Gpu {
 
         // ThermalTarget per standard channel type.
         let type_target: [ThermalTarget; 5] = [
-            ThermalTarget::Gpu,          // GPU_AVG (core)
-            ThermalTarget::Gpu,          // GPU_MAX (hot spot)
+            ThermalTarget::Gpu, // GPU_AVG (core)
+            ThermalTarget::Gpu, // GPU_MAX (hot spot)
             ThermalTarget::Board,
             ThermalTarget::Memory,
             ThermalTarget::PowerSupply,
