@@ -29,6 +29,43 @@ pub use sys::gpu::{
 pub type ClockFrequencies = <clock::NV_GPU_CLOCK_FREQUENCIES as RawConversion>::Target;
 pub type Utilizations = <pstate::NV_GPU_DYNAMIC_PSTATES_INFO_EX as RawConversion>::Target;
 
+/// Process-global latest OC Scanner status notification, written from the
+/// 0x1CB41116 callback trampoline (driver thread context) and read via
+/// `Gpu::oem_oc_scanner_last_update()`.
+#[derive(Default)]
+struct OcScannerLastUpdate {
+    scan_state: std::sync::atomic::AtomicU32,
+    progress: std::sync::atomic::AtomicU32,
+    status_0x60: std::sync::atomic::AtomicU32,
+    status_0x64: std::sync::atomic::AtomicU32,
+}
+
+static OC_SCANNER_LAST: OcScannerLastUpdate = OcScannerLastUpdate {
+    scan_state: std::sync::atomic::AtomicU32::new(0),
+    progress: std::sync::atomic::AtomicU32::new(0),
+    status_0x60: std::sync::atomic::AtomicU32::new(0),
+    status_0x64: std::sync::atomic::AtomicU32::new(0),
+};
+
+/// Trampoline for the OC Scanner status callback (VelocityX ABI:
+/// `fn(ctx, pStatus) -> u32`). Mirrors NVpower_wrapper sub_180008750:
+/// derives the 3-state mapping from +0x48, snapshots +0x50/+0x60/+0x64,
+/// returns the +0x64 dword.
+unsafe extern "system" fn oc_scanner_status_trampoline(
+    _ctx: *mut std::os::raw::c_void,
+    p_status: *const clock::private::NV_GPU_OC_SCANNER_STATUS,
+) -> u32 {
+    use std::sync::atomic::Ordering;
+    let Some(st) = p_status.as_ref() else {
+        return 0;
+    };
+    OC_SCANNER_LAST.scan_state.store(st.scan_state(), Ordering::Relaxed);
+    OC_SCANNER_LAST.progress.store(st.progress, Ordering::Relaxed);
+    OC_SCANNER_LAST.status_0x60.store(st.status_0x60, Ordering::Relaxed);
+    OC_SCANNER_LAST.status_0x64.store(st.status_0x64, Ordering::Relaxed);
+    st.status_0x64
+}
+
 /// One per-rail entry from the private VoltRails control/status objects (the
 /// "melonVolt path", reachable read-only through the public QueryInterface
 /// table on this driver branch — see `reverse/melonvolt/ANALYSIS.md`).
@@ -829,18 +866,66 @@ impl PhysicalGpu {
 
     pub fn pstates(&self) -> crate::Result<PStates> {
         trace!("gpu.pstates()");
-        match unsafe { nvcall!(NvAPI_GPU_GetPstates20@get(self.0) => raw) } {
-            Ok(p) => Ok(p),
-            Err(crate::Error::Nvapi(ref e))
-                if e.status == Status::NotSupported || e.status == Status::NoImplementation =>
-            {
-                trace!(
-                    "gpu.pstates(): Pstates20 not available, falling back to legacy PstatesInfo"
-                );
-                self.legacy_pstates()
-            }
-            Err(e) => Err(e),
+        // Version cascade for old drivers / old GPUs. The default alias is
+        // V2 stamped version 3 (7416 bytes, magic `0x31CF8`) — the variant
+        // EVGA Precision X1 drives and the one the R610.74 driver accepts and
+        // fills (live-verified RTX 4060 Laptop: 5 pstates x 3 clock domains,
+        // 456-byte pstate records). Older drivers reject newer magics, so
+        // retry V2(2) (7416B, `0x21CF8`) and V1(1) (7316B, `0x11C94`) before
+        // giving up on the whole Pstates20 family and dropping to the legacy
+        // pre-pstates20 API (deprecated since R304, Kepler/Maxwell era).
+        macro_rules! try_pstates20 {
+            ($ty:ty, $ver:expr) => {{
+                let mut raw = unsafe { std::mem::zeroed::<$ty>() };
+                raw.version = NvVersion::new(size_of::<$ty>(), $ver);
+                let status = unsafe {
+                    sys::api::NvAPI_GPU_GetPstates20(self.0, ptr::from_mut(&mut raw).cast())
+                };
+                if crate::status_result(sys::Api::NvAPI_GPU_GetPstates20, status).is_ok() {
+                    match raw.convert_raw() {
+                        Ok(p) => Some(p),
+                        // A conversion failure on driver-validated data is
+                        // unexpected; treat like a version miss and let the
+                        // next arm (or legacy) take over.
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
+            }};
         }
+        if let Some(p) = try_pstates20!(pstate::NV_GPU_PERF_PSTATES20_INFO_V2, 3)
+            .or_else(|| try_pstates20!(pstate::NV_GPU_PERF_PSTATES20_INFO_V2, 2))
+        {
+            return Ok(p);
+        }
+        // V1 (7316B) has no over-voltage array; build the view manually.
+        {
+            let mut raw =
+                unsafe { std::mem::zeroed::<pstate::NV_GPU_PERF_PSTATES20_INFO_V1>() };
+            raw.version = NvVersion::new(size_of::<pstate::NV_GPU_PERF_PSTATES20_INFO_V1>(), 1);
+            let status = unsafe {
+                sys::api::NvAPI_GPU_GetPstates20(self.0, ptr::from_mut(&mut raw).cast())
+            };
+            if crate::status_result(sys::Api::NvAPI_GPU_GetPstates20, status).is_ok() {
+                return Ok(PStates {
+                    editable: raw.bIsEditable.get(),
+                    pstates: raw.pstates[..raw.numPstates as usize]
+                        .iter()
+                        .map(|ps| {
+                            crate::PStateSettings::from_raw(
+                                ps,
+                                raw.numClocks.try_into().unwrap(),
+                                raw.numBaseVoltages.try_into().unwrap(),
+                            )
+                        })
+                        .collect::<Result<_, _>>()?,
+                    overvolt: Vec::new(),
+                });
+            }
+        }
+        trace!("gpu.pstates(): Pstates20 not available, falling back to legacy PstatesInfo");
+        self.legacy_pstates()
     }
 
     pub fn legacy_pstates(&self) -> crate::Result<PStates> {
@@ -2793,11 +2878,13 @@ impl PhysicalGpu {
         crate::status_result(id, st)
     }
 
-    /// Start the driver-side OC scanner (NDA 0xBC4AEE25). Fire-and-forget:
-    /// the driver scans in the background and applies the resulting V/F
-    /// offsets itself. Progress reporting (the 0x1CB41116 callback) is not
-    /// wired; observe completion via the V/F curve.
+    /// Start the driver-side OC scanner (NDA 0xBC4AEE25). Subscribes the
+    /// status callback first (VelocityX protocol: start = subscribe + start,
+    /// both errors tolerated separately), then starts the scan — the driver
+    /// scans in the background and applies the resulting V/F offsets itself.
+    /// Progress is observable via `oem_oc_scanner_last_update()`.
     pub fn oem_oc_scanner_start(&self) -> crate::NvapiResult<()> {
+        let _ = self.oem_oc_scanner_subscribe();
         self.oem_oc_scanner_call(true, false, false)
     }
 
@@ -2829,6 +2916,91 @@ impl PhysicalGpu {
             )
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClientGetLastOcScannerResults, st)
+    }
+
+    /// Register the OC Scanner status callback (NDA 0x1CB41116). Uses the
+    /// PNY VelocityX V1-EX register layout (magic 0x100D8, 216B, callback at
+    /// +0x50 — the newer sibling of MSI's 0x10098/152B). The trampoline
+    /// stores the latest notification into process-global statics readable
+    /// via `oem_oc_scanner_last_update()`.
+    pub fn oem_oc_scanner_subscribe(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.oem_oc_scanner_subscribe()");
+        use clock::private::{NV_OC_SCANNER_STATUS_CALLBACK, NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX};
+        let mut parm: NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX = unsafe { std::mem::zeroed() };
+        parm.version = NvVersion::with_struct::<NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX>(1);
+        parm.callback = Some(oc_scanner_status_trampoline as NV_OC_SCANNER_STATUS_CALLBACK);
+        let st = unsafe {
+            sys::api::private::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(
+                self.0,
+                ptr::from_mut(&mut parm).cast(),
+            )
+        };
+        match crate::status_result(sys::Api::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates, st)
+        {
+            // Older drivers expect the MSI-era 152B layout (magic 0x10098,
+            // callback at +0x78, cookie at +0x30) — fall back to it.
+            Err(e) if e.status == crate::Status::IncompatibleStructVersion => {
+                self.oem_oc_scanner_register_v1(Some(oc_scanner_status_trampoline as NV_OC_SCANNER_STATUS_CALLBACK))
+            }
+            other => other,
+        }
+    }
+
+    /// Raw MSI-era register (magic 0x10098/152B, cookie@+0x30,
+    /// validity@+0x50, callback@+0x78).
+    fn oem_oc_scanner_register_v1(
+        &self,
+        callback: Option<clock::private::NV_OC_SCANNER_STATUS_CALLBACK>,
+    ) -> crate::NvapiResult<()> {
+        let mut buf = [0u8; 152];
+        buf[..4].copy_from_slice(&0x10098u32.to_ne_bytes());
+        if let Some(cb) = callback {
+            buf[0x78..0x80].copy_from_slice(&(cb as usize).to_ne_bytes());
+        }
+        let st = unsafe {
+            sys::api::private::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(
+                self.0,
+                buf.as_mut_ptr().cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates, st)
+    }
+
+    /// Unregister the OC Scanner status callback — the same 0x1CB41116 call
+    /// with a NULL callback (VelocityX Unsubscribe protocol).
+    pub fn oem_oc_scanner_unsubscribe(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.oem_oc_scanner_unsubscribe()");
+        use clock::private::NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX;
+        let mut parm: NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX = unsafe { std::mem::zeroed() };
+        parm.version = NvVersion::with_struct::<NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX>(1);
+        parm.callback = None;
+        let st = unsafe {
+            sys::api::private::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(
+                self.0,
+                ptr::from_mut(&mut parm).cast(),
+            )
+        };
+        match crate::status_result(sys::Api::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates, st)
+        {
+            Err(e) if e.status == crate::Status::IncompatibleStructVersion => {
+                self.oem_oc_scanner_register_v1(None)
+            }
+            other => other,
+        }
+    }
+
+    /// Latest OC Scanner callback snapshot (process-global). `state` uses
+    /// the VelocityX 3-state mapping (0 idle / 1 scanning / 2 failed-or-
+    /// finished); `progress` is the raw +0x50 dword. Returns
+    /// `(scan_state, progress, status_0x60, status_0x64)`.
+    pub fn oem_oc_scanner_last_update() -> (u32, u32, u32, u32) {
+        use std::sync::atomic::Ordering;
+        (
+            OC_SCANNER_LAST.scan_state.load(Ordering::Relaxed),
+            OC_SCANNER_LAST.progress.load(Ordering::Relaxed),
+            OC_SCANNER_LAST.status_0x60.load(Ordering::Relaxed),
+            OC_SCANNER_LAST.status_0x64.load(Ordering::Relaxed),
+        )
     }
 
     /// Battery Boost 2.0 enable/disable (NDA 0xD2561B69, private).

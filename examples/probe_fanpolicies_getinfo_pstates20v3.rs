@@ -11,6 +11,19 @@ use nvapi::sys::handles::NvPhysicalGpuHandle;
 use nvapi::sys::nvapi_QueryInterface;
 
 fn main() {
+    use nvapi::sys::api::NV_GPU_PERF_PSTATES20_INFO_V1;
+    use nvapi::sys::api::NV_GPU_PERF_PSTATES20_INFO_V2;
+    use nvapi::sys::api::NV_GPU_PERF_PSTATES20_PSTATE;
+    use nvapi::sys::api::NV_GPU_PSTATE20_CLOCK_ENTRY_V1;
+    println!(
+        "sizeof: V1={} V2={} PSTATE={} CLOCK_ENTRY={} (v3-stamped V1 magic = 0x{:X})",
+        std::mem::size_of::<NV_GPU_PERF_PSTATES20_INFO_V1>(),
+        std::mem::size_of::<NV_GPU_PERF_PSTATES20_INFO_V2>(),
+        std::mem::size_of::<NV_GPU_PERF_PSTATES20_PSTATE>(),
+        std::mem::size_of::<NV_GPU_PSTATE20_CLOCK_ENTRY_V1>(),
+        3u32 << 16 | std::mem::size_of::<NV_GPU_PERF_PSTATES20_INFO_V1>() as u32
+    );
+
     initialize().expect("initialize");
 
     let gpus = nvapi::PhysicalGpu::enumerate().expect("enumerate");
@@ -50,6 +63,7 @@ fn main() {
         let st = unsafe { f(handle, buf.as_mut_ptr()) };
         if st == 0 {
             println!("pstates20 v3 (0x31CF8/7416B) ACCEPTED — nonzero dwords:");
+            let _ = std::fs::write("reverse_pstates20_v3.bin", &buf);
             let mut shown = 0;
             for (i, chunk) in buf.chunks_exact(4).enumerate() {
                 let dw = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);

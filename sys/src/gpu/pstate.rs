@@ -288,6 +288,31 @@ nvversion! { NV_GPU_PERF_PSTATES20_INFO_V1(1) }
 nvversion! { NV_GPU_PERF_PSTATES20_INFO_V2(2) }
 nvversion! { @=NV_GPU_PERF_PSTATES20_INFO NV_GPU_PERF_PSTATES20_INFO_V2(3) }
 
+#[cfg(test)]
+mod pstates20_size_tests {
+    /// Layout guard for the `GetPstates20` version cascade
+    /// (`PhysicalGpu::pstates`): V2 stamped version 3 (7416 bytes, magic
+    /// `0x31CF8`) is the variant EVGA Precision X1 drives and the one the
+    /// R610.74 driver ACCEPTS and fills (live-verified RTX 4060 Laptop,
+    /// 2026-08-25, examples/probe_fanpolicies_getinfo_pstates20v3.rs): 5
+    /// pstates x 3 clock domains, 456-byte pstate records (16 slots). V1 is
+    /// the same records without the over-voltage array (7316 = 7416 - 100).
+    /// Keep these pinned so the fallback magics (`0x21CF8` / `0x11C94`)
+    /// cannot silently drift.
+    #[test]
+    fn pstates20_layout_sizes() {
+        use crate::api::{NV_GPU_PERF_PSTATES20_INFO_V1, NV_GPU_PERF_PSTATES20_INFO_V2};
+        use crate::api::NV_GPU_PERF_PSTATES20_PSTATE;
+        assert_eq!(std::mem::size_of::<NV_GPU_PERF_PSTATES20_PSTATE>(), 456);
+        assert_eq!(std::mem::size_of::<NV_GPU_PERF_PSTATES20_INFO_V1>(), 7316);
+        assert_eq!(std::mem::size_of::<NV_GPU_PERF_PSTATES20_INFO_V2>(), 7416);
+        assert_eq!(
+            3u32 << 16 | std::mem::size_of::<NV_GPU_PERF_PSTATES20_INFO_V2>() as u32,
+            0x31CF8
+        );
+    }
+}
+
 nvapi! {
     pub type GPU_GetPstates20Fn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pPstatesInfo: *mut NV_GPU_PERF_PSTATES20_INFO) -> NvAPI_Status;
 
