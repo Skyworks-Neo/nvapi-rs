@@ -1,101 +1,114 @@
 /// Undocumented API
 pub mod private {
-    use crate::status::NvAPI_Status;
-    use crate::handles::NvPhysicalGpuHandle;
+    use crate::prelude_::*;
 
     nvstruct! {
         pub struct NV_GPU_CLIENT_VOLT_RAILS_STATUS_V1 {
-            pub version: u32,
+            pub version: NvVersion,
             pub flags: u32,
-            pub zero: [u32; 8],
+            pub zero: Padding<[u32; 8]>,
             pub value_uV: u32,
-            pub unknown: [u32; 8],
+            pub unknown: Padding<[u32; 8]>,
         }
     }
 
-    nvversion! { NV_GPU_CLIENT_VOLT_RAILS_STATUS_VER_1(NV_GPU_CLIENT_VOLT_RAILS_STATUS_V1 = 4 * (2 + 8 + 1 + 8), 1) }
-    nvversion! { NV_GPU_CLIENT_VOLT_RAILS_STATUS_VER = NV_GPU_CLIENT_VOLT_RAILS_STATUS_VER_1 }
-
-    pub type NV_GPU_CLIENT_VOLT_RAILS_STATUS = NV_GPU_CLIENT_VOLT_RAILS_STATUS_V1;
+    nvversion! { @=NV_GPU_CLIENT_VOLT_RAILS_STATUS NV_GPU_CLIENT_VOLT_RAILS_STATUS_V1(1) = 76 }
 
     nvapi! {
-        /// Pascal only
+        /// Pascal and later
         pub unsafe fn NvAPI_GPU_ClientVoltRailsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pVoltageStatus: *mut NV_GPU_CLIENT_VOLT_RAILS_STATUS) -> NvAPI_Status;
     }
 
     nvstruct! {
         pub struct NV_GPU_CLIENT_VOLT_RAILS_CONTROL_V1 {
-            pub version: u32,
+            pub version: NvVersion,
+            /// uiDelta
             pub percent: u32, // apparently actually i32?
-            pub unknown: [u32; 8],
+            pub unknown: Padding<[u32; 8]>,
         }
     }
 
-    nvversion! { NV_GPU_CLIENT_VOLT_RAILS_CONTROL_VER_1(NV_GPU_CLIENT_VOLT_RAILS_CONTROL_V1 = 4 * (2 + 8), 1) }
-    nvversion! { NV_GPU_CLIENT_VOLT_RAILS_CONTROL_VER = NV_GPU_CLIENT_VOLT_RAILS_CONTROL_VER_1 }
-
-    pub type NV_GPU_CLIENT_VOLT_RAILS_CONTROL = NV_GPU_CLIENT_VOLT_RAILS_CONTROL_V1;
+    nvversion! { @=NV_GPU_CLIENT_VOLT_RAILS_CONTROL NV_GPU_CLIENT_VOLT_RAILS_CONTROL_V1(1) }
 
     nvapi! {
-        /// Pascal only
+        /// Pascal and later
         pub unsafe fn NvAPI_GPU_ClientVoltRailsGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pVoltboostPercent: *mut NV_GPU_CLIENT_VOLT_RAILS_CONTROL) -> NvAPI_Status;
     }
 
     nvapi! {
-        /// Pascal only
+        /// Pascal and later
         pub unsafe fn NvAPI_GPU_ClientVoltRailsSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pVoltboostPercent: *const NV_GPU_CLIENT_VOLT_RAILS_CONTROL) -> NvAPI_Status;
     }
 
     nvstruct! {
-        pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_GPU_ENTRY {
-            pub a: u32, // 0
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT {
             pub freq_kHz: u32,
             pub voltage_uV: u32,
-            pub d: u32,
-            pub e: u32,
-            pub f: u32,
-            pub g: u32,
         }
     }
 
-    // no real difference here
-    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_MEM_ENTRY = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_GPU_ENTRY;
-    /*nvstruct! {
-        pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_MEM_ENTRY {
-            pub a: u32, // 1 for idle values?
-            pub freq_kHz: u32,
-            pub voltage_uV: u32,
-            pub d: u32,
-            pub e: u32,
-            pub f: u32,
-            pub g: u32,
+    nvstruct! {
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1 {
+            pub clock_type: u32,
+            pub point: NV_GPU_CLOCK_CLIENT_CLK_VF_POINT,
+            pub unknown: Padding<[u32; 4]>,
         }
-    }*/
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V3 {
+            pub clock_type: u32,
+            pub point: NV_GPU_CLOCK_CLIENT_CLK_VF_POINT,
+            pub point_default: NV_GPU_CLOCK_CLIENT_CLK_VF_POINT,
+            pub unknown0: Padding<[u32; 8]>,
+            /// overclockedFrequencyKhz and millivoltage
+            pub point_overclocked: NV_GPU_CLOCK_CLIENT_CLK_VF_POINT,
+            pub unknown: Padding<[u32; 348/4 - (7 + 8)]>,
+        }
+    }
 
     nvstruct! {
         pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1 {
-            pub version: u32,
-            pub mask: [u32; 4], // 80 bits
-            pub unknown: [u32; 12],
-            pub gpuEntries: [NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_GPU_ENTRY; 80],
-            pub memEntries: [NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_MEM_ENTRY; 23],
-            pub unknown2: [u32; 1064],
+            pub version: NvVersion,
+            pub mask: ClockMask,
+            pub unknown: Padding<[u32; 8]>,
+            pub entries: Array<[NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V1; 255]>,
         }
     }
 
-    nvversion! { NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_VER_1(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1 = 0x1c28, 1) }
-    nvversion! { NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_VER = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_VER_1 }
+    nvstruct! {
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V3 {
+            pub version: NvVersion,
+            pub mask: ClockMask,
+            pub unknown: Padding<[u8; 0x44]>,
+            pub entries: Array<[NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V3; 255]>,
+        }
+    }
 
-    pub type NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1;
+    nvversion! { NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1(1) = 0x1c28 }
+    nvversion! { NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1(2) = 0x1c28 }
+    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V3(3) = 0x15b0c }
 
     nvapi! {
-        /// Pascal only
+        /// Pascal and later
         pub unsafe fn NvAPI_GPU_ClockClientClkVfPointsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pVfpCurve: *mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS) -> NvAPI_Status;
     }
 
+    nvenum! {
+        pub enum NV_GPU_CLIENT_POWER_POLICIES_POLICY_ID / PowerPolicyId {
+            NV_GPU_CLIENT_POWER_POLICIES_POLICY_ID_DEFAULT / Default = 0,
+        }
+    }
+
+    nvenum_display! {
+        PowerPolicyId => {
+            Default = "Board Power Limit",
+        }
+    }
+
     nvstruct! {
-        pub struct NV_GPU_POWER_INFO_ENTRY {
-            pub pstate: u32, // assumption
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V1 {
+            pub policy_id: NV_GPU_CLIENT_POWER_POLICIES_POLICY_ID,
             pub b: u32,
             pub c: u32,
             pub min_power: u32,
@@ -110,78 +123,167 @@ pub mod private {
     }
 
     nvstruct! {
-        pub struct NV_GPU_POWER_INFO_V1 {
-            pub version: u32,
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_INFO_V1 {
+            pub version: NvVersion,
             pub valid: u8,
             pub count: u8,
-            pub padding: [u8; 2],
-            pub entries: [NV_GPU_POWER_INFO_ENTRY; 4],
+            pub padding: Padding<[u8; 2]>,
+            pub entries: Array<[NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V1; 4]>,
         }
     }
 
-    pub type NV_GPU_POWER_INFO = NV_GPU_POWER_INFO_V1;
-
-    nvversion! { NV_GPU_POWER_INFO_VER_1(NV_GPU_POWER_INFO_V1 = 4 * 2 + 4 * (4 * 11), 1) }
-    nvversion! { NV_GPU_POWER_INFO_VER = NV_GPU_POWER_INFO_VER_1 }
-
-    nvapi! {
-        pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pPowerInfo: *mut NV_GPU_POWER_INFO) -> NvAPI_Status;
+    nvstruct! {
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V2 {
+            pub policy_id: NV_GPU_CLIENT_POWER_POLICIES_POLICY_ID,
+            pub unknown0: Padding<[u32; 3]>,
+            pub min_power: u32,
+            pub unknown1: Padding<[u32; 2]>,
+            pub def_power: u32,
+            pub unknown2: Padding<[u32; 2]>,
+            pub max_power: u32,
+            pub padding: Padding<[u32; 560/4 - 11]>,
+        }
     }
 
     nvstruct! {
-        pub struct NV_GPU_POWER_STATUS_ENTRY {
-            pub a: u32,
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_INFO_V2 {
+            pub version: NvVersion,
+            pub valid: u8,
+            pub count: u8,
+            pub padding: Padding<[u8; 2]>,
+            pub entries: Array<[NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V2; 4]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_POWER_POLICIES_INFO_V2 {
+        pub fn entries(&self) -> &[NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V2] {
+            &self.entries[..self.count as usize]
+        }
+    }
+
+    nvversion! { NV_GPU_CLIENT_POWER_POLICIES_INFO_V1(1) }
+    nvversion! { @=NV_GPU_CLIENT_POWER_POLICIES_INFO NV_GPU_CLIENT_POWER_POLICIES_INFO_V2(2) = 2248 }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pPowerInfo: *mut NV_GPU_CLIENT_POWER_POLICIES_INFO) -> NvAPI_Status;
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V1 {
+            pub policy_id: NV_GPU_CLIENT_POWER_POLICIES_POLICY_ID,
             pub b: u32,
-            pub power: u32,
+            pub power_target: u32,
             pub d: u32,
         }
     }
 
     nvstruct! {
-        pub struct NV_GPU_POWER_STATUS_V1 {
-            pub version: u32,
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_STATUS_V1 {
+            pub version: NvVersion,
             pub count: u32,
-            pub entries: [NV_GPU_POWER_STATUS_ENTRY; 4],
+            pub entries: Array<[NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V1; 4]>,
         }
     }
 
-    pub type NV_GPU_POWER_STATUS = NV_GPU_POWER_STATUS_V1;
-
-    nvversion! { NV_GPU_POWER_STATUS_VER_1(NV_GPU_POWER_STATUS_V1 = 4 * 2 + 4 * (4 * 4), 1) }
-    nvversion! { NV_GPU_POWER_STATUS_VER = NV_GPU_POWER_STATUS_VER_1 }
-
-    nvapi! {
-        pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPowerStatus: *mut NV_GPU_POWER_STATUS) -> NvAPI_Status;
+    nvstruct! {
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V2 {
+            pub policy_id: NV_GPU_CLIENT_POWER_POLICIES_POLICY_ID,
+            pub unknown: Padding<[u32; 1]>,
+            pub flags: u32,
+            pub power_target: u32,
+            pub padding: Padding<[u32; 340/4 - 4]>,
+        }
     }
 
-    nvapi! {
-        pub unsafe fn NvAPI_GPU_ClientPowerPoliciesSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPowerStatus: *const NV_GPU_POWER_STATUS) -> NvAPI_Status;
+    impl NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V2 {
+        /// Unsure what this is but flag should be cleared for SetStatus, maybe?
+        pub fn set_flag(&mut self, value: bool) {
+            self.flags = self.flags & 0xfffffffe | if value { 1 } else { 0 }
+        }
     }
 
     nvstruct! {
-        pub struct NV_GPU_POWER_TOPO_ENTRY {
-            pub a: u32,
-            pub b: u32,
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_STATUS_V2 {
+            pub version: NvVersion,
+            pub count: u32,
+            pub entries: Array<[NV_GPU_CLIENT_POWER_POLICIES_STATUS_ENTRY_V2; 4]>,
+        }
+    }
+
+    nvversion! { NV_GPU_CLIENT_POWER_POLICIES_STATUS_V1(1) }
+    nvversion! { @=NV_GPU_CLIENT_POWER_POLICIES_STATUS NV_GPU_CLIENT_POWER_POLICIES_STATUS_V2(2) = 1368 }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_ClientPowerPoliciesGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPowerStatus: *mut NV_GPU_CLIENT_POWER_POLICIES_STATUS) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_ClientPowerPoliciesSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPowerStatus: *const NV_GPU_CLIENT_POWER_POLICIES_STATUS) -> NvAPI_Status;
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_CLIENT_POWER_TOPOLOGY_INFO_V1 {
+            pub version: NvVersion,
+            pub valid: u8,
+            pub count: u8,
+            pub padding: Padding<[u8; 2]>,
+            pub channels: Array<[NV_GPU_CLIENT_POWER_TOPOLOGY_CHANNEL_ID; 4]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_POWER_TOPOLOGY_INFO_V1 {
+        pub fn channels(&self) -> &[NV_GPU_CLIENT_POWER_TOPOLOGY_CHANNEL_ID] {
+            &self.channels[..self.count as usize]
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_POWER_TOPOLOGY_INFO NV_GPU_CLIENT_POWER_TOPOLOGY_INFO_V1(1) = 24 }
+
+    nvapi! {
+        pub unsafe fn NvAPI_GPU_ClientPowerTopologyGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pPowerTopo: *mut NV_GPU_CLIENT_POWER_TOPOLOGY_INFO) -> NvAPI_Status;
+    }
+
+    nvenum! {
+        pub enum NV_GPU_CLIENT_POWER_TOPOLOGY_CHANNEL_ID / PowerTopologyChannelId {
+            NV_GPU_CLIENT_POWER_TOPOLOGY_CHANNEL_ID_TOTAL_GPU_POWER / TotalGpuPower = 0,
+            NV_GPU_CLIENT_POWER_TOPOLOGY_CHANNEL_ID_NORMALIZED_TOTAL_POWER / NormalizedTotalPower = 1,
+        }
+    }
+
+    nvenum_display! {
+        PowerTopologyChannelId => {
+            TotalGpuPower = "Total Power",
+            NormalizedTotalPower = "Normalized Power",
+        }
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_ENTRY {
+            pub channel: NV_GPU_CLIENT_POWER_TOPOLOGY_CHANNEL_ID,
+            pub unknown0: u32,
             pub power: u32,
-            pub d: u32,
+            pub unknown1: u32,
         }
     }
 
     nvstruct! {
-        pub struct NV_GPU_POWER_TOPO_V1 {
-            pub version: u32,
+        pub struct NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_V1 {
+            pub version: NvVersion,
             pub count: u32,
-            pub entries: [NV_GPU_POWER_TOPO_ENTRY; 4],
+            pub entries: Array<[NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_ENTRY; 4]>,
         }
     }
 
-    pub type NV_GPU_POWER_TOPO = NV_GPU_POWER_TOPO_V1;
+    impl NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_V1 {
+        pub fn entries(&self) -> &[NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_ENTRY] {
+            &self.entries[..self.count as usize]
+        }
+    }
 
-    nvversion! { NV_GPU_POWER_TOPO_VER_1(NV_GPU_POWER_TOPO_V1 = 4 * 2 + 4 * (4 * 4), 1) }
-    nvversion! { NV_GPU_POWER_TOPO_VER = NV_GPU_POWER_TOPO_VER_1 }
+    nvversion! { @=NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_V1(1) = 72 }
 
     nvapi! {
-        pub unsafe fn NvAPI_GPU_ClientPowerTopologyGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPowerTopo: *mut NV_GPU_POWER_TOPO) -> NvAPI_Status;
+        pub unsafe fn NvAPI_GPU_ClientPowerTopologyGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPowerTopo: *mut NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS) -> NvAPI_Status;
     }
 
     nvbits! {
@@ -212,26 +314,23 @@ pub mod private {
     }
 
     nvstruct! {
-        pub struct NV_GPU_PERF_INFO_V1 {
-            pub version: u32,
+        pub struct NV_GPU_PERF_POLICIES_INFO_PARAMS_V1 {
+            pub version: NvVersion,
             pub maxUnknown: u32,
             pub limitSupport: NV_GPU_PERF_FLAGS,
-            pub padding: [u32; 16],
+            pub padding: Padding<[u32; 16]>,
         }
     }
 
-    pub type NV_GPU_PERF_INFO = NV_GPU_PERF_INFO_V1;
-
-    nvversion! { NV_GPU_PERF_INFO_VER_1(NV_GPU_PERF_INFO_V1 = 76, 1) }
-    nvversion! { NV_GPU_PERF_INFO_VER = NV_GPU_PERF_INFO_VER_1 }
+    nvversion! { @=NV_GPU_PERF_POLICIES_INFO_PARAMS NV_GPU_PERF_POLICIES_INFO_PARAMS_V1(1) = 76 }
 
     nvapi! {
-        pub unsafe fn NvAPI_GPU_PerfPoliciesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pPerfInfo: *mut NV_GPU_PERF_INFO) -> NvAPI_Status;
+        pub unsafe fn NvAPI_GPU_PerfPoliciesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pPerfInfo: *mut NV_GPU_PERF_POLICIES_INFO_PARAMS) -> NvAPI_Status;
     }
 
     nvstruct! {
-        pub struct NV_GPU_PERF_STATUS_V1 {
-            pub version: u32,
+        pub struct NV_GPU_PERF_POLICIES_STATUS_PARAMS_V1 {
+            pub version: NvVersion,
             pub flags: u32,
             /// nanoseconds
             pub timer: u64,
@@ -249,35 +348,29 @@ pub mod private {
             pub zero1: u32,
             /// nanoseconds
             pub timers: [u64; 3],
-            pub padding: [u32; 326],
+            pub padding: Padding<[u32; 326]>,
         }
     }
 
-    pub type NV_GPU_PERF_STATUS = NV_GPU_PERF_STATUS_V1;
-
-    nvversion! { NV_GPU_PERF_STATUS_VER_1(NV_GPU_PERF_STATUS_V1 = 0x550, 1) }
-    nvversion! { NV_GPU_PERF_STATUS_VER = NV_GPU_PERF_STATUS_VER_1 }
+    nvversion! { @=NV_GPU_PERF_POLICIES_STATUS_PARAMS NV_GPU_PERF_POLICIES_STATUS_PARAMS_V1(1) = 0x550 }
 
     nvapi! {
-        pub unsafe fn NvAPI_GPU_PerfPoliciesGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPerfStatus: *mut NV_GPU_PERF_STATUS) -> NvAPI_Status;
+        pub unsafe fn NvAPI_GPU_PerfPoliciesGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPerfStatus: *mut NV_GPU_PERF_POLICIES_STATUS_PARAMS) -> NvAPI_Status;
     }
 
     nvstruct! {
         pub struct NV_VOLT_STATUS_V1 {
-            pub version: u32,
+            pub version: NvVersion,
             pub flags: u32,
             /// unsure
             pub count: u32,
             pub unknown: u32,
             pub value_uV: u32,
-            pub buf1: [u32; 30],
+            pub buf1: Padding<[u32; 30]>,
         }
     }
 
-    pub type NV_VOLT_STATUS = NV_VOLT_STATUS_V1;
-
-    nvversion! { NV_VOLT_STATUS_VER_1(NV_VOLT_STATUS_V1 = 140, 1) }
-    nvversion! { NV_VOLT_STATUS_VER = NV_VOLT_STATUS_VER_1 }
+    nvversion! { @=NV_VOLT_STATUS NV_VOLT_STATUS_V1(1) = 140 }
 
     nvapi! {
         /// Maxwell only
@@ -291,27 +384,28 @@ pub mod private {
 
     nvstruct! {
         pub struct NV_VOLT_TABLE_ENTRY {
+            pub voltage_domain: u32,
             pub voltage_uV: u32,
-            pub unknown: u32,
+            pub unknown: Padding<[u32; 257]>,
         }
     }
 
     nvstruct! {
         pub struct NV_VOLT_TABLE_V1 {
-            pub version: u32,
+            pub version: NvVersion,
             pub flags: u32,
-            /// 1
-            pub filled: u32,
-            pub entries: [NV_VOLT_TABLE_ENTRY; 128],
-            /// empty tables?
-            pub buf1: [u32; 3888],
+            pub count: u32,
+            pub entries: Array<[NV_VOLT_TABLE_ENTRY; 16]>,
         }
     }
 
-    pub type NV_VOLT_TABLE = NV_VOLT_TABLE_V1;
+    impl NV_VOLT_TABLE_V1 {
+        pub fn entries(&self) -> &[NV_VOLT_TABLE_ENTRY] {
+            &self.entries[..self.count as usize]
+        }
+    }
 
-    nvversion! { NV_VOLT_TABLE_VER_1(NV_VOLT_TABLE_V1 = 0x40cc, 1) }
-    nvversion! { NV_VOLT_TABLE_VER = NV_VOLT_TABLE_VER_1 }
+    nvversion! { @=NV_VOLT_TABLE NV_VOLT_TABLE_V1(1) = 0x40cc }
 
     nvapi! {
         /// Maxwell only
