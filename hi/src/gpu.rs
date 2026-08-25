@@ -1,55 +1,72 @@
-use std::collections::BTreeMap;
-use serde::{Serialize, Deserialize};
 use crate::{allowable_result, allowable_result_fallback};
+use once_cell::sync::OnceCell;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-use nvapi::{self,
-    ClockTable, VfpCurve, VfpEntry, Sensor, Cooler, ThermalInfo, PowerInfoEntry,
-    ClockFrequencyType, ClockEntry,
-    BaseVoltage, PStates, ClockRange, ThermalLimit,
+fn collect_domain<T: Copy, U: From<T>>(
+    points: &BTreeMap<ClockDomain, Vec<(usize, T)>>,
+    domain: ClockDomain,
+) -> BTreeMap<usize, U> {
+    points
+        .get(&domain)
+        .map(|d| d.iter().map(|&(i, e)| (i, e.into())).collect())
+        .unwrap_or_default()
+}
+
+use nvapi::{
+    self, BaseVoltage, ClockEntry, ClockFrequencyType, ClockRange, ClockTable, PStates, PffStatus,
+    PowerInfoEntry, Sensor, ThermalInfo, ThermalLimit, ThermalPolicyId, VfpCurve, VfpEntry,
+    VfpInfo,
 };
 pub use nvapi::{
-    PhysicalGpu,
-    Vendor, SystemType, RamType, RamMaker, Foundry,
-    ClockFrequencies, ClockDomain, VoltageDomain, UtilizationDomain, Utilizations, ClockLockMode, ClockLockEntry,
-    CoolerType, CoolerController, CoolerControl, CoolerPolicy, CoolerTarget, CoolerLevel,
+    ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies, ClockLockEntry,
+    ClockLockValue, ConnectedIdsFlags, CoolerControl, CoolerController, CoolerInfo, CoolerPolicy,
+    CoolerSettings, CoolerStatus, CoolerTarget, CoolerType, DisplayId, DriverModel, EccErrors,
+    EffectiveClocks, FanCoolerId, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta,
+    MemoryInfo, Microvolts, MicrovoltsDelta, PState, PciIdentifiers, Percentage, PerfInfo,
+    PerfLimitId, PerfStatus, PffCurve, PffPoint, PhysicalGpu, PowerTopologyChannelId, RamMaker,
+    RamType, Range, Rpm, SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController,
+    ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain,
     VoltageStatus, VoltageTable,
-    PerfInfo, PerfStatus,
-    ThermalController, ThermalTarget,
-    MemoryInfo, PciIdentifiers, DriverModel,
-    Percentage, Celsius,
-    Range,
-    Kibibytes, Microvolts, MicrovoltsDelta, Kilohertz, KilohertzDelta,
-    PState,
 };
 
 pub struct Gpu {
     gpu: PhysicalGpu,
+    vfp_info: OnceCell<VfpInfo>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct GpuInfo {
+    pub id: usize,
+    #[cfg_attr(feature = "serde", serde(skip_serializing))]
+    pub uuid: Option<String>,
     pub name: String,
     pub codename: String,
     pub bios_version: String,
-    pub driver_model: DriverModel,
-    pub vendor: Vendor,
-    pub pci: PciIdentifiers,
-    pub memory: MemoryInfo,
+    pub driver_model: Option<DriverModel>,
+    pub bus: BusInfo,
+    pub memory: Option<MemoryInfo>,
     pub system_type: SystemType,
+    pub gpu_type: GpuType,
+    pub arch: ArchInfo,
     pub ram_type: RamType,
     pub ram_maker: RamMaker,
     pub ram_bus_width: u32,
+    pub physical_frame_buffer: Kibibytes,
+    pub virtual_frame_buffer: Kibibytes,
     pub ram_bank_count: u32,
     pub ram_partition_count: u32,
     pub foundry: Foundry,
     pub core_count: u32,
     pub shader_pipe_count: u32,
     pub shader_sub_pipe_count: u32,
+    pub ecc: EccInfo,
     pub base_clocks: ClockFrequencies,
     pub boost_clocks: ClockFrequencies,
     pub sensors: Vec<SensorDesc>,
-    pub coolers: Vec<CoolerDesc>,
+    pub coolers: BTreeMap<FanCoolerId, CoolerInfo>,
     pub perf: PerfInfo,
     pub sensor_limits: Vec<SensorLimit>,
     pub power_limits: Vec<PowerLimit>,
@@ -57,62 +74,88 @@ pub struct GpuInfo {
     // TODO: pstate base_voltages
     pub overvolt_limits: Vec<OvervoltLimit>,
     pub vfp_limits: BTreeMap<ClockDomain, VfpRange>,
-    pub vfp_locks: Vec<usize>,
+    pub connected_displays: Vec<DisplayId>,
+}
+
+impl GpuInfo {
+    pub fn vendor(&self) -> Option<Vendor> {
+        self.bus.vendor().ok().flatten()
+    }
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct EccInfo {
+    pub enabled_by_default: bool,
+    pub info: nvapi::EccStatus,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct EccStatus {
+    pub enabled: bool,
+    pub errors: EccErrors,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct VfpRange {
     pub range: Range<KilohertzDelta>,
-    pub temperature: Celsius,
 }
 
 impl From<ClockRange> for VfpRange {
     fn from(c: ClockRange) -> Self {
         VfpRange {
             range: Range::range_from(c.range),
-            temperature: c.temp_max.into(),
         }
     }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GpuStatus {
     pub pstate: PState,
     pub clocks: ClockFrequencies,
-    pub memory: MemoryInfo,
+    /// Effective (actually-running) clocks from GetAllClocks V2
+    /// (`NV_GPU_CLOCK_INFO_V2`). `None` where the driver doesn't support the
+    /// V2 layout. Distinct from `clocks` (the GetAllClockFrequencies table).
+    pub effective_clocks: Option<EffectiveClocks>,
+    pub memory: Option<MemoryInfo>,
+    pub pcie_lanes: Option<u32>,
+    pub ecc: EccStatus,
     pub voltage: Option<Microvolts>,
     pub voltage_domains: Option<VoltageStatus>,
     pub voltage_step: Option<VoltageStatus>,
     pub voltage_table: Option<VoltageTable>,
     pub tachometer: Option<u32>,
     pub utilization: Utilizations,
-    pub power: Vec<Percentage>,
-    pub sensors: Vec<(SensorDesc, Celsius)>,
-    pub coolers: Vec<(CoolerDesc, CoolerStatus)>,
+    pub power: BTreeMap<PowerTopologyChannelId, Percentage>,
+    /// `(descriptor, celsius)` thermal readings with sub-degree precision.
+    pub sensors: Vec<(SensorDesc, f32)>,
+    pub coolers: BTreeMap<FanCoolerId, CoolerStatus>,
     pub perf: PerfStatus,
     pub vfp: Option<VfpTable>,
-    pub vfp_locks: BTreeMap<usize, Microvolts>,
+    pub vfp_locks: BTreeMap<PerfLimitId, ClockLockValue>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct GpuSettings {
     pub voltage_boost: Option<Percentage>,
-    pub sensor_limits: Vec<Celsius>,
+    pub sensor_limits: Vec<SensorThrottle>,
     pub power_limits: Vec<Percentage>,
-    pub coolers: Vec<(CoolerDesc, CoolerStatus)>,
+    pub coolers: BTreeMap<FanCoolerId, CoolerSettings>,
     pub vfp: Option<VfpDeltas>,
     pub pstate_deltas: BTreeMap<PState, BTreeMap<ClockDomain, KilohertzDelta>>,
     pub overvolt: Vec<MicrovoltsDelta>,
-    pub vfp_locks: BTreeMap<usize, ClockLockEntry>,
+    pub vfp_locks: BTreeMap<PerfLimitId, ClockLockEntry>,
 }
 
 impl Gpu {
     pub fn new(gpu: PhysicalGpu) -> Self {
         Gpu {
-            gpu: gpu,
+            gpu,
+            vfp_info: OnceCell::new(),
         }
     }
 
@@ -124,30 +167,59 @@ impl Gpu {
         &self.gpu
     }
 
+    pub fn id(&self) -> usize {
+        self.gpu.handle().as_ptr() as _
+    }
+
     pub fn enumerate() -> nvapi::Result<Vec<Self>> {
-        PhysicalGpu::enumerate().map(|v| v.into_iter().map(Gpu::new).collect())
+        PhysicalGpu::enumerate()
+            .map_err(Into::into)
+            .map(|v| v.into_iter().map(Gpu::new).collect())
     }
 
     pub fn info(&self) -> nvapi::Result<GpuInfo> {
         let pstates = allowable_result(self.gpu.pstates())?;
         let (pstates, ov) = match pstates {
-            Ok(PStates { editable: _editable, pstates, overvolt }) => (pstates, overvolt),
+            Ok(PStates {
+                editable: _editable,
+                pstates,
+                overvolt,
+            }) => (pstates, overvolt),
             Err(..) => (Default::default(), Default::default()),
         };
-        let pci = self.gpu.pci_identifiers()?;
 
         Ok(GpuInfo {
+            id: self.id(),
+            uuid: allowable_result(self.gpu.uuid())?.ok(),
             name: self.gpu.full_name()?,
             codename: self.gpu.short_name()?,
             bios_version: self.gpu.vbios_version_string()?,
-            driver_model: self.gpu.driver_model()?,
-            vendor: allowable_result_fallback(pci.vendor().map_err(From::from), Vendor::Unknown)?,
-            pci: pci,
-            memory: self.gpu.memory_info()?,
+            driver_model: allowable_result(self.gpu.driver_model())?.ok(),
+            bus: allowable_result_fallback(self.gpu.bus_info(), Default::default())?,
+            memory: allowable_result(self.gpu.memory_info())?.ok(),
+            ecc: EccInfo {
+                enabled_by_default: allowable_result_fallback(
+                    self.gpu
+                        .ecc_configuration()
+                        .map(|(_enabled, enabled_by_default)| enabled_by_default),
+                    false,
+                )?,
+                info: allowable_result_fallback(self.gpu.ecc_status(), Default::default())?,
+            },
             system_type: allowable_result_fallback(self.gpu.system_type(), SystemType::Unknown)?,
+            gpu_type: allowable_result_fallback(self.gpu.gpu_type(), GpuType::Unknown)?,
+            arch: allowable_result_fallback(self.gpu.architecture(), Default::default())?,
             ram_type: allowable_result_fallback(self.gpu.ram_type(), RamType::Unknown)?,
             ram_maker: allowable_result_fallback(self.gpu.ram_maker(), RamMaker::Unknown)?,
             ram_bus_width: allowable_result_fallback(self.gpu.ram_bus_width(), 0)?,
+            physical_frame_buffer: allowable_result_fallback(
+                self.gpu.physical_frame_buffer_size(),
+                Kibibytes(0),
+            )?,
+            virtual_frame_buffer: allowable_result_fallback(
+                self.gpu.virtual_frame_buffer_size(),
+                Kibibytes(0),
+            )?,
             ram_bank_count: allowable_result_fallback(self.gpu.ram_bank_count(), 0)?,
             ram_partition_count: allowable_result_fallback(self.gpu.ram_partition_count(), 0)?,
             foundry: allowable_result_fallback(self.gpu.foundry(), Foundry::Unknown)?,
@@ -160,155 +232,416 @@ impl Gpu {
                 Ok(s) => s.into_iter().map(From::from).collect(),
                 Err(..) => Default::default(),
             },
-            coolers: match allowable_result(self.gpu.cooler_settings(None))? {
-                Ok(c) => c.into_iter().map(From::from).collect(),
-                Err(..) => Default::default(),
-            },
+            coolers: allowable_result(self.gpu.cooler_info())?
+                .unwrap_or_else(|_e| Default::default()),
             perf: self.gpu.perf_info()?,
             sensor_limits: match allowable_result(self.gpu.thermal_limit_info())? {
-                Ok((_, l)) => l.into_iter().map(From::from).collect(),
+                Ok(l) => l.into_iter().map(From::from).collect(),
                 Err(..) => Default::default(),
             },
             power_limits: match allowable_result(self.gpu.power_limit_info())? {
                 Ok(p) => p.entries.into_iter().map(From::from).collect(),
                 Err(..) => Default::default(),
             },
-            pstate_limits: pstates.into_iter().map(|p| (p.id, p.clocks.into_iter().map(|p| (p.domain(), p.into())).collect())).collect(),
+            pstate_limits: pstates
+                .into_iter()
+                .map(|p| {
+                    (
+                        p.id,
+                        p.clocks
+                            .into_iter()
+                            .map(|p| (p.domain(), p.into()))
+                            .collect(),
+                    )
+                })
+                .collect(),
             overvolt_limits: ov.into_iter().map(From::from).collect(),
             vfp_limits: match allowable_result(self.gpu.vfp_ranges())? {
-                Ok(l) => l.into_iter().map(|v| (v.domain, v.into())).collect(),
+                Ok(l) => l
+                    .domains
+                    .into_iter()
+                    .map(|v| (v.domain, v.into()))
+                    .collect(),
                 Err(..) => Default::default(),
             },
-            vfp_locks: match allowable_result(self.gpu.vfp_locks())? {
-                Ok(v) => v.into_iter().map(|(id, _)| id).collect(),
-                Err(..) => Default::default(),
-            },
+            connected_displays: allowable_result(
+                self.gpu.display_ids_connected(ConnectedIdsFlags::empty()),
+            )?
+            .unwrap_or_else(|_| Default::default()),
         })
     }
 
+    fn vfp_info(&self) -> nvapi::Result<nvapi::Result<&VfpInfo>> {
+        allowable_result(self.vfp_info.get_or_try_init(|| self.gpu.vfp_info()))
+    }
+
     pub fn status(&self) -> nvapi::Result<GpuStatus> {
-        let mask = allowable_result(self.gpu.vfp_mask())?;
+        let vfp_info = self.vfp_info()?;
+
+        // Thermal sensors via the RTSS ThermChannel pair (unified layout):
+        // `NvAPI_GPU_ThermChannelGetInfo` (0x0bc8163d) returns a `priChIdx[5]`
+        // LUT naming the authoritative primary channel per type (GPU_AVG=0,
+        // GPU_MAX=1=hotspot, BOARD=2, MEMORY=3=VRAM, PWR_SUPPLY=4) plus
+        // per-channel metadata; `NvAPI_GPU_ThermChannelGetStatus` (0x65fe3aad,
+        // channel[32] layout, called with GetInfo's channel_mask) returns the
+        // live temp at each channel index. `channel[priChIdx[type]]` is the
+        // authoritative reading for that type.
+        //
+        // Best-effort: pre-Pascal GPUs may not expose GetInfo; on failure we
+        // fall back to the documented `thermal_settings` (Core only) below.
+        // Verified on Pascal/Turing/Ampere laptop + desktop GPUs: GetInfo
+        // returns OK (e.g. 1080Ti channel_mask=0x03, 2070 0x7c00ff,
+        // priChIdx GPU_AVG=0 / GPU_MAX=1 on all).
+        //
+        // Sensor ordering matters: positional consumers (nvoc-python/TUI/GUI)
+        // take `sensors.first()` as the core temperature, so Core MUST be
+        // emitted first.
+        let therm_info = allowable_result(self.thermal_channel_info())?.ok();
+        let therm_status = match therm_info.as_ref() {
+            Some(i) if i.channel_mask != 0 => {
+                allowable_result(self.thermal_channel_status(i.channel_mask))?.ok()
+            }
+            _ => None,
+        };
+
+        // Build the sensor list from the RTSS channel data. Sensors are
+        // identified by their `channel_type` (GPU_AVG/GPU_MAX/BOARD/MEMORY/
+        // PWR_SUPPLY, or 255=unclassified) — there is no free-form name; the
+        // type IS the classification. Core (GPU_AVG) is emitted first so
+        // positional consumers (sensors.first()) still see the core temp.
+        let mut extra_sensors: Vec<(SensorDesc, f32)> = Vec::new();
+
+        // ThermalTarget per standard channel type.
+        let type_target: [ThermalTarget; 5] = [
+            ThermalTarget::Gpu, // GPU_AVG (core)
+            ThermalTarget::Gpu, // GPU_MAX (hot spot)
+            ThermalTarget::Board,
+            ThermalTarget::Memory,
+            ThermalTarget::PowerSupply,
+        ];
+        if let (Some(info), Some(status)) = (therm_info.as_ref(), therm_status.as_ref()) {
+            // Standard primary channels first, in type order (Core, then Hot
+            // Spot, Board, Memory, Power Supply).
+            for (ty, &target) in type_target.iter().enumerate() {
+                let Some(idx) = info.primary.get(ty).copied().flatten() else {
+                    continue;
+                };
+                let Some(temp) = status.get(idx as usize) else {
+                    continue;
+                };
+                extra_sensors.push((
+                    sensor_desc_for_channel(target, idx as u32, info.channel_info(idx as usize)),
+                    temp,
+                ));
+            }
+
+            // Remaining populated channels (ch_type=255, unclassified — e.g.
+            // per-VRAM-module hotspots on desktop cards). Emitted in ascending
+            // channel order, all uniformly unclassified (distinguished only by
+            // their channel index). Target defaults to Gpu.
+            for &(idx, _) in status.temps.iter() {
+                let is_primary = info
+                    .primary
+                    .iter()
+                    .any(|p| p.map(|p| p as usize) == Some(idx));
+                if is_primary {
+                    continue;
+                }
+                let temp = status.get(idx).unwrap_or(0.0);
+                extra_sensors.push((
+                    sensor_desc_for_channel(ThermalTarget::Gpu, idx as u32, info.channel_info(idx)),
+                    temp,
+                ));
+            }
+
+            // Sensor pairing: RTSS exposes two channels per physical sensor —
+            // `(thermDevIdx, 0)` (raw) and `(thermDevIdx, 1)` (with `offset_hw`
+            // applied by the driver). Mark each `ProvIdx==1` channel with the
+            // index of its `ProvIdx==0` sibling so the display can annotate it.
+            for (desc, _) in extra_sensors.iter_mut() {
+                let Some(chan) = desc.channel_num else {
+                    continue;
+                };
+                let Some(ci) = info.channel_info(chan as usize) else {
+                    continue;
+                };
+                if ci.therm_dev_prov_idx != 1 {
+                    continue;
+                }
+                // Find a populated channel with the same device and ProvIdx==0.
+                if let Some((sibling, _)) = info.channels.iter().enumerate().find(|(i, c)| {
+                    *i as u32 != chan
+                        && c.as_ref().is_some_and(|c| {
+                            c.therm_dev_idx == ci.therm_dev_idx && c.therm_dev_prov_idx == 0
+                        })
+                }) {
+                    desc.same_sensor_as = Some(sibling as u32);
+                }
+            }
+        }
 
         Ok(GpuStatus {
             pstate: self.gpu.current_pstate()?,
             clocks: self.gpu.clock_frequencies(ClockFrequencyType::Current)?,
-            memory: self.gpu.memory_info()?,
+            effective_clocks: self.gpu.effective_clocks().ok(),
+            memory: allowable_result(self.gpu.memory_info())?.ok(),
+            pcie_lanes: match self.gpu.bus_type() {
+                Ok(BusType::PciExpress) => {
+                    allowable_result_fallback(self.gpu.pcie_lanes().map(Some), None)?
+                }
+                _ => None,
+            },
+            ecc: EccStatus {
+                enabled: allowable_result_fallback(
+                    self.gpu
+                        .ecc_configuration()
+                        .map(|(enabled, _enabled_by_default)| enabled),
+                    false,
+                )?,
+                errors: allowable_result_fallback(self.gpu.ecc_errors(), Default::default())?,
+            },
             voltage: allowable_result(self.gpu.core_voltage())?.ok(),
             voltage_domains: allowable_result(self.gpu.voltage_domains_status())?.ok(),
             voltage_step: allowable_result(self.gpu.voltage_step())?.ok(),
             voltage_table: allowable_result(self.gpu.voltage_table())?.ok(),
             tachometer: allowable_result(self.gpu.tachometer())?.ok(),
             utilization: self.gpu.dynamic_pstates_info()?,
-            power: self.gpu.power_usage()?.into_iter().map(From::from).collect(),
-            sensors: match allowable_result(self.gpu.thermal_settings(None))? {
-                Ok(s) => s.into_iter().map(|s| (From::from(s), s.current_temperature)).collect(),
-                Err(..) => Default::default(),
+            power: self
+                .gpu
+                .power_usage(self.gpu.power_usage_channels()?)?
+                .into_iter()
+                .map(|(ch, power)| (ch, power.into()))
+                .collect(),
+            sensors: {
+                // RTSS path: if we got authoritative channel data, Core is
+                // already at extra_sensors[0] (emitted first above). Otherwise
+                // fall back to the documented thermal_settings (Core only) for
+                // GPUs that don't expose GetInfo.
+                let mut sensors: Vec<(SensorDesc, f32)> = Vec::new();
+                if extra_sensors.is_empty() {
+                    if let Ok(s) = allowable_result(self.gpu.thermal_settings(None))? {
+                        for s in s {
+                            let desc: SensorDesc = From::from(s);
+                            let temp = s.current_temperature.0 as f32;
+                            sensors.push((desc, temp));
+                        }
+                    }
+                }
+                sensors.extend(extra_sensors);
+                sensors
             },
-            coolers: match allowable_result(self.gpu.cooler_settings(None))? {
-                Ok(c) => c.into_iter().map(|c| (From::from(c), From::from(c))).collect(),
-                Err(..) => Default::default(),
-            },
+            coolers: allowable_result(self.gpu.cooler_status())?
+                .unwrap_or_else(|_e| Default::default()),
             perf: self.gpu.perf_status()?,
-            vfp: match mask {
-                Ok(mask) => allowable_result(self.gpu.vfp_curve(mask.mask))?.map(From::from).ok(),
+            vfp: match &vfp_info {
+                Ok(info) => allowable_result(self.gpu.vfp_curve(info))?
+                    .map(From::from)
+                    .ok(),
                 Err(..) => None,
             },
-            vfp_locks: match allowable_result(self.gpu.vfp_locks())? {
-                Ok(l) => l.into_iter().filter_map(|(id, e)| if e.mode == ClockLockMode::Manual {
-                    Some((id, e.voltage))
-                } else {
-                    None
-                }).collect(),
+            vfp_locks: match allowable_result(self.gpu.vfp_locks(PerfLimitId::values()))? {
+                Ok(l) => l
+                    .into_iter()
+                    .filter_map(|lock| lock.lock_value.map(|value| (lock.limit, value)))
+                    .collect(),
                 Err(..) => Default::default(),
             },
         })
     }
 
     pub fn settings(&self) -> nvapi::Result<GpuSettings> {
-        let mask = allowable_result(self.gpu.vfp_mask())?;
+        let vfp_info = self.vfp_info()?;
         let pstates = allowable_result(self.gpu.pstates())?;
         let (pstates, ov) = match pstates {
-            Ok(PStates { editable: _editable, pstates, overvolt }) => (pstates, overvolt),
+            Ok(PStates {
+                editable: _editable,
+                pstates,
+                overvolt,
+            }) => (pstates, overvolt),
             Err(..) => (Default::default(), Default::default()),
         };
 
         Ok(GpuSettings {
             voltage_boost: allowable_result(self.gpu.core_voltage_boost())?.ok(),
             sensor_limits: match allowable_result(self.gpu.thermal_limit())? {
-                Ok(l) => l.into_iter().map(|l| l.value.into()).collect(),
+                Ok(l) => l
+                    .into_iter()
+                    .map(|l| SensorThrottle::from_limit(&l))
+                    .collect(),
                 Err(..) => Default::default(),
             },
             power_limits: match allowable_result(self.gpu.power_limit())? {
                 Ok(l) => l.into_iter().map(|l| l.into()).collect(),
                 Err(..) => Default::default(),
             },
-            coolers: match allowable_result(self.gpu.cooler_settings(None))? {
-                Ok(c) => c.into_iter().map(|c| (From::from(c), From::from(c))).collect(),
-                Err(..) => Default::default(),
-            },
-            vfp: match mask {
-                Ok(mask) => allowable_result(self.gpu.vfp_table(mask.mask))?.map(From::from).ok(),
+            coolers: allowable_result(self.gpu.cooler_control())?
+                .unwrap_or_else(|_e| Default::default()),
+            vfp: match &vfp_info {
+                Ok(info) => allowable_result(self.gpu.vfp_table(info))?
+                    .map(From::from)
+                    .ok(),
                 Err(..) => None,
             },
-            vfp_locks: match allowable_result(self.gpu.vfp_locks())? {
-                Ok(l) => l,
+            vfp_locks: match allowable_result(self.gpu.vfp_locks(PerfLimitId::values()))? {
+                Ok(v) => v.into_iter().map(|lock| (lock.limit, lock)).collect(),
                 Err(..) => Default::default(),
             },
-            pstate_deltas: pstates.into_iter().filter(|p| p.editable)
-                .map(|p| (p.id, p.clocks.into_iter().filter(|p| p.editable())
-                    .map(|p| (p.domain(), p.frequency_delta().value)).collect())
-                ).collect(),
-            overvolt: ov.into_iter().filter(|v| v.editable).map(|v| v.voltage_delta.value).collect(),
+            pstate_deltas: pstates
+                .into_iter()
+                .filter(|p| p.editable)
+                .map(|p| {
+                    (
+                        p.id,
+                        p.clocks
+                            .into_iter()
+                            .filter(|p| p.editable())
+                            .map(|p| (p.domain(), p.frequency_delta().value))
+                            .collect(),
+                    )
+                })
+                .collect(),
+            overvolt: ov
+                .into_iter()
+                .filter(|v| v.editable)
+                .map(|v| v.voltage_delta.value)
+                .collect(),
         })
     }
 
     pub fn set_voltage_boost(&self, boost: Percentage) -> nvapi::Result<()> {
-        self.gpu.set_core_voltage_boost(boost)
+        self.gpu.set_core_voltage_boost(boost).map_err(Into::into)
     }
 
-    pub fn set_power_limits<I: Iterator<Item=Percentage>>(&self, limits: I) -> nvapi::Result<()> {
+    pub fn set_power_limits<I: IntoIterator<Item = Percentage>>(
+        &self,
+        limits: I,
+    ) -> nvapi::Result<()> {
         // TODO: match against power_limit_info, use range.min/max from there if it matches (can get fraction of a percent!)
-        self.gpu.set_power_limit(limits.map(From::from))
+        self.gpu
+            .set_power_limit(limits.into_iter().map(From::from))
+            .map_err(Into::into)
     }
 
-    pub fn set_sensor_limits<I: Iterator<Item=Celsius>>(&self, limits: I) -> nvapi::Result<()> {
-        self.gpu.thermal_limit_info().and_then(|(_, info)| self.gpu.set_thermal_limit(
-            limits.zip(info.into_iter()).map(|(limit, info)| ThermalLimit {
-                controller: info.controller,
-                flags: info.default_flags,
-                value: limit.into(),
+    pub fn set_sensor_limits<I: IntoIterator<Item = SensorThrottle>>(
+        &self,
+        limits: I,
+    ) -> nvapi::Result<()> {
+        self.gpu
+            .thermal_limit_info()
+            .map_err(Into::into)
+            .and_then(|info| {
+                self.gpu
+                    .set_thermal_limit(
+                        limits
+                            .into_iter()
+                            .zip(info.into_iter())
+                            .map(|(limit, info)| limit.to_limit(info.policy, info.pff.as_ref())),
+                    )
+                    .map_err(Into::into)
             })
-        ))
     }
 
-    pub fn set_cooler_levels<I: Iterator<Item=CoolerLevel>>(&self, levels: I) -> nvapi::Result<()> {
-        self.gpu.set_cooler_levels(None, levels)
+    /// Thermal-channel capability descriptor (undocumented
+    /// `NvAPI_GPU_ThermChannelGetInfo`). Best-effort; returns `Ok` with the
+    /// descriptor or an error that should be tolerated by callers (some GPUs
+    /// stub this call). See [`PhysicalGpu::thermal_channel_info`](nvapi::PhysicalGpu::thermal_channel_info).
+    pub fn thermal_channel_info(&self) -> nvapi::Result<ThermalChannelInfo> {
+        self.gpu.thermal_channel_info()
+    }
+
+    /// Live thermal-channel readings (the STATUS half). `channel_mask` should
+    /// come from [`Self::thermal_channel_info`]. Best-effort.
+    pub fn thermal_channel_status(&self, channel_mask: u32) -> nvapi::Result<ThermalChannelStatus> {
+        self.gpu.thermal_channel_status(channel_mask)
+    }
+
+    pub fn set_cooler_levels<I: IntoIterator<Item = (FanCoolerId, CoolerSettings)>>(
+        &self,
+        levels: I,
+    ) -> nvapi::Result<()> {
+        self.gpu.set_cooler(levels).map_err(Into::into)
     }
 
     pub fn reset_cooler_levels(&self) -> nvapi::Result<()> {
-        self.gpu.restore_cooler_settings(&[])
+        self.gpu.restore_cooler_settings(&[]).map_err(Into::into)
     }
 
-    pub fn set_vfp<I: Iterator<Item=(usize, KilohertzDelta)>, M: Iterator<Item=(usize, KilohertzDelta)>>(&self, clock_deltas: I, mem_deltas: M) -> nvapi::Result<()> {
-        self.gpu.set_vfp_table([0, 0, 0, 0], clock_deltas.map(|(i, d)| (i, d.into())), mem_deltas.map(|(i, d)| (i, d.into())))
+    pub fn set_vfp<
+        I: Iterator<Item = (usize, KilohertzDelta)>,
+        M: Iterator<Item = (usize, KilohertzDelta)>,
+    >(
+        &self,
+        clock_deltas: I,
+        mem_deltas: M,
+    ) -> nvapi::Result<()> {
+        let info = self.vfp_info()??;
+        self.gpu
+            .set_vfp_table(
+                info,
+                clock_deltas.map(|(i, d)| (i, d.into())),
+                mem_deltas.map(|(i, d)| (i, d.into())),
+            )
+            .map_err(Into::into)
     }
 
-    pub fn set_vfp_lock(&self, voltage: Microvolts) -> nvapi::Result<()> {
-        self.gpu.set_vfp_locks(self.gpu.vfp_locks()?
-            .into_iter().max_by_key(|&(id, _)| id).into_iter()
-            .map(|(id, entry)| (id, Some(voltage)))
-        )
+    pub fn set_vfp_lock_voltage(&self, voltage: Option<Microvolts>) -> nvapi::Result<()> {
+        self.gpu
+            .set_vfp_locks([ClockLockEntry {
+                limit: PerfLimitId::Voltage,
+                clock: ClockDomain::Graphics,
+                lock_value: voltage.map(ClockLockValue::Voltage),
+            }])
+            .map_err(Into::into)
+    }
+
+    pub fn set_vfp_lock(
+        &self,
+        domain: ClockDomain,
+        frequency: Option<Kilohertz>,
+    ) -> nvapi::Result<()> {
+        let gpu = match domain {
+            ClockDomain::Graphics => true,
+            ClockDomain::Memory => false,
+            _ => return Err(nvapi::sys::ArgumentRangeError.into()),
+        };
+        self.gpu
+            .set_vfp_locks([
+                ClockLockEntry {
+                    limit: match gpu {
+                        true => PerfLimitId::Gpu,
+                        false => PerfLimitId::Memory,
+                    },
+                    clock: domain,
+                    lock_value: frequency.map(ClockLockValue::Frequency),
+                },
+                ClockLockEntry {
+                    limit: match gpu {
+                        true => PerfLimitId::GpuLowerbound,
+                        false => PerfLimitId::MemoryLowerbound,
+                    },
+                    clock: domain,
+                    lock_value: frequency.map(ClockLockValue::Frequency),
+                },
+            ])
+            .map_err(Into::into)
     }
 
     pub fn reset_vfp_lock(&self) -> nvapi::Result<()> {
-        self.gpu.set_vfp_locks(self.gpu.vfp_locks()?.into_iter().map(|(id, _)| (id, None)))
+        self.gpu
+            .set_vfp_locks(self.gpu.vfp_locks(None)?.into_iter().map(|mut lock| {
+                lock.lock_value = None;
+                lock
+            }))
+            .map_err(Into::into)
     }
 
     pub fn reset_vfp(&self) -> nvapi::Result<()> {
         use std::iter;
 
-        let mask = self.gpu.vfp_mask()?;
-        self.gpu.set_vfp_table(mask.mask, iter::empty(), iter::empty())
+        let info = self.vfp_info()??;
+        self.gpu
+            .set_vfp_table(info, iter::empty(), iter::empty())
+            .map_err(Into::into)
     }
 }
 
@@ -346,14 +679,34 @@ pub struct PStateLimit {
 impl From<ClockEntry> for PStateLimit {
     fn from(s: ClockEntry) -> Self {
         match s {
-            ClockEntry::Range { domain: _, editable, frequency_delta, frequency_range, voltage_domain, voltage_range } => PStateLimit {
-                frequency_delta: if editable { Some(frequency_delta.range) } else { None },
+            ClockEntry::Range {
+                domain: _,
+                editable,
+                frequency_delta,
+                frequency_range,
+                voltage_domain,
+                voltage_range,
+            } => PStateLimit {
+                frequency_delta: if editable {
+                    Some(frequency_delta.range)
+                } else {
+                    None
+                },
                 frequency: frequency_range,
                 voltage: voltage_range,
-                voltage_domain: voltage_domain,
+                voltage_domain,
             },
-            ClockEntry::Single { domain: _, editable, frequency_delta, frequency } => PStateLimit {
-                frequency_delta: if editable { Some(frequency_delta.range) } else { None },
+            ClockEntry::Single {
+                domain: _,
+                editable,
+                frequency_delta,
+                frequency,
+            } => PStateLimit {
+                frequency_delta: if editable {
+                    Some(frequency_delta.range)
+                } else {
+                    None
+                },
                 frequency: Range::from_scalar(frequency),
                 voltage: Default::default(),
                 voltage_domain: VoltageDomain::Undefined,
@@ -384,6 +737,7 @@ pub struct SensorLimit {
     pub range: Range<Celsius>,
     pub default: Celsius,
     pub flags: u32,
+    pub throttle_curve: Option<PffCurve>,
 }
 
 impl From<ThermalInfo> for SensorLimit {
@@ -392,6 +746,57 @@ impl From<ThermalInfo> for SensorLimit {
             range: Range::range_from(info.temperature_range),
             default: info.default_temperature.into(),
             flags: info.default_flags,
+            throttle_curve: info.pff,
+        }
+    }
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Default, Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct SensorThrottle {
+    pub value: Celsius,
+    pub remove_tdp_limit: bool,
+    pub curve: Option<PffCurve>,
+}
+
+impl SensorThrottle {
+    pub fn to_limit(&self, policy: ThermalPolicyId, info: Option<&PffCurve>) -> ThermalLimit {
+        ThermalLimit {
+            policy,
+            value: self.value.into(),
+            remove_tdp_limit: self.remove_tdp_limit,
+            pff: self.curve.as_ref().map(|pff| PffStatus {
+                values: pff.points.iter().map(|p| p.y.into()).collect(),
+                curve: match info {
+                    Some(curve) => curve.clone(),
+                    None => pff.clone(),
+                },
+            }),
+        }
+    }
+
+    pub fn from_limit(limit: &ThermalLimit) -> Self {
+        Self {
+            value: limit.value.into(),
+            remove_tdp_limit: limit.remove_tdp_limit,
+            curve: limit.pff.as_ref().map(|pff| pff.curve()),
+        }
+    }
+
+    pub fn from_default(info: SensorLimit) -> Self {
+        Self {
+            value: info.default,
+            curve: info.throttle_curve.clone(),
+            remove_tdp_limit: false,
+        }
+    }
+}
+
+impl From<Celsius> for SensorThrottle {
+    fn from(value: Celsius) -> Self {
+        Self {
+            value,
+            ..Default::default()
         }
     }
 }
@@ -399,9 +804,58 @@ impl From<ThermalInfo> for SensorLimit {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SensorDesc {
+    /// Thermal controller. Always `GpuInternal` for every sensor NVAPI
+    /// exposes here, so it is omitted from serialization as redundant.
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip, default = "SensorDesc::default_controller")
+    )]
     pub controller: ThermalController,
     pub target: ThermalTarget,
     pub range: Range<Celsius>,
+    /// The RTSS ThermChannel channel index this reading comes from. Channel
+    /// 0 = GPU_AVG (Core), 1 = GPU_MAX (Hot Spot), etc. — indexed directly by
+    /// GetInfo's priChIdx. `None` for documented sensors that don't come from
+    /// the ThermChannel API.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub channel_num: Option<u32>,
+    /// `NV_GPU_THERMAL_THERM_CHANNEL_TYPE` (0=GPU_AVG, 1=GPU_MAX, 2=BOARD,
+    /// 3=MEMORY, 4=PWR_SUPPLY, 255=unclassified). Research metadata from GetInfo.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub channel_type: Option<u32>,
+    /// Software offset (GetInfo `offsetSw`; semantics undocumented). Research use.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub offset_sw: Option<i32>,
+    /// Hardware offset (GetInfo `offsetHw`; semantics undocumented). Research use.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub offset_hw: Option<i32>,
+    /// Fixed-point scaling factor (GetInfo `scaling`; semantics undocumented).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub scaling: Option<i32>,
+    /// Cross-reference set when this channel is the `thermDevProvIdx==1` half
+    /// of a paired reading from the same physical sensor as another channel.
+    /// The driver has already applied `offset_hw` to this channel's STATUS
+    /// reading; the paired `(dev, 0)` channel has not. Display-only annotation.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub same_sensor_as: Option<u32>,
 }
 
 impl From<Sensor> for SensorDesc {
@@ -410,66 +864,89 @@ impl From<Sensor> for SensorDesc {
             controller: sensor.controller,
             target: sensor.target,
             range: sensor.default_temperature_range,
+            channel_num: None,
+            channel_type: None,
+            offset_sw: None,
+            offset_hw: None,
+            scaling: None,
+            same_sensor_as: None,
         }
     }
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub struct CoolerDesc {
-    pub kind: CoolerType,
-    pub controller: CoolerController,
-    pub range: Range<Percentage>,
-    pub default_policy: CoolerPolicy,
-    pub target: CoolerTarget,
-    pub control: CoolerControl,
-}
-
-impl From<Cooler> for CoolerDesc {
-    fn from(cooler: Cooler) -> Self {
-        CoolerDesc {
-            kind: cooler.kind,
-            controller: cooler.controller,
-            range: cooler.default_level_range,
-            default_policy: cooler.default_policy,
-            target: cooler.target,
-            control: cooler.control,
-        }
+impl SensorDesc {
+    /// Controller value used when deserializing a `SensorDesc` whose
+    /// `controller` field was skipped during serialization.
+    fn default_controller() -> ThermalController {
+        ThermalController::GpuInternal
     }
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub struct CoolerStatus {
-    pub range: Range<Percentage>,
-    pub level: Percentage,
-    pub policy: CoolerPolicy,
-    pub active: bool,
-}
-
-impl From<Cooler> for CoolerStatus {
-    fn from(cooler: Cooler) -> Self {
-        CoolerStatus {
-            range: cooler.current_level_range,
-            level: cooler.current_level,
-            policy: cooler.current_policy,
-            active: cooler.active,
+/// Build a `SensorDesc` for one RTSS thermal channel, attaching the channel
+/// index and (when available) the GetInfo metadata fields for research. The
+/// sensor is identified by its `channel_type` (set from the GetInfo record) —
+/// there is no free-form name.
+fn sensor_desc_for_channel(
+    target: ThermalTarget,
+    channel: u32,
+    info: Option<&nvapi::ChannelInfo>,
+) -> SensorDesc {
+    let mut desc = SensorDesc {
+        controller: ThermalController::GpuInternal,
+        target,
+        range: Range::default(),
+        channel_num: Some(channel),
+        channel_type: info.map(|c| c.ch_type),
+        offset_sw: info.map(|c| c.offset_sw),
+        offset_hw: info.map(|c| c.offset_hw),
+        scaling: info.map(|c| c.scaling),
+        same_sensor_as: None,
+    };
+    // If the GetInfo record carried a min/max range, surface it. These are in
+    // the same celsius*256 fixed-point as the live readings (see `scaling`),
+    // so decode to integer degrees (truncating divide, matching the /256
+    // decode convention) for a sensible display.
+    if let Some(c) = info {
+        if c.min_temp != 0 || c.max_temp != 0 {
+            desc.range = Range {
+                min: Celsius(c.min_temp / 256),
+                max: Celsius(c.max_temp / 256),
+            };
         }
     }
+    desc
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct VfpPoint {
+    pub point_type: VfPointType,
+    pub default_frequency: Kilohertz,
     pub frequency: Kilohertz,
     pub voltage: Microvolts,
 }
 
-impl<T> From<VfpEntry<T>> for VfpPoint where Kilohertz: From<T> {
+impl VfpPoint {
+    pub fn is_editable(&self) -> bool {
+        self.point_type == VfPointType::Prog
+    }
+}
+
+impl<T: Default + PartialEq + Copy> From<VfpEntry<T>> for VfpPoint
+where
+    Kilohertz: From<T>,
+{
     fn from(v: VfpEntry<T>) -> Self {
+        debug_assert!(v.configured().voltage == v.current.voltage);
+        if !v.overclocked.is_empty() {
+            debug_assert!(v.overclocked.voltage == v.current.voltage);
+            debug_assert!(v.current.frequency == v.overclocked.frequency);
+        }
         VfpPoint {
-            frequency: v.frequency.into(),
-            voltage: v.voltage,
+            point_type: v.point_type,
+            default_frequency: v.default.frequency.into(),
+            frequency: v.configured().frequency.into(),
+            voltage: v.configured().voltage,
         }
     }
 }
@@ -484,8 +961,8 @@ pub struct VfpTable {
 impl From<VfpCurve> for VfpTable {
     fn from(v: VfpCurve) -> Self {
         VfpTable {
-            graphics: v.graphics.into_iter().map(|(i, e)| (i, e.into())).collect(),
-            memory: v.memory.into_iter().map(|(i, e)| (i, e.into())).collect(),
+            graphics: collect_domain(&v.points, ClockDomain::Graphics),
+            memory: collect_domain(&v.points, ClockDomain::Memory),
         }
     }
 }
@@ -500,8 +977,8 @@ pub struct VfpDeltas {
 impl From<ClockTable> for VfpDeltas {
     fn from(c: ClockTable) -> Self {
         VfpDeltas {
-            graphics: c.gpu_delta.into_iter().map(|(i, d)| (i, d.into())).collect(),
-            memory: c.mem_delta.into_iter().map(|(i, d)| (i, d.into())).collect(),
+            graphics: collect_domain(&c.delta_points, ClockDomain::Graphics),
+            memory: collect_domain(&c.delta_points, ClockDomain::Memory),
         }
     }
 }
@@ -509,17 +986,25 @@ impl From<ClockTable> for VfpDeltas {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct VfPoint {
+    pub point_type: VfPointType,
     pub voltage: Microvolts,
     pub frequency: Kilohertz,
     pub delta: KilohertzDelta,
+    pub default_frequency: Kilohertz,
 }
 
 impl VfPoint {
     pub fn new(point: VfpPoint, delta: KilohertzDelta) -> Self {
         VfPoint {
+            point_type: point.point_type,
             voltage: point.voltage,
             frequency: point.frequency,
-            delta: delta,
+            default_frequency: point.default_frequency,
+            delta,
         }
+    }
+
+    pub fn is_editable(&self) -> bool {
+        self.point_type == VfPointType::Prog
     }
 }

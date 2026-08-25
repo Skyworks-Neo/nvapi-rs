@@ -1,8 +1,31 @@
-use std::ffi::CStr;
-use std::{fmt, ops};
-use std::convert::Infallible;
-use serde::{Serialize, Deserialize};
 use crate::sys;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::ops::RangeInclusive;
+use std::{fmt, ops};
+
+fn fmt_scaled(value: f32, unit: &str, f: &mut fmt::Formatter) -> fmt::Result {
+    if let Some(precision) = f.precision() {
+        write!(f, "{:.*} {}", precision, value, unit)
+    } else {
+        write!(f, "{} {}", value, unit)
+    }
+}
+
+fn fmt_debug<T: fmt::Display>(v: &T, f: &mut fmt::Formatter) -> fmt::Result {
+    fmt::Display::fmt(v, f)
+}
+
+macro_rules! debug_via_display {
+    ($ty:ty) => {
+        impl fmt::Debug for $ty {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                fmt_debug(self, f)
+            }
+        }
+    };
+}
 
 pub trait RawConversion {
     type Target;
@@ -11,14 +34,12 @@ pub trait RawConversion {
     fn convert_raw(&self) -> Result<Self::Target, Self::Error>;
 }
 
-impl RawConversion for sys::types::NvAPI_ShortString {
+impl<const N: usize> RawConversion for sys::types::NvString<N> {
     type Target = String;
     type Error = Infallible;
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
-        unsafe {
-            Ok(CStr::from_ptr(self.as_ptr()).to_string_lossy().into_owned())
-        }
+        Ok(self.to_string_lossy().into_owned())
     }
 }
 
@@ -31,12 +52,18 @@ impl fmt::Display for Celsius {
         write!(f, "{}C", self.0)
     }
 }
+debug_via_display!(Celsius);
 
-impl fmt::Debug for Celsius {
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Default)]
+pub struct Rpm(pub u32);
+
+impl fmt::Display for Rpm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
+        write!(f, "{} RPM", self.0)
     }
 }
+debug_via_display!(Rpm);
 
 /// Nvidia encodes temperature as `<< 8` for some reason sometimes.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -48,12 +75,7 @@ impl fmt::Display for CelsiusShifted {
         write!(f, "{}C", self.get())
     }
 }
-
-impl fmt::Debug for CelsiusShifted {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(CelsiusShifted);
 
 impl CelsiusShifted {
     pub fn get(&self) -> i32 {
@@ -79,20 +101,10 @@ pub struct Microvolts(pub u32);
 
 impl fmt::Display for Microvolts {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let value = self.0 as f32 / 1000.0;
-        if let Some(precision) = f.precision() {
-            write!(f, "{:.*} mV", precision, value)
-        } else {
-            write!(f, "{} mV", value)
-        }
+        fmt_scaled(self.0 as f32 / 1000.0, "mV", f)
     }
 }
-
-impl fmt::Debug for Microvolts {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(Microvolts);
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Default)]
@@ -100,20 +112,10 @@ pub struct MicrovoltsDelta(pub i32);
 
 impl fmt::Display for MicrovoltsDelta {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let value = self.0 as f32 / 1000.0;
-        if let Some(precision) = f.precision() {
-            write!(f, "{:.*} mV", precision, value)
-        } else {
-            write!(f, "{} mV", value)
-        }
+        fmt_scaled(self.0 as f32 / 1000.0, "mV", f)
     }
 }
-
-impl fmt::Debug for MicrovoltsDelta {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(MicrovoltsDelta);
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Default)]
@@ -130,21 +132,11 @@ impl fmt::Display for Kilohertz {
         if self.0 < 1000 {
             write!(f, "{} kHz", self.0)
         } else {
-            let value = self.0 as f32 / 1000.0;
-            if let Some(precision) = f.precision() {
-                write!(f, "{:.*} MHz", precision, value)
-            } else {
-                write!(f, "{} MHz", value)
-            }
+            fmt_scaled(self.0 as f32 / 1000.0, "MHz", f)
         }
     }
 }
-
-impl fmt::Debug for Kilohertz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(Kilohertz);
 
 impl ops::Sub for Kilohertz {
     type Output = KilohertzDelta;
@@ -158,7 +150,7 @@ impl ops::Sub<KilohertzDelta> for Kilohertz {
     type Output = Kilohertz;
 
     fn sub(self, rhs: KilohertzDelta) -> Self::Output {
-        Kilohertz((self.0 as i32 - rhs.0 as i32) as u32)
+        Kilohertz((self.0 as i32 - rhs.0) as u32)
     }
 }
 
@@ -166,7 +158,7 @@ impl ops::Add<KilohertzDelta> for Kilohertz {
     type Output = Kilohertz;
 
     fn add(self, rhs: KilohertzDelta) -> Self::Output {
-        Kilohertz((self.0 as i32 + rhs.0 as i32) as u32)
+        Kilohertz((self.0 as i32 + rhs.0) as u32)
     }
 }
 
@@ -204,21 +196,11 @@ impl fmt::Display for Kilohertz2 {
         if v < 1000 {
             write!(f, "{} kHz", v)
         } else {
-            let value = self.0 as f32 / 1000.0;
-            if let Some(precision) = f.precision() {
-                write!(f, "{:.*} MHz", precision, value)
-            } else {
-                write!(f, "{} MHz", value)
-            }
+            fmt_scaled(v as f32 / 1000.0, "MHz", f)
         }
     }
 }
-
-impl fmt::Debug for Kilohertz2 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(Kilohertz2);
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Default)]
@@ -232,24 +214,14 @@ impl From<i32> for KilohertzDelta {
 
 impl fmt::Display for KilohertzDelta {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if (self.0).abs() < 1000 {
+        if self.0.abs() < 1000 {
             write!(f, "{} kHz", self.0)
         } else {
-            let value = self.0 as f32 / 1000.0;
-            if let Some(precision) = f.precision() {
-                write!(f, "{:.*} MHz", precision, value)
-            } else {
-                write!(f, "{} MHz", value)
-            }
+            fmt_scaled(self.0 as f32 / 1000.0, "MHz", f)
         }
     }
 }
-
-impl fmt::Debug for KilohertzDelta {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(KilohertzDelta);
 
 impl ops::Add for KilohertzDelta {
     type Output = KilohertzDelta;
@@ -317,21 +289,11 @@ impl fmt::Display for Kilohertz2Delta {
         if v.abs() < 1000 {
             write!(f, "{} kHz", v)
         } else {
-            let value = self.0 as f32 / 1000.0;
-            if let Some(precision) = f.precision() {
-                write!(f, "{:.*} MHz", precision, value)
-            } else {
-                write!(f, "{} MHz", value)
-            }
+            fmt_scaled(v as f32 / 1000.0, "MHz", f)
         }
     }
 }
-
-impl fmt::Debug for Kilohertz2Delta {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(Kilohertz2Delta);
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Default)]
@@ -366,12 +328,7 @@ impl fmt::Display for Kibibytes {
         }
     }
 }
-
-impl fmt::Debug for Kibibytes {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(Kibibytes);
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq, Default)]
@@ -382,12 +339,7 @@ impl fmt::Display for Percentage {
         write!(f, "{}%", self.0)
     }
 }
-
-impl fmt::Debug for Percentage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(Percentage);
 
 impl Percentage {
     pub fn from_raw(v: u32) -> Result<Self, sys::ArgumentRangeError> {
@@ -404,20 +356,10 @@ pub struct Percentage1000(pub u32);
 
 impl fmt::Display for Percentage1000 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let value = self.0 as f32 / 1000.0;
-        if let Some(precision) = f.precision() {
-            write!(f, "{:.*}%", precision, value)
-        } else {
-            write!(f, "{}%", value)
-        }
+        fmt_scaled(self.0 as f32 / 1000.0, "%", f)
     }
 }
-
-impl fmt::Debug for Percentage1000 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+debug_via_display!(Percentage1000);
 
 impl Percentage1000 {
     pub fn get(&self) -> u32 {
@@ -457,18 +399,31 @@ impl<T: fmt::Debug> fmt::Debug for Range<T> {
 }
 
 impl<T> Range<T> {
-    pub fn range_from<U>(r: Range<U>) -> Self where T: From<U> {
+    pub fn range_from<U>(r: Range<U>) -> Self
+    where
+        T: From<U>,
+    {
         Range {
             min: r.min.into(),
             max: r.max.into(),
         }
     }
 
-    pub fn from_scalar(v: T) -> Self where T: Clone {
+    pub fn from_scalar(v: T) -> Self
+    where
+        T: Clone,
+    {
         Range {
             min: v.clone(),
             max: v,
         }
+    }
+
+    pub fn range(&self) -> RangeInclusive<T>
+    where
+        T: Clone,
+    {
+        self.min.clone()..=self.max.clone()
     }
 }
 

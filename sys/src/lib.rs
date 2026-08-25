@@ -1,11 +1,11 @@
 #![allow(non_camel_case_types, non_snake_case)]
-#![doc(html_root_url = "http://docs.rs/nvapi-sys/0.2.0")]
+#![doc(html_root_url = "https://docs.rs/nvapi-sys/0.2.0")]
 
 #[macro_use]
 mod macros;
 
-pub mod nvid;
 pub mod nvapi;
+pub mod nvid;
 pub mod status;
 pub mod types;
 
@@ -22,8 +22,16 @@ pub mod handles;
 /// The display driver APIs are used to retrieve information about the display driver.
 pub mod driverapi;
 
+pub mod sysgeneral;
+
+/// Video Input Output (VIO) API
+pub mod vidio;
+
 /// The GPU APIs retrieve and control various attributes of the GPU, such as outputs, VBIOS revision, APG rate, frame buffer size, and thermal settings.
 pub mod gpu;
+
+/// Sync Display APIs
+pub mod gsync;
 
 /// I2C API - Provides ability to read or write data using I2C protocol.
 /// These APIs allow I2C access only to DDC monitors
@@ -34,13 +42,54 @@ pub mod dx;
 
 pub mod dispcontrol;
 
-pub use nvid::Api;
 pub use nvapi::nvapi_QueryInterface;
-pub use types::*;
+pub use nvid::Api;
 pub use status::{NvAPI_Status, Status};
+pub use types::*;
 
-use std::result;
 use std::convert::Infallible;
+use std::error::Error as StdError;
+use std::{fmt, result};
+
+pub mod api {
+    pub use self::private::*;
+    pub use crate::driverapi::*;
+    #[cfg(windows)]
+    pub use crate::dx::*;
+    pub use crate::gpu::clock::*;
+    pub use crate::gpu::cooler::*;
+    pub use crate::gpu::display::*;
+    pub use crate::gpu::ecc::*;
+
+    pub use crate::gpu::pstate::*;
+    pub use crate::gpu::thermal::*;
+    pub use crate::gpu::*;
+    pub use crate::gsync::*;
+    pub use crate::handles::*;
+    pub use crate::i2c::*;
+    pub use crate::nvapi::*;
+    pub use crate::sysgeneral::*;
+    pub use crate::vidio::*;
+
+    pub mod private {
+        pub use crate::driverapi::private::*;
+        pub use crate::gpu::clock::private::*;
+        pub use crate::gpu::cooler::private::*;
+        pub use crate::gpu::power::private::*;
+        pub use crate::gpu::private::*;
+        pub use crate::gpu::pstate::private::*;
+        pub use crate::gpu::thermal::private::*;
+        pub use crate::i2c::private::*;
+    }
+}
+
+pub(crate) mod prelude_ {
+    pub(crate) use crate::handles::{self, NvPhysicalGpuHandle};
+    pub(crate) use crate::nvapi::NvVersion;
+    pub(crate) use crate::status::NvAPI_Status;
+    pub(crate) use crate::types::*;
+    pub(crate) type Array<T> = Padding<T>;
+}
 
 /// The result of a fallible NVAPI call.
 pub type Result<T> = result::Result<T, Status>;
@@ -57,6 +106,14 @@ pub fn status_result(status: NvAPI_Status) -> Result<()> {
 #[derive(Debug, Copy, Clone, Default)]
 pub struct ArgumentRangeError;
 
+impl fmt::Display for ArgumentRangeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("received data out of range")
+    }
+}
+
+impl StdError for ArgumentRangeError {}
+
 impl From<ArgumentRangeError> for Status {
     fn from(_: ArgumentRangeError) -> Self {
         Status::ArgumentExceedMaxSize
@@ -65,8 +122,6 @@ impl From<ArgumentRangeError> for Status {
 
 impl From<Infallible> for ArgumentRangeError {
     fn from(e: Infallible) -> Self {
-        match e { }
+        match e {}
     }
 }
-
-// TODO: NvAPI_SYS_GetChipSetInfo

@@ -75,6 +75,11 @@ nv_declare_handle! {
     Nv3DVPGlassesHandle
 }
 
+nv_declare_handle! {
+    /// A handle for NVPCF clients
+    NvPcfClientHandle
+}
+
 /// A stereo handle, that corresponds to the device interface
 pub type StereoHandle = *const c_void;
 
@@ -93,6 +98,6 @@ nv_declare_handle! {
     NVDX_SwapChainHandle
 }
 
-pub const NVDX_SWAPCHAIN_NONE: NVDX_SwapChainHandle = NVDX_SwapChainHandle(0 as *const _);
+pub const NVDX_SWAPCHAIN_NONE: NVDX_SwapChainHandle = NVDX_SwapChainHandle(::std::ptr::null());
 
 pub const NVAPI_DEFAULT_HANDLE: usize = 0;

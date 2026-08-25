@@ -1,7 +1,5 @@
-use crate::status::NvAPI_Status;
-use crate::handles::NvPhysicalGpuHandle;
-use crate::types::BoolU32;
 use crate::gpu::clock;
+use crate::prelude_::*;
 
 pub const NVAPI_MAX_GPU_PSTATE20_PSTATES: usize = 16;
 pub const NVAPI_MAX_GPU_PSTATE20_CLOCKS: usize = 8;
@@ -22,10 +20,10 @@ nvstruct! {
     /// Used in NvAPI_GPU_GetDynamicPstatesInfoEx().
     pub struct NV_GPU_DYNAMIC_PSTATES_INFO_EX {
         /// Structure version
-        pub version: u32,
+        pub version: NvVersion,
         /// bit 0 indicates if the dynamic Pstate is enabled or not
         pub flags: u32,
-        pub utilization: [NV_GPU_DYNAMIC_PSTATES_INFO_EX_UTILIZATION; NVAPI_MAX_GPU_UTILIZATIONS],
+        pub utilization: Array<[NV_GPU_DYNAMIC_PSTATES_INFO_EX_UTILIZATION; NVAPI_MAX_GPU_UTILIZATIONS]>,
     }
 }
 
@@ -67,7 +65,7 @@ impl UtilizationDomain {
     }
 }
 
-nvversion! { NV_GPU_DYNAMIC_PSTATES_INFO_EX_VER(NV_GPU_DYNAMIC_PSTATES_INFO_EX = 4 * 2 + (4 * 2) * NVAPI_MAX_GPU_UTILIZATIONS, 1) }
+nvversion! { @NV_GPU_DYNAMIC_PSTATES_INFO_EX(1) }
 
 nvapi! {
     pub type GPU_GetDynamicPstatesInfoExFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pDynamicPstatesInfoEx: *mut NV_GPU_DYNAMIC_PSTATES_INFO_EX) -> NvAPI_Status;
@@ -180,17 +178,17 @@ pub enum NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE {
 impl NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
     pub fn get(&self, kind: PstateClockType) -> NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE {
         match kind {
-            PstateClockType::Single => NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Single(
-                NV_GPU_PSTATE20_CLOCK_ENTRY_SINGLE {
-                    freq_kHz: (self.0).minFreq_kHz,
-                }
-            ),
+            PstateClockType::Single => {
+                NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Single(NV_GPU_PSTATE20_CLOCK_ENTRY_SINGLE {
+                    freq_kHz: self.0.minFreq_kHz,
+                })
+            }
             PstateClockType::Range => NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Range(self.0),
         }
     }
 
     pub fn set_single(&mut self, value: NV_GPU_PSTATE20_CLOCK_ENTRY_SINGLE) {
-        (self.0).minFreq_kHz = value.freq_kHz;
+        self.0.minFreq_kHz = value.freq_kHz;
     }
 
     pub fn set_range(&mut self, value: NV_GPU_PSTATE20_CLOCK_ENTRY_RANGE) {
@@ -225,9 +223,9 @@ nvstruct! {
         /// ID of the voltage domain
         pub domainId: NV_GPU_PERF_VOLTAGE_INFO_DOMAIN_ID,
         pub bIsEditable: BoolU32,
-        /// Current base voltage settings in [uV]
+        /// Current base voltage settings in \[uV\]
         pub volt_uV: u32,
-        /// Current base voltage delta from nominal settings in [uV]
+        /// Current base voltage delta from nominal settings in \[uV\]
         pub voltDelta_uV: NV_GPU_PERF_PSTATES20_PARAM_DELTA,
     }
 }
@@ -242,18 +240,18 @@ nvstruct! {
         pub bIsEditable: BoolU32,
         /// Array of clock entries
         /// Valid index range is 0 to numClocks-1
-        pub clocks: [NV_GPU_PSTATE20_CLOCK_ENTRY_V1; NVAPI_MAX_GPU_PSTATE20_CLOCKS],
+        pub clocks: Array<[NV_GPU_PSTATE20_CLOCK_ENTRY_V1; NVAPI_MAX_GPU_PSTATE20_CLOCKS]>,
         /// Array of baseVoltage entries
         /// Valid index range is 0 to numBaseVoltages-1
-        pub baseVoltages: [NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1; NVAPI_MAX_GPU_PSTATE20_BASE_VOLTAGES],
+        pub baseVoltages: Array<[NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1; NVAPI_MAX_GPU_PSTATE20_BASE_VOLTAGES]>,
     }
 }
 
 nvstruct! {
     /// Used in NvAPI_GPU_GetPstates20() interface call.
     pub struct NV_GPU_PERF_PSTATES20_INFO_V1 {
-        /// Version info of the structure (NV_GPU_PERF_PSTATES20_INFO_VER<n>)
-        pub version: u32,
+        /// Version info of the structure (`NV_GPU_PERF_PSTATES20_INFO_VER<n>`)
+        pub version: NvVersion,
         pub bIsEditable: BoolU32,
         /// Number of populated pstates
         pub numPstates: u32,
@@ -263,7 +261,7 @@ nvstruct! {
         pub numBaseVoltages: u32,
         /// Performance state (P-State) settings
         /// Valid index range is 0 to numPstates-1
-        pub pstates: [NV_GPU_PERF_PSTATES20_PSTATE; NVAPI_MAX_GPU_PSTATE20_PSTATES],
+        pub pstates: Array<[NV_GPU_PERF_PSTATES20_PSTATE; NVAPI_MAX_GPU_PSTATE20_PSTATES]>,
     }
 }
 
@@ -275,26 +273,14 @@ nvstruct! {
         pub numVoltages: u32,
         /// OV settings - Please refer to NVIDIA over-volting recommendation to understand impact of this functionality
         /// Valid index range is 0 to numVoltages-1
-        pub voltages: [NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1; NVAPI_MAX_GPU_PSTATE20_BASE_VOLTAGES],
+        pub voltages: Array<[NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1; NVAPI_MAX_GPU_PSTATE20_BASE_VOLTAGES]>,
     }
 }
 nvinherit! { NV_GPU_PERF_PSTATES20_INFO_V2(v1: NV_GPU_PERF_PSTATES20_INFO_V1) }
 
-pub type NV_GPU_PERF_PSTATES20_INFO = NV_GPU_PERF_PSTATES20_INFO_V2;
-
-// ugh why can't I just use const fns
-const NV_GPU_PERF_PSTATES20_PARAM_DELTA_SIZE: usize = 4 * 3;
-const NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1_SIZE: usize = 3 * 4 + NV_GPU_PERF_PSTATES20_PARAM_DELTA_SIZE;
-const NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_SIZE: usize = 4 * 5;
-const NV_GPU_PERF_PSTATE20_CLOCK_ENTRY_V1_SIZE: usize = 4 * 3 + NV_GPU_PERF_PSTATES20_PARAM_DELTA_SIZE + NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_SIZE;
-const NV_GPU_PERF_PSTATES20_PSTATE_SIZE: usize = 4 * 2 + NV_GPU_PERF_PSTATE20_CLOCK_ENTRY_V1_SIZE * NVAPI_MAX_GPU_PSTATE20_CLOCKS + NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1_SIZE * NVAPI_MAX_GPU_PSTATE20_BASE_VOLTAGES;
-const NV_GPU_PERF_PSTATES20_INFO_V1_SIZE: usize = 4 * 5 + NV_GPU_PERF_PSTATES20_PSTATE_SIZE * NVAPI_MAX_GPU_PSTATE20_PSTATES;
-const NV_GPU_PERF_PSTATES20_INFO_V2_SIZE: usize = NV_GPU_PERF_PSTATES20_INFO_V1_SIZE + 4 + (NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1_SIZE) * NVAPI_MAX_GPU_PSTATE20_BASE_VOLTAGES;
-
-nvversion! { NV_GPU_PERF_PSTATES20_INFO_VER1(NV_GPU_PERF_PSTATES20_INFO_V1 = NV_GPU_PERF_PSTATES20_INFO_V1_SIZE, 1) }
-nvversion! { NV_GPU_PERF_PSTATES20_INFO_VER2(NV_GPU_PERF_PSTATES20_INFO_V2 = NV_GPU_PERF_PSTATES20_INFO_V2_SIZE, 2) }
-nvversion! { NV_GPU_PERF_PSTATES20_INFO_VER3(NV_GPU_PERF_PSTATES20_INFO_V2 = NV_GPU_PERF_PSTATES20_INFO_V2_SIZE, 3) }
-nvversion! { NV_GPU_PERF_PSTATES20_INFO_VER = NV_GPU_PERF_PSTATES20_INFO_VER3 }
+nvversion! { NV_GPU_PERF_PSTATES20_INFO_V1(1) }
+nvversion! { NV_GPU_PERF_PSTATES20_INFO_V2(2) }
+nvversion! { @=NV_GPU_PERF_PSTATES20_INFO NV_GPU_PERF_PSTATES20_INFO_V2(3) }
 
 nvapi! {
     pub type GPU_GetPstates20Fn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pPstatesInfo: *mut NV_GPU_PERF_PSTATES20_INFO) -> NvAPI_Status;
@@ -314,14 +300,137 @@ nvapi! {
     pub unsafe fn NvAPI_GPU_GetPstates20;
 }
 
+// Legacy PstatesInfo API (deprecated since R304, for Maxwell V1 / Kepler and earlier GPUs)
+// Structs per NVIDIA nvapi.h docs
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V1_CLOCK {
+        pub domainId: clock::NV_GPU_PUBLIC_CLOCK_ID,
+        pub flags: u32,
+        pub freq: u32,
+    }
+}
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V1_PSTATE {
+        pub pstateId: NV_GPU_PERF_PSTATE_ID,
+        pub flags: u32,
+        pub clocks: Array<[NV_GPU_PERF_PSTATES_INFO_V1_CLOCK; clock::NVAPI_MAX_GPU_PERF_CLOCKS]>,
+    }
+}
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V1 {
+        pub version: NvVersion,
+        pub flags: u32,
+        pub numPstates: u32,
+        pub numClocks: u32,
+        pub pstates: Array<[NV_GPU_PERF_PSTATES_INFO_V1_PSTATE; clock::NVAPI_MAX_GPU_PERF_PSTATES]>,
+    }
+}
+
+nvversion! { NV_GPU_PERF_PSTATES_INFO_V1(1) }
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V2_VOLTAGE {
+        pub domainId: NV_GPU_PERF_VOLTAGE_INFO_DOMAIN_ID,
+        pub flags: u32,
+        pub mvolt: u32,
+    }
+}
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V2_PSTATE {
+        pub pstateId: NV_GPU_PERF_PSTATE_ID,
+        pub flags: u32,
+        pub clocks: Array<[NV_GPU_PERF_PSTATES_INFO_V1_CLOCK; clock::NVAPI_MAX_GPU_PERF_CLOCKS]>,
+        pub voltages: Array<[NV_GPU_PERF_PSTATES_INFO_V2_VOLTAGE; clock::NVAPI_MAX_GPU_PERF_VOLTAGES]>,
+    }
+}
+
+nvstruct! {
+    pub struct NV_GPU_PERF_PSTATES_INFO_V2 {
+        pub version: NvVersion,
+        pub flags: u32,
+        pub numPstates: u32,
+        pub numClocks: u32,
+        pub numVoltages: u32,
+        pub pstates: Array<[NV_GPU_PERF_PSTATES_INFO_V2_PSTATE; clock::NVAPI_MAX_GPU_PERF_PSTATES]>,
+    }
+}
+
+nvversion! { NV_GPU_PERF_PSTATES_INFO_V2(2) }
+nvversion! { @=NV_GPU_PERF_PSTATES_INFO NV_GPU_PERF_PSTATES_INFO_V2(3) }
+
+nvapi! {
+    pub type GPU_GetPstatesInfoExFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, inputFlags: u32, pPerfPstatesInfo: *mut NV_GPU_PERF_PSTATES_INFO) -> NvAPI_Status;
+
+    pub unsafe fn NvAPI_GPU_GetPstatesInfoEx;
+}
+
+nvapi! {
+    pub type GPU_SetPstatesInfoFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, inputFlags: u32, pPerfPstatesInfo: *const NV_GPU_PERF_PSTATES_INFO) -> NvAPI_Status;
+
+    pub unsafe fn NvAPI_GPU_SetPstatesInfo;
+}
+
+nvapi! {
+    pub type GPU_EnableOverclockedPstatesFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle) -> NvAPI_Status;
+
+    /// Enable overclocked pstates (allow P0 to exceed factory clocks).
+    /// Kepler-era API; modern GPUs use VFP lock instead.
+    pub unsafe fn NvAPI_GPU_EnableOverclockedPstates;
+}
+
+nvapi! {
+    pub type GPU_EnableDynamicPstatesFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle) -> NvAPI_Status;
+
+    /// Enable dynamic pstate switching.
+    /// Kepler-era API; may return NotSupported on Pascal+.
+    pub unsafe fn NvAPI_GPU_EnableDynamicPstates;
+}
+
 /// Undocumented API
 pub mod private {
-    use crate::status::NvAPI_Status;
+    use crate::prelude_::*;
 
     nvapi! {
-        pub type GPU_SetPstates20Fn = extern "C" fn(hPhysicalGPU: super::NvPhysicalGpuHandle, pPstatesInfo: *const super::NV_GPU_PERF_PSTATES20_INFO) -> NvAPI_Status;
+        pub type GPU_SetPstates20Fn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pPstatesInfo: *const super::NV_GPU_PERF_PSTATES20_INFO) -> NvAPI_Status;
 
         /// Undocumented private API
         pub unsafe fn NvAPI_GPU_SetPstates20;
+    }
+
+    // Pstate client limits (Kepler-era, undocumented)
+    // Struct layout is reverse-engineered and may vary by driver version
+
+    nvstruct! {
+        pub struct NV_GPU_PSTATE_CLIENT_LIMIT {
+            pub pstateId: super::NV_GPU_PERF_PSTATE_ID,
+            pub minLevel: u32,
+            pub maxLevel: u32,
+        }
+    }
+
+    nvstruct! {
+        pub struct NV_GPU_PSTATE_CLIENT_LIMITS_V1 {
+            pub version: NvVersion,
+            pub numLimits: u32,
+            pub limits: Array<[NV_GPU_PSTATE_CLIENT_LIMIT; super::NVAPI_MAX_GPU_PSTATE20_PSTATES]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_PSTATE_CLIENT_LIMITS NV_GPU_PSTATE_CLIENT_LIMITS_V1(1) }
+
+    nvapi! {
+        pub type GPU_GetPstateClientLimitsFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pLimits: *mut NV_GPU_PSTATE_CLIENT_LIMITS) -> NvAPI_Status;
+
+        pub unsafe fn NvAPI_GPU_GetPstateClientLimits;
+    }
+
+    nvapi! {
+        pub type GPU_SetPstateClientLimitsFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pLimits: *const NV_GPU_PSTATE_CLIENT_LIMITS) -> NvAPI_Status;
+
+        pub unsafe fn NvAPI_GPU_SetPstateClientLimits;
     }
 }

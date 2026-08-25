@@ -1,10 +1,14 @@
-use std::{fmt, error};
+use crate::nvapi::NvAPI_GetErrorMessage;
+use crate::status_result;
 use std::convert::Infallible;
+use std::{error, fmt};
 
 nvenum! {
     /// NvAPI Status Values
     ///
     /// All NvAPI functions return one of these codes.
+    ///
+    /// As described in the [NVIDIA online documentation](https://docs.nvidia.com/gameworks/content/gameworkslibrary/coresdk/nvapi/group__nvapistatus.html)
     pub enum NvAPI_Status / Status {
         /// Success. Request is completed.
         NVAPI_OK / Ok = 0,
@@ -45,7 +49,7 @@ nvenum! {
         NVAPI_EXPECTED_PHYSICAL_GPU_HANDLE / ExpectedPhysicalGpuHandle = -101,
         /// Expected an NV display handle for one or more parameters
         NVAPI_EXPECTED_DISPLAY_HANDLE / ExpectedDisplayHandle = -102,
-        /// The combination of parameters is not valid. 
+        /// The combination of parameters is not valid.
         NVAPI_INVALID_COMBINATION / InvalidCombination = -103,
         /// Requested feature is not supported in the selected GPU
         NVAPI_NOT_SUPPORTED / NotSupported = -104,
@@ -53,7 +57,7 @@ nvenum! {
         NVAPI_PORTID_NOT_FOUND / PortidNotFound = -105,
         /// Expected an unattached display handle as one of the input parameters.
         NVAPI_EXPECTED_UNATTACHED_DISPLAY_HANDLE / ExpectedUnattachedDisplayHandle = -106,
-        /// Invalid perf level 
+        /// Invalid perf level
         NVAPI_INVALID_PERF_LEVEL / InvalidPerfLevel = -107,
         /// Device is busy; request not fulfilled
         NVAPI_DEVICE_BUSY / DeviceBusy = -108,
@@ -97,7 +101,7 @@ nvenum! {
         NVAPI_SYSWOW64_NOT_SUPPORTED / Syswow64NotSupported = -127,
         /// There is no implicit GPU topology active. Use NVAPI_SetHybridMode to change topology.
         NVAPI_IMPLICIT_SET_GPU_TOPOLOGY_CHANGE_NOT_ALLOWED / ImplicitSetGpuTopologyChangeNotAllowed = -128,
-        /// Prompt the user to close all non-migratable applications. 
+        /// Prompt the user to close all non-migratable applications.
         NVAPI_REQUEST_USER_TO_CLOSE_NON_MIGRATABLE_APPS / RequestUserToCloseNonMigratableApps = -129,
         /// Could not allocate sufficient memory to complete the call.
         NVAPI_OUT_OF_MEMORY / OutOfMemory = -130,
@@ -139,7 +143,7 @@ nvenum! {
         NVAPI_STEREO_FRUSTUM_ADJUST_MODE_NOT_SUPPORTED / StereoFrustumAdjustModeNotSupported = -148,
         /// The mosaic topology is not possible given the current state of the hardware.
         NVAPI_TOPO_NOT_POSSIBLE / TopoNotPossible = -149,
-        /// An attempt to do a display resolution mode change has failed. 
+        /// An attempt to do a display resolution mode change has failed.
         NVAPI_MODE_CHANGE_FAILED / ModeChangeFailed = -150,
         /// d3d11.dll/d3d11_beta.dll cannot be loaded.
         NVAPI_D3D11_LIBRARY_NOT_FOUND / D3d11LibraryNotFound = -151,
@@ -163,7 +167,7 @@ nvenum! {
         NVAPI_SETTING_NOT_FOUND / SettingNotFound = -160,
         /// Setting size is too large.
         NVAPI_SETTING_SIZE_TOO_LARGE / SettingSizeTooLarge = -161,
-        /// There are too many settings for a profile. 
+        /// There are too many settings for a profile.
         NVAPI_TOO_MANY_SETTINGS_IN_PROFILE / TooManySettingsInProfile = -162,
         /// Profile is not found.
         NVAPI_PROFILE_NOT_FOUND / ProfileNotFound = -163,
@@ -175,11 +179,11 @@ nvenum! {
         NVAPI_EXECUTABLE_NOT_FOUND / ExecutableNotFound = -166,
         /// Application already exists in the other profile.
         NVAPI_EXECUTABLE_ALREADY_IN_USE / ExecutableAlreadyInUse = -167,
-        /// Data Type mismatch 
+        /// Data Type mismatch
         NVAPI_DATATYPE_MISMATCH / DatatypeMismatch = -168,
         /// The profile passed as parameter has been removed and is no longer valid.
         NVAPI_PROFILE_REMOVED / ProfileRemoved = -169,
-        /// An unregistered resource was passed as a parameter. 
+        /// An unregistered resource was passed as a parameter.
         NVAPI_UNREGISTERED_RESOURCE / UnregisteredResource = -170,
         /// The DisplayId corresponds to a display which is not within the normal outputId range.
         NVAPI_ID_OUT_OF_RANGE / IdOutOfRange = -171,
@@ -187,7 +191,7 @@ nvenum! {
         NVAPI_DISPLAYCONFIG_VALIDATION_FAILED / DisplayconfigValidationFailed = -172,
         /// Display Port Multi-Stream topology has been changed.
         NVAPI_DPMST_CHANGED / DpmstChanged = -173,
-        /// Input buffer is insufficient to hold the contents. 
+        /// Input buffer is insufficient to hold the contents.
         NVAPI_INSUFFICIENT_BUFFER / InsufficientBuffer = -174,
         /// No access to the caller.
         NVAPI_ACCESS_DENIED / AccessDenied = -175,
@@ -211,7 +215,7 @@ nvenum! {
         NVAPI_DEFAULT_STEREO_PROFILE_DOES_NOT_EXIST / DefaultStereoProfileDoesNotExist = -184,
         /// A cluster is already defined with the given configuration.
         NVAPI_CLUSTER_ALREADY_EXISTS / ClusterAlreadyExists = -185,
-        /// The input display id is not that of a multi stream enabled connector or a display device in a multi stream topology 
+        /// The input display id is not that of a multi stream enabled connector or a display device in a multi stream topology
         NVAPI_DPMST_DISPLAY_ID_EXPECTED / DpmstDisplayIdExpected = -186,
         /// The input display id is not valid or the monitor associated to it does not support the current operation
         NVAPI_INVALID_DISPLAY_ID / InvalidDisplayId = -187,
@@ -221,13 +225,13 @@ nvenum! {
         NVAPI_INCOMPATIBLE_AUDIO_DRIVER / IncompatibleAudioDriver = -189,
         /// Value already set, setting again not allowed.
         NVAPI_VALUE_ALREADY_SET / ValueAlreadySet = -190,
-        /// Requested operation timed out 
+        /// Requested operation timed out
         NVAPI_TIMEOUT / Timeout = -191,
         /// The requested workstation feature set has incomplete driver internal allocation resources
         NVAPI_GPU_WORKSTATION_FEATURE_INCOMPLETE / GpuWorkstationFeatureIncomplete = -192,
         /// Call failed because InitActivation was not called.
         NVAPI_STEREO_INIT_ACTIVATION_NOT_DONE / StereoInitActivationNotDone = -193,
-        /// The requested action cannot be performed without Sync being enabled. 
+        /// The requested action cannot be performed without Sync being enabled.
         NVAPI_SYNC_NOT_ACTIVE / SyncNotActive = -194,
         /// The requested action cannot be performed without Sync Master being enabled.
         NVAPI_SYNC_MASTER_NOT_FOUND / SyncMasterNotFound = -195,
@@ -244,7 +248,7 @@ nvenum! {
         NVAPI_FIRMWARE_REVISION_NOT_SUPPORTED / FirmwareRevisionNotSupported = -200,
         /// The caller is not authorized to modify the License.
         NVAPI_LICENSE_CALLER_AUTHENTICATION_FAILED / LicenseCallerAuthenticationFailed = -201,
-        /// The user tried to use a deferred context without registering the device first 	 
+        /// The user tried to use a deferred context without registering the device first
         NVAPI_D3D_DEVICE_NOT_REGISTERED / D3dDeviceNotRegistered = -202,
         /// Head or SourceId was not reserved for the VR Display before doing the Modeset.
         NVAPI_RESOURCE_NOT_ACQUIRED / ResourceNotAcquired = -203,
@@ -254,7 +258,7 @@ nvenum! {
         NVAPI_HDCP_ENCRYPTION_FAILED / HdcpEncryptionFailed = -205,
         /// Provided mode is over sink device pclk limitation.
         NVAPI_PCLK_LIMITATION_FAILED / PclkLimitationFailed = -206,
-        /// No connector on GPU found. 
+        /// No connector on GPU found.
         NVAPI_NO_CONNECTOR_FOUND / NoConnectorFound = -207,
         /// When a non-HDCP capable HMD is connected, we would inform user by this code.
         NVAPI_HDCP_DISABLED / HdcpDisabled = -208,
@@ -276,23 +280,80 @@ nvenum! {
         NVAPI_INVALID_DIRECT_MODE_DISPLAY / InvalidDirectModeDisplay = -216,
         /// GPU is in debug mode, OC is NOT allowed.
         NVAPI_GPU_IN_DEBUG_MODE / GpuInDebugMode = -217,
+        /// No NvAPI context was found for this D3D object.
+        NVAPI_D3D_CONTEXT_NOT_FOUND / D3DContextNotFound = -218,
+        /// there is version mismatch between stereo driver and dx driver
+        NVAPI_STEREO_VERSION_MISMATCH / StereoVersionMismatch = -219,
+        /// GPU is not powered and so the request cannot be completed.
+        NVAPI_GPU_NOT_POWERED / GpuNotPowered = -220,
+        /// The display driver update in progress.
+        NVAPI_ERROR_DRIVER_RELOAD_IN_PROGRESS / DriverReloadInProgress = -221,
+        /// Wait for HW resources allocation.
+        NVAPI_WAIT_FOR_HW_RESOURCE / WaitForHwResource = -222,
+        /// operation requires further HDCP action
+        NVAPI_REQUIRE_FURTHER_HDCP_ACTION / RequireFurtherHdcpAction = -223,
+        /// Dynamic Mux transition failure.
+        NVAPI_DISPLAY_MUX_TRANSITION_FAILED / DisplayMuxTransitionFailed = -224,
+        /// Invalid DSC version.
+        NVAPI_INVALID_DSC_VERSION / InvalidDscVersion = -225,
+        /// Invalid DSC slice count.
+        NVAPI_INVALID_DSC_SLICECOUNT / InvalidDscSlicecount = -226,
+        /// Invalid DSC output BPP.
+        NVAPI_INVALID_DSC_OUTPUT_BPP / InvalidDscOutputBpp = -227,
+        /// There was an error while loading nvapi.dll from the driver store.
+        NVAPI_FAILED_TO_LOAD_FROM_DRIVER_STORE / FailedToLoadFromDriverStore = -228,
+        /// OpenGL does not export Vulkan fake extensions.
+        NVAPI_NO_VULKAN / NoVulkan = -229,
+        /// A request for NvTOPPs telemetry CData has already been made and is pending a response.
+        NVAPI_REQUEST_PENDING / RequestPending = -230,
+        /// Operation cannot be performed because the resource is in use.
+        NVAPI_RESOURCE_IN_USE / ResourceInUse = -231,
+        /// Device kernel image is invalid.
+        NVAPI_INVALID_IMAGE / InvalidImage = -232,
+        /// PTX JIT compilation failed.
+        NVAPI_INVALID_PTX / InvalidPtx = -233,
+        /// Uncorrectable NVLink error was detected during the execution.
+        NVAPI_NVLINK_UNCORRECTABLE / NvlinkUncorrectable = -234,
+        /// PTX JIT compiler library was not found.
+        NVAPI_JIT_COMPILER_NOT_FOUND / JitCompilerNotFound = -235,
+        /// Device kernel source is invalid.
+        NVAPI_INVALID_SOURCE / InvalidSource = -236,
+        /// While executing a kernel, the device encountered an illegal instruction.
+        NVAPI_ILLEGAL_INSTRUCTION / IllegalInstruction = -237,
+        /// While executing a kernel, the device program counter wrapped its address space.
+        NVAPI_INVALID_PC / InvalidPc = -238,
+        /// An exception occurred on the device while executing a kernel.
+        NVAPI_LAUNCH_FAILED / LaunchFailed = -239,
+        /// Attempted operation is not permitted.
+        NVAPI_NOT_PERMITTED / NotPermitted = -240,
+        /// The callback function has already been registered.
+        NVAPI_CALLBACK_ALREADY_REGISTERED / CallbackAlreadyRegistered = -241,
+        /// The callback function is not found or not registered.
+        NVAPI_CALLBACK_NOT_FOUND / CallbackNotFound = -242,
     }
 }
 
-impl error::Error for Status {
-    fn description(&self) -> &str {
-        "NVAPI Error"
+impl Status {
+    pub fn message(&self) -> crate::Result<String> {
+        let mut message = Default::default();
+        status_result(unsafe { NvAPI_GetErrorMessage(self.raw(), &mut message) })
+            .map(move |()| message.into())
     }
 }
+
+impl error::Error for Status {}
 
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
+        match &self.message() {
+            Ok(msg) => fmt::Display::fmt(msg, f),
+            Err(_) => fmt::Debug::fmt(self, f),
+        }
     }
 }
 
 impl From<Infallible> for Status {
     fn from(e: Infallible) -> Self {
-        match e { }
+        match e {}
     }
 }

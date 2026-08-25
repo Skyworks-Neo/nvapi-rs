@@ -1,5 +1,4 @@
-use crate::status::NvAPI_Status;
-use crate::handles::NvPhysicalGpuHandle;
+use crate::prelude_::*;
 
 nvenum! {
     pub enum NV_MONITOR_CONN_TYPE / MonitorConnectorType {
@@ -68,10 +67,9 @@ nvbits! {
 
 nvstruct! {
     pub struct NV_GPU_DISPLAYIDS {
-        pub version: u32,
+        pub version: NvVersion,
         /// out: vga, tv, dvi, hdmi and dp. This is reserved for future use and clients should not
-        /// rely on this information. Instead get the
-        /// GPU connector type from `NvAPI_GPU_GetConnectorInfo`/`NvAPI_GPU_GetConnectorInfoEx`
+        /// rely on this information.
         pub connectorType: NV_MONITOR_CONN_TYPE,
         /// this is a unique identifier for each device
         pub displayId: u32,
@@ -80,9 +78,8 @@ nvstruct! {
     }
 }
 
-nvversion! { NV_GPU_DISPLAYIDS_VER1(NV_GPU_DISPLAYIDS = 4 * 4, 1) }
-nvversion! { NV_GPU_DISPLAYIDS_VER2(NV_GPU_DISPLAYIDS = 4 * 4, 3) }
-nvversion! { NV_GPU_DISPLAYIDS_VER = NV_GPU_DISPLAYIDS_VER2 }
+nvversion! { NV_GPU_DISPLAYIDS(1) }
+nvversion! { @NV_GPU_DISPLAYIDS(3) }
 
 nvapi! {
     pub type GPU_GetConnectedDisplayIds = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pDisplayIds: *mut NV_GPU_DISPLAYIDS, pDisplayIdCount: *mut u32, flags: NV_GPU_CONNECTED_IDS_FLAG) -> NvAPI_Status;
@@ -119,4 +116,47 @@ nvapi! {
     ///
     /// - `NVAPI_INSUFFICIENT_BUFFER`: When the input buffer(pDisplayIds) is less than the actual number of display IDs
     pub unsafe fn NvAPI_GPU_GetAllDisplayIds;
+}
+
+nvstruct! {
+    pub struct NV_EDID_V1 {
+        pub version: NvVersion,
+        pub EDID_Data: Array<[u8; 256]>,
+    }
+}
+
+nvstruct! {
+    pub struct NV_EDID_V2 {
+        pub version: NvVersion,
+        pub EDID_Data: Array<[u8; 256]>,
+        pub sizeofEDID: u32,
+    }
+}
+
+nvstruct! {
+    pub struct NV_EDID_V3 {
+        pub version: NvVersion,
+        pub EDID_Data: Array<[u8; 256]>,
+        pub sizeofEDID: u32,
+        pub edidId: u32,
+        pub offset: u32,
+    }
+}
+
+nvversion! { NV_EDID_V1(1) }
+nvversion! { NV_EDID_V2(2) }
+nvversion! { @=NV_EDID NV_EDID_V3(3) }
+
+nvapi! {
+    pub type GPU_GetEDID = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, displayOutputId: u32, pEDID: *mut NV_EDID) -> NvAPI_Status;
+
+    /// Returns the EDID data for the specified GPU handle and display output ID.
+    pub unsafe fn NvAPI_GPU_GetEDID;
+}
+
+nvapi! {
+    pub type GPU_SetEDID = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, displayOutputId: u32, pEDID: *mut NV_EDID) -> NvAPI_Status;
+
+    /// Sets the EDID data for the specified GPU handle and display output ID.
+    pub unsafe fn NvAPI_GPU_SetEDID;
 }
