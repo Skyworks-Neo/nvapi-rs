@@ -423,9 +423,8 @@ impl PhysicalGpu {
         };
         // Same function ID as the V1 GetAllClocks; pass the V2 buffer via a
         // cast pointer (the driver reads the version tag to pick the layout).
-        let status = unsafe {
-            sys::api::NvAPI_GPU_GetAllClocks(self.0, ptr::from_mut(&mut data).cast())
-        };
+        let status =
+            unsafe { sys::api::NvAPI_GPU_GetAllClocks(self.0, ptr::from_mut(&mut data).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_GetAllClocks, status)
             .map_err(Into::into)
             .and_then(|_| {
