@@ -10,9 +10,9 @@
 //! Run: cargo run --release -p nvapi --example probe_perflevel3 [-- setvals...]
 
 use nvapi::initialize;
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::api::NvAPI_EnumPhysicalGPUs;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::nvapi_QueryInterface;
 
 type SetPerfLevel = unsafe extern "system" fn(NvPhysicalGpuHandle, i32) -> i32;
@@ -57,11 +57,37 @@ fn main() {
     read("P8");
 
     println!("== phase3: release-candidate sweep ==");
-    let args: Vec<i32> = std::env::args().skip(1).map(|a| a.parse().expect("i32")).collect();
+    let args: Vec<i32> = std::env::args()
+        .skip(1)
+        .map(|a| a.parse().expect("i32"))
+        .collect();
     let candidates: Vec<i32> = if args.is_empty() {
         vec![
-            5, 6, 7, 8, 9, 10, 12, 16, 17, 20, 32, 64, 100, 128, 255, 0x10000, 0x1000000,
-            -2, -4, -8, -16, -17, -255, i32::MIN, -1,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            12,
+            16,
+            17,
+            20,
+            32,
+            64,
+            100,
+            128,
+            255,
+            0x10000,
+            0x1000000,
+            -2,
+            -4,
+            -8,
+            -16,
+            -17,
+            -255,
+            i32::MIN,
+            -1,
         ]
     } else {
         args

@@ -2487,7 +2487,10 @@ pub mod private {
             assert_eq!(size_of::<NV_PERF_VFE_EQU_INFO>() - 4, 83992);
             assert_eq!(size_of::<NV_PERF_VFE_VAR_INFO>(), vfe_var_info::SIZE);
             assert_eq!(size_of::<NV_PERF_VFE_VAR_CONTROL>(), vfe_var_control::SIZE);
-            assert_eq!(size_of::<NV_PERF_VFE_EQU_CONTROL>(), vfe_equ_control::SIZE_MAX);
+            assert_eq!(
+                size_of::<NV_PERF_VFE_EQU_CONTROL>(),
+                vfe_equ_control::SIZE_MAX
+            );
         }
 
         /// equ-info: synthetic entry decode round-trip at the calibrated
@@ -2569,7 +2572,8 @@ pub mod private {
             put_u32(&mut s.rest, base + vfe_var_control::TYPE, 13);
             put_u32(&mut s.rest, base + vfe_var_control::PAYLOAD, 7);
             assert_eq!(s.entry_dwords(3, 2), Some(vec![13, 7]));
-            let over = (vfe_var_control::SIZE - vfe_var_control::ENTRIES) / vfe_var_control::STRIDE + 2;
+            let over =
+                (vfe_var_control::SIZE - vfe_var_control::ENTRIES) / vfe_var_control::STRIDE + 2;
             assert!(over > vfe_var_control::MAX_ENTRIES);
             assert_eq!(s.entry_dwords(over, 1), None);
         }
