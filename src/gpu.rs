@@ -1837,15 +1837,32 @@ impl PhysicalGpu {
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE,
         };
 
-        // NOTE: ~2.4 MB of zeroed buffers on the stack would overflow —
-        // box them.
-        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        // NOTE: ~2.4 MB of zeroed buffers would overflow the stack. Boxing
+        // alone is NOT enough: `Box::new(Big::default())` materializes the
+        // temporary on the caller's stack before the heap copy in debug
+        // builds (release inlines the construction straight into the box),
+        // which overflows a 1-2 MB main thread stack. Allocate zeroed and
+        // stamp the magic directly — both structs' Default is zeros + MAGIC.
+        let mut info = unsafe {
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+            let mut b = b.assume_init();
+            b.version =
+                NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+            b
+        };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
             .map_err(crate::Error::from)?;
 
-        let mut status = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE::default());
+        let mut status = unsafe {
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE>::new_zeroed();
+            let mut b = b.assume_init();
+            b.version = NvVersion::with_version(
+                NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE::MAGIC,
+            );
+            b
+        };
         info.seed_status_header(&mut status);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetStatus(self.0, ptr::from_mut(&mut *status).cast())
