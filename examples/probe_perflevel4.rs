@@ -7,9 +7,9 @@
 //! Run: cargo run --release -p nvapi --example probe_perflevel4
 
 use nvapi::initialize;
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::api::NvAPI_EnumPhysicalGPUs;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::nvapi_QueryInterface;
 
 type SetPowerMizerInfo = unsafe extern "system" fn(NvPhysicalGpuHandle, i32, i32, i32) -> i32;

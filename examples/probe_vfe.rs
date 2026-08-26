@@ -179,7 +179,10 @@ fn main() {
                     .filter(|(_, c)| c != &[0, 0, 0, 0])
                     .map(|(i, _)| i)
                     .collect();
-                println!("    mask: {set_bits} bits set in {} nonzero dwords (idx {nz_dwords:?})", nz_dwords.len());
+                println!(
+                    "    mask: {set_bits} bits set in {} nonzero dwords (idx {nz_dwords:?})",
+                    nz_dwords.len()
+                );
                 // entries @ +1092 stride 76 — count entries with type byte @+8 != 0
                 let mut typed = 0usize;
                 let mut first_entries: Vec<(usize, [u8; 24])> = Vec::new();
@@ -247,12 +250,7 @@ fn main() {
                     if e + 172 > buf.len() {
                         break;
                     }
-                    let t = u32::from_le_bytes([
-                        buf[e],
-                        buf[e + 1],
-                        buf[e + 2],
-                        buf[e + 3],
-                    ]);
+                    let t = u32::from_le_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]);
                     if t != 0 {
                         typed += 1;
                         if samples.len() < 6 {
@@ -300,8 +298,8 @@ fn main() {
                             let bits2: usize = m2
                                 .chunks_exact(4)
                                 .map(|c| {
-                                    u32::from_le_bytes([c[0], c[1], c[2], c[3]])
-                                        .count_ones() as usize
+                                    u32::from_le_bytes([c[0], c[1], c[2], c[3]]).count_ones()
+                                        as usize
                                 })
                                 .sum();
                             println!("      mask echo: {bits2} bits set");

@@ -12,9 +12,9 @@
 //! Run: cargo run --release -p nvapi --example probe_perflevel -- [values...]
 
 use nvapi::initialize;
+use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::api::NvAPI_EnumPhysicalGPUs;
 use nvapi::sys::handles::NvPhysicalGpuHandle;
-use nvapi::sys::NVAPI_MAX_PHYSICAL_GPUS;
 use nvapi::sys::nvapi_QueryInterface;
 
 fn main() {
@@ -40,11 +40,7 @@ fn main() {
         .skip(1)
         .map(|a| a.parse().expect("i32 arg"))
         .collect();
-    let values: Vec<i32> = if args.is_empty() {
-        vec![-1, 16]
-    } else {
-        args
-    };
+    let values: Vec<i32> = if args.is_empty() { vec![-1, 16] } else { args };
 
     for v in values {
         let st = unsafe { call(gpu, v) };

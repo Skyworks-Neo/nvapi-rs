@@ -175,4 +175,3 @@ mod log_tests {
         );
     }
 }
-
