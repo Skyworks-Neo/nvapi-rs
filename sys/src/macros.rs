@@ -286,10 +286,14 @@ macro_rules! nvapi {
         pub unsafe fn $fn($($arg: $arg_ty),*) -> $ret {
             static CACHE: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
 
-            match crate::nvapi::query_interface(crate::nvid::Api::$fn.id(), &CACHE) {
+            let res = match crate::nvapi::query_interface(crate::nvid::Api::$fn.id(), &CACHE) {
                 Ok(ptr) => ::std::mem::transmute::<usize, extern "C" fn($($arg: $arg_ty),*) -> $ret>(ptr)($($arg),*),
                 Err(e) => e.raw(),
+            };
+            #[cfg(feature = "log")] {
+                log::trace!(target: "nvapi_sys::api", "{:?} = {}", crate::nvid::Api::$fn, crate::status::Status::from_raw(res).map(|s| format!("{s:?}")).unwrap_or_else(|_| format!("raw({res})")));
             }
+            res
         }
     };
     (
