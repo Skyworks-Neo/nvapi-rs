@@ -2584,8 +2584,8 @@ impl PhysicalGpu {
     /// Returns the count of points written (present points patched), for
     /// caller-side diagnostics. `Ok(0)` means the family is present but
     /// the bank has no points (an empty GPU, e.g. during hot-remove).
-    pub fn reset_vfp_private(&self, bank: usize) -> crate::Result<usize> {
-        trace!("gpu.reset_vfp_private(bank={bank})");
+    pub fn reset_vfp_private(&self, bank: usize, only_mode: Option<u32>) -> crate::Result<usize> {
+        trace!("gpu.reset_vfp_private(bank={bank}, only_mode={only_mode:?})");
         use crate::sys::api::{
             NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
             NvAPI_GPU_ClockClkVfPointsSetControl,
@@ -2626,15 +2626,25 @@ impl PhysicalGpu {
             .map_err(crate::Error::from)?;
 
         // 3. Patch every PRESENT point to mode 0 / value 0 (clear override).
+        // `only_mode` restricts the clear to points currently in that mode
+        // (0 = absolute kHz, 1 = raw delta) — None clears BOTH (mode-1
+        // leftovers otherwise survive: writing mode 0/0 over a mode-1 point
+        // is the clear for either mode).
         // The record type byte (8 for bank 0, 6 for bank 1) is the
         // CONTROL-family user type, not the GetStatus type — same as the
         // single-point setter. `seed_masks_from_info` already set the mask
         // bits for present points, so we only need to patch the record body.
         let user_type = if bank == 0 { 8 } else { 6 };
         let mut written = 0usize;
+        let mut first_patched: Option<usize> = None;
         for idx in 0..clock::private::clk_vfp_control::POINTS {
             if !info.point_present(bank, idx).unwrap_or(false) {
                 continue;
+            }
+            if let Some(want) = only_mode {
+                if snapshot.mode(bank, idx).unwrap_or(0) != want {
+                    continue;
+                }
             }
             snapshot
                 .set_record_type(bank, idx, user_type)
@@ -2642,6 +2652,7 @@ impl PhysicalGpu {
             snapshot
                 .set_absolute(bank, idx, 0)
                 .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            first_patched.get_or_insert(idx);
             written += 1;
         }
 
@@ -2669,10 +2680,9 @@ impl PhysicalGpu {
             crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
                 .map_err(crate::Error::from)?;
 
-            // find the first present point and confirm mode==0, value==0
-            let first = (0..clock::private::clk_vfp_control::POINTS)
-                .find(|&idx| info.point_present(bank, idx).unwrap_or(false));
-            if let Some(idx) = first {
+            // find the first PATCHED point and confirm mode==0, value==0
+            // (with only_mode, untouched points keep their mode)
+            if let Some(idx) = first_patched {
                 let mode = verify.mode(bank, idx).unwrap_or(1);
                 let value = verify.value(bank, idx).unwrap_or(1);
                 if mode != 0 || value != 0 {

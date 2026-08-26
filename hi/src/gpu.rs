@@ -1064,19 +1064,24 @@ impl Gpu {
         }
     }
 
-    /// Reset every present V/F curve point on `bank` to default by clearing
-    /// its mode-0 (absolute kHz) override in a single private SetControl
-    /// RMW cycle (one GET → patch all present points to mode 0 / value 0 →
-    /// SET → readback). This is the only way to clear raw/converted mode-0
-    /// offsets written via `set_vfp_point_private(freq_mode=true)` or the
-    /// `set-vfp-range-private` default/--freq-mode path — the public
-    /// `reset_vfp` and `core_reset_vfp` route through the pstate20 / public
-    /// Client VfPoints families and cannot reach private mode-0 state.
+    /// Reset present V/F curve points on `bank` to default by clearing their
+    /// overrides in a single private SetControl RMW cycle (one GET → patch
+    /// to mode 0 / value 0 → SET → readback). `only_mode` restricts the
+    /// clear to points currently in that mode (0 = absolute kHz, 1 = raw
+    /// delta); `None` clears BOTH — mode-1 leftovers otherwise survive the
+    /// legacy mode-0-only reset. This is the only way to clear
+    /// raw/converted private offsets — the public `reset_vfp` and
+    /// `core_reset_vfp` route through the pstate20 / public Client VfPoints
+    /// families and cannot reach private state.
     ///
     /// Returns `Ok(Some(count))` with the number of points written, or
     /// `Ok(None)` where the private family is absent.
-    pub fn reset_vfp_private(&self, bank: usize) -> nvapi::Result<Option<usize>> {
-        match self.gpu.reset_vfp_private(bank) {
+    pub fn reset_vfp_private(
+        &self,
+        bank: usize,
+        only_mode: Option<u32>,
+    ) -> nvapi::Result<Option<usize>> {
+        match self.gpu.reset_vfp_private(bank, only_mode) {
             Ok(n) => Ok(Some(n)),
             Err(nvapi::Error::Nvapi(e))
                 if matches!(
