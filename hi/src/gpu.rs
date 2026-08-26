@@ -859,8 +859,17 @@ impl Gpu {
         }
     }
 
-    /// PPAB / Dynamic-Boost enable GET (0xC80068A1). Readback half of
-    /// `set_dynamic_boost`. `Ok(None)` where unsupported.
+    /// PCF platform dynamic-boost status GET (0xC80068A1).
+    ///
+    /// **NOT a readback of `set_dynamic_boost`'s effective PPAB state.**
+    /// R610.74 impl RE + live probe (2026-08-26, 4060 Laptop with PPAB
+    /// actively enforcing): the ID reads the PCF controller table
+    /// (`PCF_ControllerGetControl` 0x93456591, 32×100B records) and returns
+    /// `rec[0]==1 && rec[+60]!=2 && rec[+61]!=2`. The client SET (0x1504FC3D)
+    /// writes only `rec[+60]`; `rec[+61]` is a driver/platform byte. Live:
+    /// both bytes were 2 with PPAB on — the enforced PPAB policy does not
+    /// live in this PCF table on mobile. Treat as a separate platform
+    /// status surface. `Ok(None)` where unsupported.
     pub fn dynamic_boost_enabled(&self) -> nvapi::Result<Option<bool>> {
         match self.gpu.dynamic_boost_status() {
             Ok(active) => Ok(Some(active)),

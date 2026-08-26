@@ -4122,9 +4122,12 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_SetPowerMizerInfo(self.0, power_source, 3, mode)) }
     }
 
-    /// PPAB / Dynamic-Boost enable GET — `NvAPI_PCF_DynamicBoostGetStatus`
+    /// PCF platform dynamic-boost status — `NvAPI_PCF_DynamicBoostGetStatus`
     /// (0xc80068a1, RE'd R610.74: single `*mut bool` out, no GPU handle).
-    /// The readback half of the by-value SET (`set_dynamic_boost`).
+    /// Reads the PCF controller table (`rec[0]==1 && rec[+60]!=2 &&
+    /// rec[+61]!=2`); NOT the effective PPAB enable readback — live-probed
+    /// 2026-08-26: both status bytes read 2 with PPAB enforcing (see
+    /// examples/probe_pcf_dynamic_boost.rs).
     pub fn dynamic_boost_status(&self) -> crate::NvapiResult<bool> {
         trace!("gpu.dynamic_boost_status()");
         // The PCF table requires the private lifecycle init (0xAD298D3F

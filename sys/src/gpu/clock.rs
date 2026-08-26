@@ -2458,6 +2458,150 @@ pub mod private {
         }
     }
 
+    /// Layout regression tests for the PerfVfeEqu/Var family. The accessors
+    /// bounds-check against `rest.len()`, so these pin BOTH the live-tier
+    /// offsets and the "rest array must be exactly SIZE-4" allocation rule
+    /// (an oversized rest silently reads heap garbage — the bug that caused
+    /// the first equ-info decode to return pointers as names).
+    #[cfg(test)]
+    mod vfe_tests {
+        use super::*;
+
+        fn put_u16(rest: &mut [u8], abs: usize, v: u16) {
+            rest[abs - 4..abs - 2].copy_from_slice(&v.to_le_bytes());
+        }
+
+        fn put_u32(rest: &mut [u8], abs: usize, v: u32) {
+            rest[abs - 4..abs].copy_from_slice(&v.to_le_bytes());
+        }
+
+        /// rest arrays must be exactly SIZE-4 so `off()` bounds match the
+        /// allocation (see module doc above).
+        #[test]
+        fn vfe_rest_arrays_match_size() {
+            assert_eq!(
+                size_of::<NV_PERF_VFE_EQU_INFO>(),
+                vfe_equ_info::SIZE,
+                "EQU_INFO must be allocated at the live magic-83996 tier"
+            );
+            assert_eq!(size_of::<NV_PERF_VFE_EQU_INFO>() - 4, 83992);
+            assert_eq!(size_of::<NV_PERF_VFE_VAR_INFO>(), vfe_var_info::SIZE);
+            assert_eq!(size_of::<NV_PERF_VFE_VAR_CONTROL>(), vfe_var_control::SIZE);
+            assert_eq!(size_of::<NV_PERF_VFE_EQU_CONTROL>(), vfe_equ_control::SIZE_MAX);
+        }
+
+        /// equ-info: synthetic entry decode round-trip at the calibrated
+        /// offsets (entries @1244 stride 72, type@+8 name@+12 aux@+14
+        /// payload@+16), including a strided entry and out-of-range probes.
+        #[test]
+        fn vfe_equ_info_entry_decode() {
+            let mut s = Box::new(NV_PERF_VFE_EQU_INFO {
+                version: NvVersion::with_version(vfe_equ_info::MAGIC),
+                rest: [0; 83992],
+            });
+            for (i, (ty, name, aux)) in [(1u32, 0xFF0Bu16, 1u16), (3, 0x1711, 2)].iter().enumerate()
+            {
+                let base = vfe_equ_info::ENTRIES + vfe_equ_info::STRIDE * i;
+                put_u32(&mut s.rest, base + vfe_equ_info::TYPE, *ty);
+                put_u16(&mut s.rest, base + vfe_equ_info::NAME, *name);
+                put_u16(&mut s.rest, base + vfe_equ_info::AUX, *aux);
+                put_u32(&mut s.rest, base + vfe_equ_info::PAYLOAD, 0xDEAD_BEEF);
+            }
+            assert_eq!(s.entry_type(0), Some(1));
+            assert_eq!(s.entry_name(0), Some(0xFF0B));
+            assert_eq!(s.entry_aux(0), Some(1));
+            assert_eq!(s.entry_dwords(0, 1), Some(vec![0xDEAD_BEEF]));
+            assert_eq!(s.entry_type(1), Some(3));
+            assert_eq!(s.entry_name(1), Some(0x1711));
+            // stride is 72, not the earlier mis-read 76: entry 1's payload
+            // must not overlap entry 2's header
+            assert_eq!(s.entry_type(2), Some(0));
+            // beyond the allocation the accessor must refuse (None), never
+            // read past the buffer
+            let over = (vfe_equ_info::SIZE - vfe_equ_info::ENTRIES) / vfe_equ_info::STRIDE + 2;
+            assert!(over < vfe_equ_info::MAX_ENTRIES);
+            assert_eq!(s.entry_type(over), None);
+            // mask dword 0 @+4
+            put_u32(&mut s.rest, vfe_equ_info::MASK, 1 << 5 | 1 << 31);
+            assert_eq!(s.mask_bit(5), Some(true));
+            assert_eq!(s.mask_bit(31), Some(true));
+            assert_eq!(s.mask_bit(0), Some(false));
+            assert_eq!(s.mask_bit(vfe_equ_info::MAX_ENTRIES), None);
+        }
+
+        /// var-info: 22-bit mask + typed entries @72 stride 148.
+        #[test]
+        fn vfe_var_info_decode() {
+            let mut s = Box::new(NV_PERF_VFE_VAR_INFO {
+                version: NvVersion::with_version(vfe_var_info::MAGIC),
+                rest: [0; 70340],
+            });
+            put_u32(&mut s.rest, vfe_var_info::MASK, 0x003F_FFFF);
+            let base = vfe_var_info::ENTRIES + vfe_var_info::STRIDE * 5;
+            put_u32(&mut s.rest, base + vfe_var_info::TYPE, 13);
+            put_u32(&mut s.rest, base + vfe_var_info::PAYLOAD, 42);
+            assert_eq!(s.mask_bit(21), Some(true));
+            assert_eq!(s.mask_bit(22), Some(false));
+            assert_eq!(s.mask_bit(vfe_var_info::MAX_ENTRIES), None);
+            assert_eq!(s.entry_type(5), Some(13));
+            // entry_dwords starts AT the type dword (no +PAYLOAD gap here,
+            // unlike equ-info) — dwords[0] is the type
+            assert_eq!(s.entry_dwords(5, 2), Some(vec![13, 42]));
+            // the tier's byte capacity (70344B) exceeds 255×148 records —
+            // MAX_ENTRIES is the driver's record limit, not the buffer's
+            let over = (vfe_var_info::SIZE - vfe_var_info::ENTRIES) / vfe_var_info::STRIDE + 2;
+            assert!(over > vfe_var_info::MAX_ENTRIES);
+            assert_eq!(s.entry_type(over), None);
+        }
+
+        /// var-control: count u32 @+8, seed mask u32 @+4, records @76
+        /// stride 88.
+        #[test]
+        fn vfe_var_control_decode() {
+            let mut s = Box::new(NV_PERF_VFE_VAR_CONTROL {
+                version: NvVersion::with_version(vfe_var_control::MAGIC),
+                rest: [0; 68296],
+            });
+            put_u32(&mut s.rest, vfe_var_control::COUNT, 70);
+            s.seed_mask(0xFFFF);
+            assert_eq!(s.count(), Some(70));
+            let base = vfe_var_control::ENTRIES + vfe_var_control::STRIDE * 3;
+            put_u32(&mut s.rest, base + vfe_var_control::TYPE, 13);
+            put_u32(&mut s.rest, base + vfe_var_control::PAYLOAD, 7);
+            assert_eq!(s.entry_dwords(3, 2), Some(vec![13, 7]));
+            let over = (vfe_var_control::SIZE - vfe_var_control::ENTRIES) / vfe_var_control::STRIDE + 2;
+            assert!(over > vfe_var_control::MAX_ENTRIES);
+            assert_eq!(s.entry_dwords(over, 1), None);
+        }
+
+        /// equ-control: mask seeding round-trip (IN mask the driver echoes
+        /// expanded). Entry decode stays raw/tentative — only bounds pinned.
+        /// The 1.4 MB struct is heap-zeroed directly (a literal Box::new
+        /// would build it on the stack first and overflow).
+        #[test]
+        fn vfe_equ_control_mask_seed() {
+            let mut s = {
+                assert_eq!(size_of::<NV_PERF_VFE_EQU_CONTROL>(), 4 + 1410112);
+                let layout = std::alloc::Layout::new::<NV_PERF_VFE_EQU_CONTROL>();
+                let ptr =
+                    unsafe { std::alloc::alloc_zeroed(layout) as *mut NV_PERF_VFE_EQU_CONTROL };
+                assert!(!ptr.is_null());
+                let mut s = unsafe { Box::from_raw(ptr) };
+                s.version = NvVersion::with_version(vfe_equ_control::MAGIC_MIN);
+                s
+            };
+            s.seed_mask_dwords(&[0x8000_0000, 1]);
+            assert_eq!(s.mask_bit(31), Some(true));
+            assert_eq!(s.mask_bit(32), Some(true));
+            assert_eq!(s.mask_bit(0), Some(false));
+            assert_eq!(s.mask_bit(8192), None);
+            s.seed_mask_bits(3);
+            for i in 0..3 {
+                assert_eq!(s.mask_bit(i), Some(true));
+            }
+        }
+    }
+
     nvapi! {
         /// Private PerfVfeEqu GET_INFO (ID 0x8D49471C, RM 0x2080A0B5).
         /// Returns the equation-directory mask + per-entry type/name.
