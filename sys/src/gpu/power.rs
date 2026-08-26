@@ -697,37 +697,45 @@ pub mod private {
     }
 
     // ------------------------------------------------------------------
-    // NVCP "电源模式" (PowerMizer / PerfLevel) — the Adaptive/Maximum
-    // Performance dropdown in NVIDIA Control Panel. Three APIs all
-    // live-RESOLVED on R610.74:
-    //   GetPowerMizerInfo  0x76bfa16b — GET struct (layout TBD; probe first)
-    //   SetPowerMizerInfo  0x50016c78 — SET struct
-    //   SetPerfLevel       0x75dd3e6a — scalar setter (like DynamicBoost):
-    //     fn(NvPhysicalGpuHandle, u32 level) where 0=Adaptive, 1=MaxPerf, 2=Auto
-    // SetPerfLevel is the simplest path and likely what NVCP actually uses.
+    // PowerMizer (NVCP "电源模式" dropdown) is a SEPARATE family from
+    // SetPerfLevel. On R610.74:
+    //   GetPowerMizerInfo  0x76bfa16b — 4-arg GET, mode ∈ {6,7}, escape 0x700003A op=3
+    //   SetPowerMizerInfo  0x50016c78 — 4-arg SET, escape 0x700003A op=2
+    //   SetPerfLevel       0x75dd3e6a — NOT a power-mode dropdown (2026-08-26
+    //     correction, user-measured + live-verified): it is an ADMIN-FREE
+    //     pstate lock. `fn(hGpu, level)` where level INDEXES the GPU's real
+    //     available P-States (4060 Laptop: 0=P8, 1=P5, 2=P4, 3=P3, 4=P0 —
+    //     NOT a fixed enum; other GPUs expose different P-State sets).
+    //     Impl @0x1802B2260 sends RM escape 0x7000040 (0x38B workbuf,
+    //     hGpu@+0x30, level@+0x34). RM accepts ONLY valid indices — a full
+    //     live sweep (-1, -16, -255, 5..255, 65536, 0x1000000, i32::MIN …)
+    //     all return NVAPI_ERROR, so there is NO release argument (neither
+    //     -1 nor the SetForcePstate sentinel 16).
+    //     The lock survives reset-force-pstate, elevated reset-pstate-native
+    //     (PerfClientLimits clear), EnableDynamicPstates(0) and
+    //     SetPowerMizerInfo — a 4th independent lock store; only a driver
+    //     reload/reboot clears it. Re-locking another index DOES re-target
+    //     (last call wins). The nominal GET companion 0x77D8F573 (escape
+    //     0x7000042) returns a constant (1,1,0) regardless of locked level
+    //     and is NOT a level readback.
     // ------------------------------------------------------------------
 
-    nvenum! {
-        /// NVCP "电源模式" power-mode selector (the Control Panel's
-        /// Adaptive / Prefer Maximum Performance dropdown).
-        pub enum NV_GPU_PERF_LEVEL / PowerLevel {
-            NV_GPU_PERF_LEVEL_ADAPTIVE / Adaptive = 0,
-            NV_GPU_PERF_LEVEL_MAX / MaxPerformance = 1,
-            NV_GPU_PERF_LEVEL_AUTO / Auto = 2,
-        }
-    }
-
-    nvenum_display! {
-        PowerLevel => {
-            Adaptive = "Adaptive",
-            MaxPerformance = "Maximum Performance",
-            Auto = "Auto-select",
-        }
-    }
-
     nvapi! {
-        /// NVCP power-mode SET (the "电源模式" dropdown). Scalar setter:
-        /// `fn(hGpu, level)` where 0=Adaptive, 1=Maximum Performance, 2=Auto.
+        /// Admin-free pstate lock (escape 0x7000040). `level` is an INDEX
+        /// into the GPU's actual available P-State list (see
+        /// `PerfPstatesGetInfoPrivate` / get-pstate-native) — NOT a fixed
+        /// enum. On the 4060 Laptop (P3/P4/P5/P8 + P0) the user-measured
+        /// mapping is 0=P8, 1=P5, 2=P4, 3=P3, 4=P0, but other GPUs expose a
+        /// different P-State set and the index means "the Nth of THIS GPU's
+        /// P-States". RM accepts only valid indices — a full live sweep
+        /// (-1, -16, 5..255, 65536, 0x1000000, i32::MIN …) all return
+        /// NVAPI_ERROR, so there is NO release argument. The lock survives
+        /// reset-force-pstate, elevated reset-pstate-native
+        /// (PerfClientLimits clear), EnableDynamicPstates(0) and
+        /// SetPowerMizerInfo — only a driver reload/reboot clears it.
+        /// Re-locking another index DOES re-target (last call wins). The
+        /// nominal GET companion 0x77D8F573 (escape 0x7000042) returns a
+        /// constant (1,1,0) regardless of locked level and is NOT a readback.
         pub unsafe fn NvAPI_GPU_SetPerfLevel(hPhysicalGPU: NvPhysicalGpuHandle, level: u32) -> NvAPI_Status;
     }
 

@@ -840,10 +840,11 @@ impl Gpu {
 
     /// PowerMizer mode GET readback (0x76BFA16B, 4-arg RE'd R610.74).
     /// `power_source` 1|2. Returns the public mode ∈ {6,7}, or `Ok(None)`
-    /// where unsupported. This is the readback the `SetPerfLevel`-based
-    /// power-level SET never had. The SET twin (`SetPowerMizerInfo`
-    /// 0x50016C78) is deliberately NOT surfaced here — it targets the same
-    /// NVCP dropdown as the already-wrapped set-perf-level path.
+    /// where unsupported. NOTE (2026-08-26 correction): `SetPerfLevel`
+    /// 0x75DD3E6A is NOT this dropdown's SET — it is an admin-free pstate
+    /// lock (see `set_pstate_lock`). The SET twin (`SetPowerMizerInfo`
+    /// 0x50016C78) is deliberately NOT surfaced here — no user need
+    /// identified for it.
     pub fn power_mizer_mode(&self, power_source: u32) -> nvapi::Result<Option<u32>> {
         match self.gpu.power_mizer_info(power_source) {
             Ok(mode) => Ok(Some(mode)),

@@ -4092,12 +4092,20 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ClientThermalTargetSetStatus(self.0, &data)) }
     }
 
-    /// NVCP "电源模式" (Adaptive / Maximum Performance) — the Control
-    /// Panel dropdown. Uses `NvAPI_GPU_SetPerfLevel` (0x75dd3e6a).
-    /// 0=Adaptive, 1=Maximum Performance, 2=Auto.
-    pub fn set_perf_level(&self, level: power::private::PowerLevel) -> crate::NvapiResult<()> {
-        trace!("gpu.set_perf_level({level:?})");
-        unsafe { nvcall!(NvAPI_GPU_SetPerfLevel(self.0, level as u32)) }
+    /// Admin-free pstate lock via `NvAPI_GPU_SetPerfLevel` (0x75dd3e6a,
+    /// escape 0x7000040). 2026-08-26 correction — NOT the NVCP power-mode
+    /// dropdown: `level` is an INDEX into the GPU's actual available
+    /// P-State list (see `pstate_levels` / get-pstate-native), not a fixed
+    /// enum — on the 4060 Laptop (P3/P4/P5/P8+P0) the measured mapping is
+    /// 0=P8, 1=P5, 2=P4, 3=P3, 4=P0, but other GPUs expose a different
+    /// P-State set. No release argument exists (RM accepts only valid
+    /// indices; -1/16 and every other value return NVAPI_ERROR), the lock
+    /// survives reset-force-pstate / reset-pstate-native /
+    /// EnableDynamicPstates(0) / SetPowerMizerInfo, and only a driver
+    /// reload/reboot clears it. Re-locking another index re-targets.
+    pub fn set_pstate_lock(&self, level: u32) -> crate::NvapiResult<()> {
+        trace!("gpu.set_pstate_lock({level})");
+        unsafe { nvcall!(NvAPI_GPU_SetPerfLevel(self.0, level)) }
     }
 
     /// NVCP "电源模式" GET — reads the current PowerMizer mode via
