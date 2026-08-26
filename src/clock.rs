@@ -375,6 +375,90 @@ pub struct ClockDomainControl {
     pub entries: Vec<ClkDomainControlEntry>,
 }
 
+/// One PerfVfeEqu GetInfo directory entry (ID 0x8D49471C). Type names the
+/// RM equation kind (live 4060L: 3); `name` is the RM 16-bit identifier
+/// (live: 0xFF0B, 0x2413, 0x2514 …); `dwords` carries the raw payload head.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfeEquInfoEntry {
+    pub index: u32,
+    pub entry_type: u32,
+    pub name: u16,
+    pub aux: u16,
+    /// raw payload dwords after type/name (first 8)
+    pub dwords: Vec<u32>,
+}
+
+/// PerfVfeEqu GetInfo result: the equation mask (set bits = present
+/// equations) plus decoded entries.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfeEquInfo {
+    /// indices with mask bit set (0..8191)
+    pub mask_bits: Vec<u32>,
+    pub entries: Vec<VfeEquInfoEntry>,
+}
+
+/// One PerfVfeEqu GetControl entry (ID 0x4C75C9FE) — raw-decoded; the
+/// per-type field marshalling is not yet live-calibrated.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfeEquControlEntry {
+    pub index: u32,
+    pub type_raw: u32,
+    /// raw payload dwords from entry start (first 8)
+    pub dwords: Vec<u32>,
+}
+
+/// PerfVfeEqu GetControl result.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfeEquControl {
+    /// echoed (driver-expanded) readable-set mask indices
+    pub mask_bits: Vec<u32>,
+    pub entries: Vec<VfeEquControlEntry>,
+}
+
+/// One PerfVfeVar GetInfo entry (ID 0xB9DA41D6). Type tag per IDA:
+/// 2/3/5/7/8/9/10/11/13/15/17/18.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfeVarInfoEntry {
+    pub index: u32,
+    pub entry_type: i32,
+    /// raw payload dwords from entry start (first 8)
+    pub dwords: Vec<u32>,
+}
+
+/// PerfVfeVar GetInfo result.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfeVarInfo {
+    /// indices with mask bit set (0..255)
+    pub mask_bits: Vec<u32>,
+    pub entries: Vec<VfeVarInfoEntry>,
+}
+
+/// One PerfVfeVar GetControl entry (ID 0x5D387298) — raw-decoded
+/// (160-byte user records; layout partially calibrated).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfeVarControlEntry {
+    pub index: u32,
+    /// raw payload dwords from record start (first 8)
+    pub dwords: Vec<u32>,
+}
+
+/// PerfVfeVar GetControl result.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfeVarControl {
+    /// header count-ish u32 @+8 (live 0x46)
+    pub count: u32,
+    /// entries whose first dwords are nonzero
+    pub entries: Vec<VfeVarControlEntry>,
+}
+
 /// Physical clock measurement from MEASURE_FREQ (RM 0x20809006, ID
 /// 0xFB8F61EC). Windows returns raw {counter, timestamp}, NOT the article's
 /// direct kHz; the medium layer samples twice and computes

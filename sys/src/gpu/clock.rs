@@ -2097,4 +2097,405 @@ pub mod private {
         /// patch a copy, SET, read back, restore on mismatch.
         pub unsafe fn NvAPI_GPU_ClockClkVfPointsSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE) -> NvAPI_Status;
     }
+
+    // --- PerfVfeEqu / PerfVfeVar family (escape 0x070001C6) ----------------
+    //
+    // IDA + live RE'd 2026-08-26 on R610.74 nvapi64_impl.dll. This is the
+    // THIRD V/F edit surface, distinct from the public VfPoints (0x07000049)
+    // and the private ClockClient V/F-POINTS (0x2080906x): it exposes the RM
+    // voltage-frequency EQUATIONS (Equ) and VARIABLES (Var) that generate the
+    // curve, not the resulting points.
+    //
+    // All 6 IDs: `fn(hGpu, versioned-struct*)` — arg1 is the PHYSICAL GPU
+    // handle (`!a1 -> -101`), NOT a domain selector. Escape buffer 0x100440;
+    // hGpu @ dword[12]; RM cmd @ dword[13]. SETs are elevation-gated
+    // (sub_18038FE40 -> -104 without admin).
+
+    /// Byte offsets for PerfVfeEquGetInfo (ID 0x8D49471C, RM 0x2080A0B5).
+    ///
+    /// IDA sub_1802AB410: accepted magics {83996, 209092, 221508, 885828};
+    /// the handler ALWAYS works in the 885828 (0xD8444) layout internally
+    /// (0x98444 = 623684 bytes), so callers should pass 885828 directly.
+    /// The 256-dword (8192-bit) mask is pure OUTPUT (driver fills it); info
+    /// entries at +1100, stride 76: type u32 @+0, name u16 @+4 (live 4060L:
+    /// type 3, names like 0xFF0B/0x2413/0x2514), extras @+34/+36 by type.
+    /// Live-verified 2026-08-26: 367 mask bits, 29 typed entries.
+    pub mod vfe_equ_info {
+        /// live-verified magic (0x1481C) — the layout constants below are
+        /// calibrated against THIS tier; larger tiers (209092/221508/885828)
+        /// use different internal offsets, do not blindly re-stamp
+        pub const MAGIC: u32 = 83996;
+        /// total struct size for MAGIC
+        pub const SIZE: usize = 83996;
+        /// 256-dword output mask (bits 0..8191)
+        pub const MASK: usize = 4;
+        pub const MASK_LEN: usize = 1024;
+        /// first entry base (absolute; live-calibrated 4060L R610.74: record
+        /// 0 sits at 0x4DC — the earlier 76-stride reading was a
+        /// sampling-drift artifact, consecutive records are 72B apart)
+        pub const ENTRIES: usize = 1244;
+        /// per-entry stride
+        pub const STRIDE: usize = 72;
+        /// entry+8: u32 type (nonzero = present; live 1/2/3)
+        pub const TYPE: usize = 8;
+        /// entry+12: u16 RM name id (live 0xFF0B / 0x2413 / 0x2514 …)
+        pub const NAME: usize = 12;
+        /// entry+14: u16 aux (live 1/2)
+        pub const AUX: usize = 14;
+        /// raw payload dwords start
+        pub const PAYLOAD: usize = 16;
+        pub const MAX_ENTRIES: usize = 8192;
+    }
+
+    nvstruct! {
+        /// PerfVfeEquGetInfo block (ID 0x8D49471C). Live-verified magic
+        /// 83996 (0x1481C); the rest array MUST stay SIZE-4 so the accessor
+        /// bounds check matches the actual allocation. GET-only.
+        pub struct NV_PERF_VFE_EQU_INFO {
+            pub version: NvVersion,
+            /// +4..83996: mask@+4, entries@+1244 stride 72
+            pub rest: [u8; 83992],
+        }
+    }
+
+    /// Byte offsets for PerfVfeEquGetControl / SetControl (IDs 0x4C75C9FE /
+    /// 0x68B798C4, RM 0x2080A0B6 / 0x2080E0B7).
+    ///
+    /// IDA sub_1802AA9C0: accepted magics {85016, 209092, 221508, 352580,
+    /// 1410116} are CAPACITY classes of the same layout. The 256-dword mask
+    /// at +4 is INPUT (copied into the escape; entries are returned for set
+    /// bits) and echoed back EXPANDED to the readable set (live: seeded 64
+    /// bits -> 480-bit echo). Entries at +1136 stride 172, type u32 @+0.
+    /// Live-verified 2026-08-26 with magic 85016.
+    pub mod vfe_equ_control {
+        /// largest-capacity magic (0x1584C4, 1410116 bytes)
+        pub const MAGIC_MAX: u32 = 1410116;
+        /// smallest magic (0x14C18, 85016 bytes) — live-verified fallback
+        pub const MAGIC_MIN: u32 = 85016;
+        /// total struct size for MAGIC_MAX
+        pub const SIZE_MAX: usize = 1410116;
+        /// in/out entry-selection mask (256 dwords)
+        pub const MASK: usize = 4;
+        pub const MASK_LEN: usize = 1024;
+        /// entries base, stride 172
+        pub const ENTRIES: usize = 1136;
+        pub const STRIDE: usize = 172;
+        /// entry+0: u32 type tag (1/2/3/6/7 per IDA)
+        pub const TYPE: usize = 0;
+    }
+
+    nvstruct! {
+        /// PerfVfeEqu GetControl/SetControl block. Sized for the largest
+        /// capacity magic 1410116 (0x1584C4); re-stamp `version` with 85016
+        /// to fall back to the smaller live-verified capacity (487 entries).
+        pub struct NV_PERF_VFE_EQU_CONTROL {
+            pub version: NvVersion,
+            /// +4..1410116: mask@+4, entries@+1136 stride 172
+            pub rest: [u8; 1410112],
+        }
+    }
+
+    /// Byte offsets for PerfVfeVarGetInfo (ID 0xB9DA41D6, RM 0x2080A0B1).
+    ///
+    /// IDA sub_1802AD1C0: accepted magics {70344, 70600, 489736, 3118440};
+    /// the handler works in the 3118440 (0x2F9568-magic) layout = 0x2B9568
+    /// (2856296) bytes: 32-byte mask (256 bits) @+4, byte @+36, then up to
+    /// 255 entries of 11200 bytes each starting at +36. Per-entry type tag
+    /// @entry+296 (types 2/3/5/7/8/9/10/11/13/15/17/18), name bytes near
+    /// +1916/+1917, deep sub-record arrays at +1920.. (20-byte elements).
+    pub mod vfe_var_info {
+        /// live-verified magic (0x112C8) — layout below calibrated against
+        /// THIS tier on 4060L R610.74; larger tiers use different offsets
+        pub const MAGIC: u32 = 70344;
+        /// total struct size for MAGIC
+        pub const SIZE: usize = 70344;
+        /// u32 output mask @+4 (live 0x003FFFFF = 22 bits)
+        pub const MASK: usize = 4;
+        pub const MASK_LEN: usize = 32;
+        /// entries base (absolute; live record 0 @0x48)
+        pub const ENTRIES: usize = 72;
+        /// per-entry stride (live 0x94)
+        pub const STRIDE: usize = 148;
+        /// entry+0: u32 type tag (live 13)
+        pub const TYPE: usize = 0;
+        /// raw payload dwords start
+        pub const PAYLOAD: usize = 4;
+        pub const MAX_ENTRIES: usize = 255;
+    }
+
+    nvstruct! {
+        /// PerfVfeVarGetInfo block (ID 0xB9DA41D6). Live-verified magic
+        /// 70344 (0x112C8); rest MUST stay SIZE-4 so bounds checks match
+        /// the allocation. GET-only.
+        pub struct NV_PERF_VFE_VAR_INFO {
+            pub version: NvVersion,
+            /// +4..70344: mask@+4, entries@+72 stride 148
+            pub rest: [u8; 70340],
+        }
+    }
+
+    /// Byte offsets for PerfVfeVarGetControl / SetControl (IDs 0x5D387298 /
+    /// 0x79FA23A2, RM 0x2080A0B3 / 0x2080E0B0).
+    ///
+    /// Accepted magics {68300 (0x10ACC), 171976 (0x29FC8)} — capacity
+    /// classes; the layout below is calibrated against 68300 (the other
+    /// tier differs — do not blindly re-stamp). Header: magic @+0, input
+    /// mask u32 @+4, u32 record count @+8 (live 0x46=70). Records from
+    /// +0x4C stride 0x58=88: {u32 type (live 13), float-ish payload}.
+    pub mod vfe_var_control {
+        /// live-verified magic (0x10ACC)
+        pub const MAGIC: u32 = 68300;
+        /// total struct size for MAGIC
+        pub const SIZE: usize = 68300;
+        /// u32 record count @+8
+        pub const COUNT: usize = 8;
+        /// input mask u32 @+4 (bits select entries)
+        pub const MASK: usize = 4;
+        /// entries base (absolute; live record 0 @0x4C)
+        pub const ENTRIES: usize = 76;
+        /// per-entry stride (live 0x58)
+        pub const STRIDE: usize = 88;
+        /// entry+0: u32 type tag
+        pub const TYPE: usize = 0;
+        /// raw payload dwords start
+        pub const PAYLOAD: usize = 4;
+        pub const MAX_ENTRIES: usize = 255;
+    }
+
+    nvstruct! {
+        /// PerfVfeVar GetControl/SetControl block. Sized for the
+        /// live-verified magic 68300 (0x10ACC); rest MUST stay SIZE-4.
+        pub struct NV_PERF_VFE_VAR_CONTROL {
+            pub version: NvVersion,
+            /// +4..68300: header, entries @+76 stride 88
+            pub rest: [u8; 68296],
+        }
+    }
+
+    impl NV_PERF_VFE_EQU_INFO {
+        fn off(&self, abs: usize, len: usize) -> Option<usize> {
+            let off = abs.checked_sub(4)?;
+            if off + len <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
+        }
+
+        fn u32_at(&self, abs: usize) -> Option<u32> {
+            let o = self.off(abs, 4)?;
+            Some(u32::from_le_bytes(self.rest[o..o + 4].try_into().ok()?))
+        }
+
+        fn u16_at(&self, abs: usize) -> Option<u16> {
+            let o = self.off(abs, 2)?;
+            Some(u16::from_le_bytes(self.rest[o..o + 2].try_into().ok()?))
+        }
+
+        /// Output mask bit `i` (0..8191).
+        pub fn mask_bit(&self, i: usize) -> Option<bool> {
+            if i >= vfe_equ_info::MAX_ENTRIES {
+                return None;
+            }
+            let dword = self.u32_at(vfe_equ_info::MASK + 4 * (i >> 5))?;
+            Some(dword & (1u32 << (i & 31)) != 0)
+        }
+
+        /// Entry type u32 (nonzero = present) for entry `i`.
+        pub fn entry_type(&self, i: usize) -> Option<u32> {
+            self.u32_at(vfe_equ_info::ENTRIES + vfe_equ_info::STRIDE * i + vfe_equ_info::TYPE)
+        }
+
+        /// Entry name u16 for entry `i`.
+        pub fn entry_name(&self, i: usize) -> Option<u16> {
+            self.u16_at(vfe_equ_info::ENTRIES + vfe_equ_info::STRIDE * i + vfe_equ_info::NAME)
+        }
+
+        /// Entry aux u16 for entry `i`.
+        pub fn entry_aux(&self, i: usize) -> Option<u16> {
+            self.u16_at(vfe_equ_info::ENTRIES + vfe_equ_info::STRIDE * i + vfe_equ_info::AUX)
+        }
+
+        /// First `n` dwords of entry `i` (raw payload beyond type/name/aux).
+        pub fn entry_dwords(&self, i: usize, n: usize) -> Option<Vec<u32>> {
+            let base = vfe_equ_info::ENTRIES + vfe_equ_info::STRIDE * i + vfe_equ_info::PAYLOAD;
+            (0..n).map(|k| self.u32_at(base + 4 * k)).collect()
+        }
+    }
+
+    impl NV_PERF_VFE_EQU_CONTROL {
+        fn off_mut(&mut self, abs: usize, len: usize) -> Option<usize> {
+            let off = abs.checked_sub(4)?;
+            if off + len <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
+        }
+
+        fn u32_at(&self, abs: usize) -> Option<u32> {
+            let off = abs.checked_sub(4)?;
+            if off + 4 > self.rest.len() {
+                return None;
+            }
+            Some(u32::from_le_bytes(self.rest[off..off + 4].try_into().ok()?))
+        }
+
+        /// Seed the input mask from a GetInfo mask (call before GET_CONTROL).
+        pub fn seed_mask_dwords(&mut self, dwords: &[u32]) {
+            for (i, &d) in dwords.iter().take(256).enumerate() {
+                if let Some(o) = self.off_mut(vfe_equ_control::MASK + 4 * i, 4) {
+                    self.rest[o..o + 4].copy_from_slice(&d.to_le_bytes());
+                }
+            }
+        }
+
+        /// Seed the first `bits` mask bits (bits 0..bits-1).
+        pub fn seed_mask_bits(&mut self, bits: usize) {
+            for i in 0..bits.min(8192) {
+                let dword = i >> 5;
+                if let Some(o) = self.off_mut(vfe_equ_control::MASK + 4 * dword, 4) {
+                    let mut d =
+                        u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]));
+                    d |= 1u32 << (i & 31);
+                    self.rest[o..o + 4].copy_from_slice(&d.to_le_bytes());
+                }
+            }
+        }
+
+        /// Mask echo bit `i`.
+        pub fn mask_bit(&self, i: usize) -> Option<bool> {
+            if i >= 8192 {
+                return None;
+            }
+            let dword = self.u32_at(vfe_equ_control::MASK + 4 * (i >> 5))?;
+            Some(dword & (1u32 << (i & 31)) != 0)
+        }
+
+        /// Entry type u32 for entry `i`.
+        pub fn entry_type(&self, i: usize) -> Option<u32> {
+            self.u32_at(vfe_equ_control::ENTRIES + vfe_equ_control::STRIDE * i)
+        }
+
+        /// First `n` dwords of entry `i`.
+        pub fn entry_dwords(&self, i: usize, n: usize) -> Option<Vec<u32>> {
+            let base = vfe_equ_control::ENTRIES + vfe_equ_control::STRIDE * i;
+            (0..n).map(|k| self.u32_at(base + 4 * k)).collect()
+        }
+    }
+
+    impl NV_PERF_VFE_VAR_INFO {
+        fn off(&self, abs: usize, len: usize) -> Option<usize> {
+            let off = abs.checked_sub(4)?;
+            if off + len <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
+        }
+
+        fn u32_at(&self, abs: usize) -> Option<u32> {
+            let o = self.off(abs, 4)?;
+            Some(u32::from_le_bytes(self.rest[o..o + 4].try_into().ok()?))
+        }
+
+        /// Output mask bit `i` (0..255).
+        pub fn mask_bit(&self, i: usize) -> Option<bool> {
+            if i >= vfe_var_info::MAX_ENTRIES {
+                return None;
+            }
+            let dword = self.u32_at(vfe_var_info::MASK + 4 * (i >> 5))?;
+            Some(dword & (1u32 << (i & 31)) != 0)
+        }
+
+        /// Entry type i32 @entry+0 for entry `i` (0 = absent; live 13).
+        pub fn entry_type(&self, i: usize) -> Option<i32> {
+            self.u32_at(vfe_var_info::ENTRIES + vfe_var_info::STRIDE * i + vfe_var_info::TYPE)
+                .map(|v| v as i32)
+        }
+
+        /// First `n` dwords of entry `i` (raw payload).
+        pub fn entry_dwords(&self, i: usize, n: usize) -> Option<Vec<u32>> {
+            let base = vfe_var_info::ENTRIES + vfe_var_info::STRIDE * i;
+            (0..n).map(|k| self.u32_at(base + 4 * k)).collect()
+        }
+    }
+
+    impl NV_PERF_VFE_VAR_CONTROL {
+        fn u32_at(&self, abs: usize) -> Option<u32> {
+            let off = abs.checked_sub(4)?;
+            if off + 4 > self.rest.len() {
+                return None;
+            }
+            Some(u32::from_le_bytes(self.rest[off..off + 4].try_into().ok()?))
+        }
+
+        fn off_mut(&mut self, abs: usize, len: usize) -> Option<usize> {
+            let off = abs.checked_sub(4)?;
+            if off + len <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
+        }
+
+        /// Header count-ish u32 @+8 (live 0x46).
+        pub fn count(&self) -> Option<u32> {
+            self.u32_at(vfe_var_control::COUNT)
+        }
+
+        /// Seed the input mask u32 @+4.
+        pub fn seed_mask(&mut self, mask: u32) {
+            if let Some(o) = self.off_mut(vfe_var_control::MASK, 4) {
+                self.rest[o..o + 4].copy_from_slice(&mask.to_le_bytes());
+            }
+        }
+
+        /// Entry `i` first `n` dwords (raw; base +160 stride 160 tentative).
+        pub fn entry_dwords(&self, i: usize, n: usize) -> Option<Vec<u32>> {
+            let base = vfe_var_control::ENTRIES + vfe_var_control::STRIDE * i;
+            (0..n).map(|k| self.u32_at(base + 4 * k)).collect()
+        }
+    }
+
+    nvapi! {
+        /// Private PerfVfeEqu GET_INFO (ID 0x8D49471C, RM 0x2080A0B5).
+        /// Returns the equation-directory mask + per-entry type/name.
+        /// WORKS live on Ada 4060 Laptop (magic 83996): 367 mask bits,
+        /// 239 typed entries @+1244 stride 72.
+        pub unsafe fn NvAPI_GPU_PerfVfeEquGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_PERF_VFE_EQU_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private PerfVfeEqu GET_CONTROL (ID 0x4C75C9FE, RM 0x2080A0B6).
+        /// Seed the mask from GetInfo first; the driver echoes the readable
+        /// set expanded. WORKS live on Ada 4060 Laptop (magic 85016).
+        pub unsafe fn NvAPI_GPU_PerfVfeEquGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_PERF_VFE_EQU_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private PerfVfeEqu SET_CONTROL (ID 0x68B798C4, RM 0x2080E0B7).
+        /// DANGEROUS voltage-equation write, elevation-gated (-104 without
+        /// admin). Not exposed beyond the medium layer.
+        pub unsafe fn NvAPI_GPU_PerfVfeEquSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_PERF_VFE_EQU_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private PerfVfeVar GET_INFO (ID 0xB9DA41D6, RM 0x2080A0B1).
+        /// Returns the variable-directory mask + per-entry type.
+        pub unsafe fn NvAPI_GPU_PerfVfeVarGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_PERF_VFE_VAR_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private PerfVfeVar GET_CONTROL (ID 0x5D387298, RM 0x2080A0B3).
+        /// WORKS live on Ada 4060 Laptop (magic 68300).
+        pub unsafe fn NvAPI_GPU_PerfVfeVarGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_PERF_VFE_VAR_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private PerfVfeVar SET_CONTROL (ID 0x79FA23A2, RM 0x2080E0B0).
+        /// DANGEROUS variable write, elevation-gated. Not exposed beyond the
+        /// medium layer.
+        pub unsafe fn NvAPI_GPU_PerfVfeVarSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_PERF_VFE_VAR_CONTROL) -> NvAPI_Status;
+    }
 }

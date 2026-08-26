@@ -838,6 +838,222 @@ impl Gpu {
         }
     }
 
+    /// PowerMizer mode GET readback (0x76BFA16B, 4-arg RE'd R610.74).
+    /// `power_source` 1|2. Returns the public mode ∈ {6,7}, or `Ok(None)`
+    /// where unsupported. This is the readback the `SetPerfLevel`-based
+    /// power-level SET never had. The SET twin (`SetPowerMizerInfo`
+    /// 0x50016C78) is deliberately NOT surfaced here — it targets the same
+    /// NVCP dropdown as the already-wrapped set-perf-level path.
+    pub fn power_mizer_mode(&self, power_source: u32) -> nvapi::Result<Option<u32>> {
+        match self.gpu.power_mizer_info(power_source) {
+            Ok(mode) => Ok(Some(mode)),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// PPAB / Dynamic-Boost enable GET (0xC80068A1). Readback half of
+    /// `set_dynamic_boost`. `Ok(None)` where unsupported.
+    pub fn dynamic_boost_enabled(&self) -> nvapi::Result<Option<bool>> {
+        match self.gpu.dynamic_boost_status() {
+            Ok(active) => Ok(Some(active)),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// Temperature-simulation GET (`NvAPI_GPU_GetThermalSimulationMode`):
+    /// returns `(enable, temperature_celsius)`. Requires the driver's
+    /// "Secured Overrides" `<Temp faking allowed>` — `Ok(None)` where
+    /// unsupported.
+    pub fn temp_sim(&self) -> nvapi::Result<Option<(bool, i32)>> {
+        match self.gpu.temp_sim() {
+            Ok(state) => Ok(Some(state)),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// Temperature-simulation SET (Extended 0x9AA35E43 → basic 0x8CD42541
+    /// fallback). DANGEROUS research tool — fakes the GPU temperature the
+    /// driver sees. Requires the same Secured-Overrides gate; `Ok(None)`
+    /// where unsupported.
+    pub fn set_temp_sim(&self, temperature_celsius: i32) -> nvapi::Result<Option<()>> {
+        match self.gpu.set_temp_sim(temperature_celsius) {
+            Ok(()) => Ok(Some(())),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// Temperature-simulation disable (restore the real sensor reading).
+    /// `Ok(None)` where unsupported.
+    pub fn disable_temp_sim(&self) -> nvapi::Result<Option<()>> {
+        match self.gpu.disable_temp_sim() {
+            Ok(()) => Ok(Some(())),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// Core-voltage control-object read (0xA91F88EB, escape 0x07000045) —
+    /// the GET half of the [`set_core_voltage_control`] RMW pair.
+    pub fn core_voltage_control(&self) -> nvapi::Result<Option<u32>> {
+        match self.gpu.core_voltage_control() {
+            Ok(v) => Ok(Some(v)),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// Core-voltage control SET (0xDC2BD4A6, escape 0x07000044). A voltage
+    /// SET path DISTINCT from the VoltVoltRails µV-offset and
+    /// ClientVoltRails percent families. Elevation-gated. `Ok(None)` where
+    /// unsupported.
+    pub fn set_core_voltage_control(&self, value: u32) -> nvapi::Result<Option<()>> {
+        match self.gpu.set_core_voltage_control(value) {
+            Ok(()) => Ok(Some(())),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// PMGR voltage-request arbiter GET (0x717648FD, escape 0x0700019F).
+    /// Returns the 11 raw v2 arbiter dwords, or `Ok(None)` where
+    /// unsupported.
+    pub fn pmgr_voltage_arbiter(&self) -> nvapi::Result<Option<[u32; 11]>> {
+        match self.gpu.pmgr_voltage_arbiter() {
+            Ok(values) => Ok(Some(values)),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// PMGR voltage-request arbiter SET (0x9C4BB8D0). Elevation-gated.
+    pub fn set_pmgr_voltage_arbiter(&self, values: &[u32; 11]) -> nvapi::Result<Option<()>> {
+        match self.gpu.set_pmgr_voltage_arbiter(values) {
+            Ok(()) => Ok(Some(())),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// Rated-TDP readback trio (0xED2BEA09 / 0x87BD35EF / 0xFCBDF642).
+    /// Returns `(control_mode, info_capabilities, status_raw[10])`, or
+    /// `Ok(None)` where unsupported.
+    pub fn rated_tdp_readback(&self) -> nvapi::Result<Option<(u32, u8, [u32; 10])>> {
+        match self.gpu.rated_tdp_readback() {
+            Ok(v) => Ok(Some(v)),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// Query the last INCOMPLETE OC-scanner run (0xBE371D0A). Companion to
+    /// [`PhysicalGpu::oem_oc_scanner_status`]. `Ok(None)` where
+    /// unsupported.
+    pub fn oem_oc_scanner_incomplete_results(&self) -> nvapi::Result<Option<()>> {
+        match self.gpu.oem_oc_scanner_incomplete_results() {
+            Ok(()) => Ok(Some(())),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
+    /// Enable/disable the background OC scanner (0x06DC7CE8, 72B struct
+    /// 0x10048 with the validated feature GUID).
+    pub fn oem_oc_scanner_set_background(&self, enable: bool) -> nvapi::Result<Option<()>> {
+        match self.gpu.oem_oc_scanner_set_background(enable) {
+            Ok(()) => Ok(Some(())),
+            Err(ref e)
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(nvapi::Error::Nvapi(e)),
+        }
+    }
+
     /// Reset every present V/F curve point on `bank` to default by clearing
     /// its mode-0 (absolute kHz) override in a single private SetControl
     /// RMW cycle (one GET → patch all present points to mode 0 / value 0 →
@@ -852,6 +1068,76 @@ impl Gpu {
     pub fn reset_vfp_private(&self, bank: usize) -> nvapi::Result<Option<usize>> {
         match self.gpu.reset_vfp_private(bank) {
             Ok(n) => Ok(Some(n)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// PerfVfeEqu GET_INFO (0x8D49471C) — the RM voltage-frequency EQUATION
+    /// directory (mask + per-entry type/name). The third V/F surface,
+    /// distinct from public and private VfPoints. `Ok(None)` where absent.
+    pub fn vfe_equ_info(&self) -> nvapi::Result<Option<nvapi::VfeEquInfo>> {
+        match self.gpu.vfe_equ_info() {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// PerfVfeEqu GET_CONTROL (0x4C75C9FE) — equation control block with
+    /// GetInfo-seeded mask (driver echoes the readable set expanded).
+    /// `Ok(None)` where absent.
+    pub fn vfe_equ_control(&self) -> nvapi::Result<Option<nvapi::VfeEquControl>> {
+        match self.gpu.vfe_equ_control() {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// PerfVfeVar GET_INFO (0xB9DA41D6) — the RM V/F VARIABLE directory.
+    /// `Ok(None)` where absent.
+    pub fn vfe_var_info(&self) -> nvapi::Result<Option<nvapi::VfeVarInfo>> {
+        match self.gpu.vfe_var_info() {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// PerfVfeVar GET_CONTROL (0x5D387298) — variable control block
+    /// (raw-decoded 160-byte records). `Ok(None)` where absent.
+    pub fn vfe_var_control(&self) -> nvapi::Result<Option<nvapi::VfeVarControl>> {
+        match self.gpu.vfe_var_control() {
+            Ok(v) => Ok(Some(v)),
             Err(nvapi::Error::Nvapi(e))
                 if matches!(
                     e.status,

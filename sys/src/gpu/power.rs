@@ -764,21 +764,23 @@ pub mod private {
 
     nvapi! {
         /// Direct core-voltage read (0x58337FA3 @0x1801C9CE0):
-        /// `fn(selector: u32, *value: u32)`.
-        pub unsafe fn NvAPI_GPU_GetCoreVoltage(selector: u32, pValue: *mut u32) -> NvAPI_Status;
+        /// `fn(hGpu, *value: u32)` — the GPU handle lands in escape +0x28.
+        /// (Live-verified: a non-handle first arg returns
+        /// NVAPI_EXPECTED_PHYSICAL_GPU_HANDLE.)
+        pub unsafe fn NvAPI_GPU_GetCoreVoltage(hPhysicalGPU: NvPhysicalGpuHandle, pValue: *mut u32) -> NvAPI_Status;
     }
 
     nvapi! {
         /// Core-voltage control-object read (0xA91F88EB @0x1801C9E30):
-        /// `fn(selector: u32, *value: u32)` — same shape, escape 0x07000045.
-        pub unsafe fn NvAPI_GPU_GetCoreVoltageControl(selector: u32, pValue: *mut u32) -> NvAPI_Status;
+        /// `fn(hGpu, *value: u32)` — same shape, escape 0x07000045.
+        pub unsafe fn NvAPI_GPU_GetCoreVoltageControl(hPhysicalGPU: NvPhysicalGpuHandle, pValue: *mut u32) -> NvAPI_Status;
     }
 
     nvapi! {
         /// Core-voltage control SET (0xDC2BD4A6 @0x1801CB300):
-        /// `fn(selector: u32, value: u32)` — both packed into the 56-byte
-        /// escape (0x07000044). Elevation-gated (-104 without admin).
-        pub unsafe fn NvAPI_GPU_SetCoreVoltageControl(selector: u32, value: u32) -> NvAPI_Status;
+        /// `fn(hGpu, value: u32)` — both packed into the 56-byte escape
+        /// (0x07000044). Elevation-gated (-104 without admin).
+        pub unsafe fn NvAPI_GPU_SetCoreVoltageControl(hPhysicalGPU: NvPhysicalGpuHandle, value: u32) -> NvAPI_Status;
     }
 
     // ------------------------------------------------------------------
@@ -806,13 +808,13 @@ pub mod private {
     nvapi! {
         /// PMGR voltage-request arbiter GET (0x717648FD @0x1801C9F80):
         /// `fn(gpuSelector: u32, pVals)` — escape 0x0700019F with get-flag 0.
-        pub unsafe fn NvAPI_GPU_GetPMGRVoltageRequestArbiterValues(gpuSelector: u32, pValues: *mut NV_PMGR_VOLTAGE_ARBITER_VALUES) -> NvAPI_Status;
+        pub unsafe fn NvAPI_GPU_GetPMGRVoltageRequestArbiterValues(hPhysicalGPU: NvPhysicalGpuHandle, pValues: *mut NV_PMGR_VOLTAGE_ARBITER_VALUES) -> NvAPI_Status;
     }
 
     nvapi! {
         /// PMGR voltage-request arbiter SET (0x9C4BB8D0 @0x1801CB480):
         /// same signature, escape get/set flag 1. Elevation-gated (-104).
-        pub unsafe fn NvAPI_GPU_SetPMGRVoltageRequestArbiterValues(gpuSelector: u32, pValues: *const NV_PMGR_VOLTAGE_ARBITER_VALUES) -> NvAPI_Status;
+        pub unsafe fn NvAPI_GPU_SetPMGRVoltageRequestArbiterValues(hPhysicalGPU: NvPhysicalGpuHandle, pValues: *const NV_PMGR_VOLTAGE_ARBITER_VALUES) -> NvAPI_Status;
     }
 
     nvapi! {

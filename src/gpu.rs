@@ -2567,6 +2567,221 @@ impl PhysicalGpu {
         Ok(written)
     }
 
+    // --- PerfVfeEqu / PerfVfeVar family (escape 0x070001C6) ----------------
+    //
+    // The THIRD V/F edit surface: RM voltage-frequency EQUATIONS (Equ) and
+    // VARIABLES (Var). GETs live-verified on Ada 4060 Laptop / R610.74
+    // (probe_vfe example); SETs are elevation-gated and stay at this layer.
+
+    /// PerfVfeEqu GET_INFO (ID 0x8D49471C, RM 0x2080A0B5): equation
+    /// directory — mask + per-entry type/name. No input seeding needed.
+    pub fn vfe_equ_info(&self) -> crate::Result<crate::clock::VfeEquInfo> {
+        trace!("gpu.vfe_equ_info()");
+        use crate::sys::api::NvAPI_GPU_PerfVfeEquGetInfo;
+        use clock::private::{vfe_equ_info, NV_PERF_VFE_EQU_INFO};
+
+        let mut buf = vec![0u8; vfe_equ_info::SIZE];
+        buf[0..4].copy_from_slice(&vfe_equ_info::MAGIC.to_le_bytes());
+        let st = unsafe { NvAPI_GPU_PerfVfeEquGetInfo(self.0, buf.as_mut_ptr().cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_PerfVfeEquGetInfo, st)
+            .map_err(crate::Error::from)?;
+        let s: &NV_PERF_VFE_EQU_INFO = unsafe { &*buf.as_ptr().cast() };
+
+        let mut out = crate::clock::VfeEquInfo::default();
+        for i in 0..vfe_equ_info::MAX_ENTRIES {
+            if s.mask_bit(i).unwrap_or(false) {
+                out.mask_bits.push(i as u32);
+            }
+            if let Some(t) = s.entry_type(i).filter(|&t| t != 0) {
+                out.entries.push(crate::clock::VfeEquInfoEntry {
+                    index: i as u32,
+                    entry_type: t,
+                    name: s.entry_name(i).unwrap_or(0),
+                    aux: s.entry_aux(i).unwrap_or(0),
+                    dwords: s.entry_dwords(i, 8).unwrap_or_default(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// PerfVfeEqu GET_CONTROL (ID 0x4C75C9FE, RM 0x2080A0B6). Seeds the
+    /// input mask from GetInfo (proper cascade), falls back to seeding the
+    /// first 64 bits if info fails. Tries the largest capacity magic first,
+    /// then the live-verified smaller one.
+    pub fn vfe_equ_control(&self) -> crate::Result<crate::clock::VfeEquControl> {
+        trace!("gpu.vfe_equ_control()");
+        use crate::sys::api::NvAPI_GPU_PerfVfeEquGetControl;
+        use clock::private::{vfe_equ_control, vfe_equ_info, NV_PERF_VFE_EQU_CONTROL};
+
+        let info = self.vfe_equ_info().ok();
+        let mut buf = vec![0u8; vfe_equ_control::SIZE_MAX];
+        // helper view over the raw buffer
+        macro_rules! view {
+            ($b:expr) => {
+                unsafe { &*($b.as_ptr().cast::<NV_PERF_VFE_EQU_CONTROL>()) }
+            };
+        }
+
+        for &magic in &[vfe_equ_control::MAGIC_MAX, vfe_equ_control::MAGIC_MIN] {
+            buf.iter_mut().for_each(|b| *b = 0);
+            buf[0..4].copy_from_slice(&magic.to_le_bytes());
+            {
+                let s: &mut NV_PERF_VFE_EQU_CONTROL =
+                    unsafe { &mut *buf.as_mut_ptr().cast() };
+                match &info {
+                    Some(i) => {
+                        // seed mask dwords from GetInfo's mask
+                        for dword in 0..256u32 {
+                            let bit_source = (0..32).any(|b| {
+                                let idx = dword * 32 + b;
+                                idx < vfe_equ_info::MAX_ENTRIES as u32
+                                    && i.mask_bits.contains(&(dword * 32 + b))
+                            });
+                            let v = if bit_source { u32::MAX } else { 0 };
+                            let abs = vfe_equ_control::MASK + 4 * dword as usize;
+                            if abs >= 4 && abs - 4 + 4 <= s.rest.len() {
+                                s.rest[abs - 4..abs].copy_from_slice(&v.to_le_bytes());
+                            }
+                        }
+                    }
+                    None => {
+                        let s2: &mut NV_PERF_VFE_EQU_CONTROL =
+                            unsafe { &mut *buf.as_mut_ptr().cast() };
+                        s2.seed_mask_bits(64);
+                    }
+                }
+            }
+            let st = unsafe { NvAPI_GPU_PerfVfeEquGetControl(self.0, buf.as_mut_ptr().cast()) };
+            if crate::status_result(sys::Api::NvAPI_GPU_PerfVfeEquGetControl, st).is_ok() {
+                let s = view!(buf);
+                let mut out = crate::clock::VfeEquControl::default();
+                for i in 0..8192usize {
+                    if s.mask_bit(i).unwrap_or(false) {
+                        out.mask_bits.push(i as u32);
+                    }
+                    if let Some(t) = s.entry_type(i).filter(|&t| t != 0) {
+                        out.entries.push(crate::clock::VfeEquControlEntry {
+                            index: i as u32,
+                            type_raw: t,
+                            dwords: s.entry_dwords(i, 8).unwrap_or_default(),
+                        });
+                    }
+                }
+                return Ok(out);
+            }
+            // remember last status for error propagation
+            if magic == vfe_equ_control::MAGIC_MIN {
+                crate::status_result(sys::Api::NvAPI_GPU_PerfVfeEquGetControl, st)
+                    .map_err(crate::Error::from)?;
+            }
+        }
+        Err(crate::Error::Nvapi(crate::NvapiError::new(
+            sys::Api::NvAPI_GPU_PerfVfeEquGetControl,
+            Status::NotSupported,
+        )))
+    }
+
+    /// PerfVfeEqu SET_CONTROL (ID 0x68B798C4) — DANGEROUS equation write,
+    /// elevation-gated. Takes a prepared control block (snapshot from a
+    /// GetControl buffer re-read via this method's buffer conventions).
+    /// Only for privileged tooling; not exposed to hi/core/CLI.
+    pub fn set_vfe_equ_control_raw(
+        &self,
+        block: &[u8],
+    ) -> crate::Result<()> {
+        trace!("gpu.set_vfe_equ_control_raw(len={})", block.len());
+        use crate::sys::api::NvAPI_GPU_PerfVfeEquSetControl;
+        if block.len() < 4 || block.len() > clock::private::vfe_equ_control::SIZE_MAX {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let st = unsafe {
+            NvAPI_GPU_PerfVfeEquSetControl(self.0, block.as_ptr().cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_PerfVfeEquSetControl, st)
+            .map_err(crate::Error::from)?;
+        Ok(())
+    }
+
+    /// PerfVfeVar GET_INFO (ID 0xB9DA41D6, RM 0x2080A0B1): variable
+    /// directory — 256-bit mask + per-entry type. Uses the live-verified
+    /// 70344 tier (larger tiers use different internal offsets).
+    pub fn vfe_var_info(&self) -> crate::Result<crate::clock::VfeVarInfo> {
+        trace!("gpu.vfe_var_info()");
+        use crate::sys::api::NvAPI_GPU_PerfVfeVarGetInfo;
+        use clock::private::{vfe_var_info, NV_PERF_VFE_VAR_INFO};
+
+        let mut buf = vec![0u8; vfe_var_info::SIZE];
+        buf[0..4].copy_from_slice(&vfe_var_info::MAGIC.to_le_bytes());
+        let st = unsafe { NvAPI_GPU_PerfVfeVarGetInfo(self.0, buf.as_mut_ptr().cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_PerfVfeVarGetInfo, st)
+            .map_err(crate::Error::from)?;
+        let s: &NV_PERF_VFE_VAR_INFO = unsafe { &*buf.as_ptr().cast() };
+
+        let mut out = crate::clock::VfeVarInfo::default();
+        for i in 0..vfe_var_info::MAX_ENTRIES {
+            if s.mask_bit(i).unwrap_or(false) {
+                out.mask_bits.push(i as u32);
+            }
+            if let Some(t) = s.entry_type(i).filter(|&t| t != 0) {
+                out.entries.push(crate::clock::VfeVarInfoEntry {
+                    index: i as u32,
+                    entry_type: t,
+                    dwords: s.entry_dwords(i, 8).unwrap_or_default(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// PerfVfeVar GET_CONTROL (ID 0x5D387298, RM 0x2080A0B3). Uses the
+    /// live-verified 68300 tier: mask 0xFFFF seed (first 16 entries),
+    /// count @+8, 88-byte records from +0x4C.
+    pub fn vfe_var_control(&self) -> crate::Result<crate::clock::VfeVarControl> {
+        trace!("gpu.vfe_var_control()");
+        use crate::sys::api::NvAPI_GPU_PerfVfeVarGetControl;
+        use clock::private::{vfe_var_control, NV_PERF_VFE_VAR_CONTROL};
+
+        let mut buf = vec![0u8; vfe_var_control::SIZE];
+        buf[0..4].copy_from_slice(&vfe_var_control::MAGIC.to_le_bytes());
+        buf[4..8].copy_from_slice(&0xFFFF_u32.to_le_bytes());
+        let st = unsafe { NvAPI_GPU_PerfVfeVarGetControl(self.0, buf.as_mut_ptr().cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_PerfVfeVarGetControl, st)
+            .map_err(crate::Error::from)?;
+        let s: &NV_PERF_VFE_VAR_CONTROL = unsafe { &*buf.as_ptr().cast() };
+        let count = s.count().unwrap_or(0);
+        let mut out = crate::clock::VfeVarControl {
+            count,
+            entries: Vec::new(),
+        };
+        // records are dense from +0x4C, `count` of them (live 70)
+        let n = (count as usize).min(vfe_var_control::MAX_ENTRIES);
+        for i in 0..n {
+            let dwords = s.entry_dwords(i, 8).unwrap_or_default();
+            if dwords.iter().any(|&d| d != 0) {
+                out.entries.push(crate::clock::VfeVarControlEntry {
+                    index: i as u32,
+                    dwords,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// PerfVfeVar SET_CONTROL (ID 0x79FA23A2) — DANGEROUS variable write,
+    /// elevation-gated. Only for privileged tooling.
+    pub fn set_vfe_var_control_raw(&self, block: &[u8]) -> crate::Result<()> {
+        trace!("gpu.set_vfe_var_control_raw(len={})", block.len());
+        use crate::sys::api::NvAPI_GPU_PerfVfeVarSetControl;
+        if block.len() < 4 || block.len() > clock::private::vfe_var_control::SIZE {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let st = unsafe { NvAPI_GPU_PerfVfeVarSetControl(self.0, block.as_ptr().cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_PerfVfeVarSetControl, st)
+            .map_err(crate::Error::from)?;
+        Ok(())
+    }
+
     #[allow(unused_assignments)]
     pub fn power_usage<C: IntoIterator<Item = crate::clock::PowerTopologyChannelId>>(
         &self,
@@ -3013,6 +3228,7 @@ impl PhysicalGpu {
         &self,
     ) -> crate::NvapiResult<(u32, u8, [u32; 10])> {
         trace!("gpu.rated_tdp_readback()");
+        use crate::sys::nvapi::VersionedStruct;
         use clock::private::{NV_GPU_RATED_TDP_CONTROL, NV_GPU_RATED_TDP_INFO, NV_GPU_RATED_TDP_STATUS};
         let mut control =
             unsafe { std::mem::zeroed::<NV_GPU_RATED_TDP_CONTROL>() };
@@ -3123,6 +3339,45 @@ impl PhysicalGpu {
             )
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClientGetLastOcScannerResults, st)
+    }
+
+    /// Query the last INCOMPLETE OC-scanner run's partial results (NDA
+    /// 0xBE371D0A, @0x180073550). Same 68B control struct / 0x10044 magic
+    /// as `oem_oc_scanner_status`; RPC cmd 13 (2→-104, 4→-191). Companion
+    /// to the status call for runs that did not finish.
+    pub fn oem_oc_scanner_incomplete_results(&self) -> crate::NvapiResult<()> {
+        trace!("gpu.oem_oc_scanner_incomplete_results()");
+        let mut buf = [0u8; 68];
+        buf[..4].copy_from_slice(&0x10044u32.to_ne_bytes());
+        let st = unsafe {
+            sys::api::private::NvAPI_GPU_GetLastIncompleteOcScannerResults(
+                self.0,
+                buf.as_mut_ptr() as *mut _,
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetLastIncompleteOcScannerResults, st)
+    }
+
+    /// Enable/disable the background OC scanner (NDA 0x06DC7CE8,
+    /// @0x1800717C0). 72B struct, magic 0x10048; enable byte @+4 and the
+    /// 9-byte feature GUID 0B 0A 0E 08 E8 72 9D D9 F3 @+10 (validated).
+    pub fn oem_oc_scanner_set_background(&self, enable: bool) -> crate::NvapiResult<()> {
+        trace!("gpu.oem_oc_scanner_set_background({enable})");
+        use crate::sys::nvapi::VersionedStruct;
+        use clock::private::NV_GPU_OC_BACKGROUND_SCANNER_CONTROL;
+        let mut control =
+            unsafe { std::mem::zeroed::<NV_GPU_OC_BACKGROUND_SCANNER_CONTROL>() };
+        *control.nvapi_version_mut() = NvVersion::with_version(0x10048);
+        control.enable = enable as u8;
+        control.feature_guid =
+            [0x0B, 0x0A, 0x0E, 0x08, 0xE8, 0x72, 0x9D, 0xD9, 0xF3];
+        let st = unsafe {
+            sys::api::private::NvAPI_GPU_ClientEnableBackgroundOcScanner(
+                self.0,
+                &mut control,
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientEnableBackgroundOcScanner, st)
     }
 
     /// Register the OC Scanner status callback (NDA 0x1CB41116). Uses the
@@ -3870,8 +4125,12 @@ impl PhysicalGpu {
     /// PPAB / Dynamic-Boost enable GET — `NvAPI_PCF_DynamicBoostGetStatus`
     /// (0xc80068a1, RE'd R610.74: single `*mut bool` out, no GPU handle).
     /// The readback half of the by-value SET (`set_dynamic_boost`).
-    pub fn dynamic_boost_status() -> crate::NvapiResult<bool> {
+    pub fn dynamic_boost_status(&self) -> crate::NvapiResult<bool> {
         trace!("gpu.dynamic_boost_status()");
+        // The PCF table requires the private lifecycle init (0xAD298D3F
+        // arg=1) or every PCF query returns API_NOT_INITIALIZED (live
+        // observed R610.74). Best-effort — ignore failures.
+        let _ = self.private_lifecycle_init();
         let mut active = crate::sys::types::BoolU32(0);
         let st = unsafe { sys::api::NvAPI_PCF_DynamicBoostGetStatus(&mut active) };
         crate::status_result(sys::Api::NvAPI_PCF_DynamicBoostGetStatus, st)?;
@@ -3881,20 +4140,20 @@ impl PhysicalGpu {
     /// Direct core-voltage read — `NvAPI_GPU_GetCoreVoltage` (0x58337FA3,
     /// RE'd R610.74: `fn(selector, *value)`, escape 0x07000043). A distinct
     /// RM surface from the VoltVoltRails family.
-    pub fn core_voltage_scalar(&self, selector: u32) -> crate::NvapiResult<u32> {
-        trace!("gpu.core_voltage_scalar({selector})");
+    pub fn core_voltage_scalar(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.core_voltage_scalar()");
         let mut value: u32 = 0;
-        let st = unsafe { sys::api::NvAPI_GPU_GetCoreVoltage(selector, &mut value) };
+        let st = unsafe { sys::api::NvAPI_GPU_GetCoreVoltage(self.0, &mut value) };
         crate::status_result(sys::Api::NvAPI_GPU_GetCoreVoltage, st)?;
         Ok(value)
     }
 
     /// Core-voltage control-object read — `NvAPI_GPU_GetCoreVoltageControl`
     /// (0xA91F88EB, escape 0x07000045).
-    pub fn core_voltage_control(&self, selector: u32) -> crate::NvapiResult<u32> {
-        trace!("gpu.core_voltage_control({selector})");
+    pub fn core_voltage_control(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.core_voltage_control()");
         let mut value: u32 = 0;
-        let st = unsafe { sys::api::NvAPI_GPU_GetCoreVoltageControl(selector, &mut value) };
+        let st = unsafe { sys::api::NvAPI_GPU_GetCoreVoltageControl(self.0, &mut value) };
         crate::status_result(sys::Api::NvAPI_GPU_GetCoreVoltageControl, st)?;
         Ok(value)
     }
@@ -3902,9 +4161,43 @@ impl PhysicalGpu {
     /// Core-voltage control SET — `NvAPI_GPU_SetCoreVoltageControl`
     /// (0xDC2BD4A6, escape 0x07000044, `fn(selector, value)`).
     /// Elevation-gated (-104 without admin).
-    pub fn set_core_voltage_control(&self, selector: u32, value: u32) -> crate::NvapiResult<()> {
-        trace!("gpu.set_core_voltage_control({selector}, {value})");
-        unsafe { nvcall!(NvAPI_GPU_SetCoreVoltageControl(selector, value)) }
+    pub fn set_core_voltage_control(&self, value: u32) -> crate::NvapiResult<()> {
+        trace!("gpu.set_core_voltage_control({value})");
+        unsafe { nvcall!(NvAPI_GPU_SetCoreVoltageControl(self.0, value)) }
+    }
+
+    /// PMGR voltage-request arbiter GET — `NvAPI_GPU_GetPMGRVoltage
+    /// RequestArbiterValues` (0x717648FD, escape 0x0700019F get-flag 0,
+    /// v2 struct magic 0x20030). Returns the 11 raw arbiter dwords.
+    /// Distinct RM surface from both VoltVoltRails (0x07000191) and the
+    /// ClientVoltRails percent family.
+    pub fn pmgr_voltage_arbiter(&self) -> crate::NvapiResult<[u32; 11]> {
+        trace!("gpu.pmgr_voltage_arbiter()");
+        use crate::sys::nvapi::VersionedStruct;
+        use power::private::NV_PMGR_VOLTAGE_ARBITER_VALUES;
+        let mut values = unsafe { std::mem::zeroed::<NV_PMGR_VOLTAGE_ARBITER_VALUES>() };
+        *values.nvapi_version_mut() = NvVersion::with_version(0x20030);
+        let st = unsafe {
+            sys::api::NvAPI_GPU_GetPMGRVoltageRequestArbiterValues(self.0, &mut values)
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetPMGRVoltageRequestArbiterValues, st)?;
+        Ok(values.values)
+    }
+
+    /// PMGR voltage-request arbiter SET — `NvAPI_GPU_SetPMGRVoltage
+    /// RequestArbiterValues` (0x9C4BB8D0, escape 0x0700019F set-flag 1).
+    /// Elevation-gated (-104). Prefer the GET→patch→SET RMW pattern.
+    pub fn set_pmgr_voltage_arbiter(&self, values: &[u32; 11]) -> crate::NvapiResult<()> {
+        trace!("gpu.set_pmgr_voltage_arbiter({:?})", &values[..3]);
+        use crate::sys::nvapi::VersionedStruct;
+        use power::private::NV_PMGR_VOLTAGE_ARBITER_VALUES;
+        let mut buf = unsafe { std::mem::zeroed::<NV_PMGR_VOLTAGE_ARBITER_VALUES>() };
+        *buf.nvapi_version_mut() = NvVersion::with_version(0x20030);
+        buf.values = *values;
+        let st = unsafe {
+            sys::api::NvAPI_GPU_SetPMGRVoltageRequestArbiterValues(self.0, &buf as *const _)
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_SetPMGRVoltageRequestArbiterValues, st)
     }
 
     /// Read the NVCP power-mode (均衡/高性能 = Balanced/Max) capability:
