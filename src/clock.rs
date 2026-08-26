@@ -551,6 +551,34 @@ pub struct ClkVfPointsPrivate {
     pub segments: Vec<ClkVfSegment>,
 }
 
+/// One record from the private ClockClient V/F-POINTS GetControl override
+/// table (RM 0x20809062, ID 0xDA025C3E, 1060B records). This is the readback
+/// surface for SetControl 0xFEC00D04: mode 0 = absolute kHz frequency offset
+/// (`value` = u32 kHz, same semantics as the public freqDeltaKHz), mode 1 =
+/// reverse-volt delta (`value`'s low i16 is the raw f-offset control the
+/// `set-private-vftable-*-offset --raw*` paths write). All-zero at stock.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct ClkVfControlPointPrivate {
+    /// bank (0 or 1) the record came from
+    pub bank: u8,
+    /// point index within the bank (0..2048)
+    pub index: u16,
+    /// mode dword (rec+36): 0 = absolute, 1 = delta
+    pub mode: u32,
+    /// value dword (rec+56): u32 kHz in mode 0, low i16 raw control in mode 1
+    pub value: u32,
+}
+
+/// Read-only snapshot of the private V/F-POINTS CONTROL block via
+/// GetControl 0xDA025C3E (masks seeded from GetInfo, mandatory).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkVfControlPrivate {
+    /// one entry per present point, bank-major order
+    pub points: Vec<ClkVfControlPointPrivate>,
+}
+
 /// One contiguous same-record-type run inside the V/F-points table.
 /// Attribution (live A/B on a 4060 Laptop, R610.74 — bank 0):
 /// type-8 run 1 (127 pts) = GPC curve, type-7 run = mem pstate bins,

@@ -1999,6 +1999,68 @@ impl PhysicalGpu {
         })
     }
 
+    /// Read the private ClockClient V/F-POINTS CONTROL override table
+    /// (GetControl 0xDA025C3E, 1060B records). This is the readback surface
+    /// for everything `set_vfp_point_private` / `set_vfp_range_private`
+    /// write: per-record mode@+36 (0 = absolute kHz offset, 1 = delta) and
+    /// value@+56 (u32 kHz / low i16 raw control). The private GetStatus
+    /// exposes NO raw-offset field (only current = default + offset), so
+    /// this is the only direct readback of raw control values. All-zero at
+    /// stock; masks must be seeded from GetInfo first (mandatory).
+    pub fn clk_vf_control_private(&self) -> crate::Result<crate::clock::ClkVfControlPrivate> {
+        #![allow(non_snake_case)]
+        trace!("gpu.clk_vf_control_private()");
+        use crate::sys::api::{
+            NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
+        };
+        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE;
+
+        // Same stack-overflow hazard as clk_vf_points_private: the control
+        // block alone is 4.3 MB — allocate zeroed, never Box::new(default()).
+        let mut info = unsafe {
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+            let mut b = b.assume_init();
+            b.version =
+                NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+            b
+        };
+        let st =
+            unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from)?;
+
+        let mut ctrl = unsafe {
+            let b = Box::<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+            let mut b = b.assume_init();
+            b.version =
+                NvVersion::with_version(clock::private::clk_vfp_control::MAGIC as u32);
+            b
+        };
+        ctrl.seed_masks_from_info(&info);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *ctrl).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+            .map_err(crate::Error::from)?;
+
+        let mut points = Vec::new();
+        for bank in 0..2usize {
+            for idx in 0..clock::private::clk_vfp_info::POINTS {
+                if info.point_present(bank, idx) != Some(true) {
+                    continue;
+                }
+                points.push(crate::clock::ClkVfControlPointPrivate {
+                    bank: bank as u8,
+                    index: idx as u16,
+                    mode: ctrl.mode(bank, idx).unwrap_or(0),
+                    value: ctrl.value(bank, idx).unwrap_or(0),
+                });
+            }
+        }
+
+        Ok(crate::clock::ClkVfControlPrivate { points })
+    }
+
     /// Write one V/F curve point via the private ClockClient V/F-POINTS
     /// SetControl (RM 0x20809062→0x07000109, ID 0xFEC00D04). DANGEROUS V/F
     /// curve write — the per-point analogue of the public `set_vfp_table`,
@@ -2041,7 +2103,12 @@ impl PhysicalGpu {
         }
 
         // 1. GetInfo → seed bank masks (mandatory, same as the read path)
-        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
+    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+    let mut b = b.assume_init();
+    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+    b
+};
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
@@ -2050,8 +2117,10 @@ impl PhysicalGpu {
         // 2. GetControl snapshot with seeded masks — the RMW source.
         // Use unsafe { zeroed() } not default() — the 4MB rest[] array
         // would overflow the stack when Box::new moves it from stack to heap.
-        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
-            Box::new(unsafe { std::mem::zeroed() });
+        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+                b.assume_init()
+            };
         snapshot.version =
             sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
@@ -2085,8 +2154,10 @@ impl PhysicalGpu {
             .map_err(crate::Error::from)?;
 
         // 5. Readback + verify
-        let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
-            Box::new(unsafe { std::mem::zeroed() });
+        let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+                b.assume_init()
+            };
         verify.version = sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
@@ -2171,7 +2242,12 @@ impl PhysicalGpu {
 
         // baseline: info + seeded status read (the ladder reuses `info` to
         // re-read status after each write)
-        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
+    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+    let mut b = b.assume_init();
+    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+    b
+};
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
@@ -2321,15 +2397,22 @@ impl PhysicalGpu {
         }
 
         // 1. GetInfo → seed masks
-        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
+    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+    let mut b = b.assume_init();
+    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+    b
+};
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
             .map_err(crate::Error::from)?;
 
         // 2. GetControl snapshot (on heap, zeroed to avoid stack overflow)
-        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
-            Box::new(unsafe { std::mem::zeroed() });
+        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+                b.assume_init()
+            };
         snapshot.version =
             sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
@@ -2361,8 +2444,10 @@ impl PhysicalGpu {
             .map_err(crate::Error::from)?;
 
         // 5. Readback first + last point's mode to verify SET succeeded
-        let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
-            Box::new(unsafe { std::mem::zeroed() });
+        let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+                b.assume_init()
+            };
         verify.version = sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
@@ -2415,14 +2500,21 @@ impl PhysicalGpu {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
 
-        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
+    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+    let mut b = b.assume_init();
+    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+    b
+};
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
             .map_err(crate::Error::from)?;
 
-        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
-            Box::new(unsafe { std::mem::zeroed() });
+        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+                b.assume_init()
+            };
         snapshot.version =
             sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
@@ -2452,8 +2544,10 @@ impl PhysicalGpu {
             .map_err(crate::Error::from)?;
 
         // verify the first point took mode=1
-        let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
-            Box::new(unsafe { std::mem::zeroed() });
+        let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+                b.assume_init()
+            };
         verify.version = sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
@@ -2506,15 +2600,22 @@ impl PhysicalGpu {
         }
 
         // 1. GetInfo → point masks + descriptors (mandatory seed).
-        let mut info = Box::new(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::default());
+        let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
+    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+    let mut b = b.assume_init();
+    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+    b
+};
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
             .map_err(crate::Error::from)?;
 
         // 2. GetControl snapshot with seeded masks — the RMW source.
-        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
-            Box::new(unsafe { std::mem::zeroed() });
+        let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+                b.assume_init()
+            };
         snapshot.version =
             sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
@@ -2555,8 +2656,10 @@ impl PhysicalGpu {
         // A present-but-empty bank (written==0) skips verification: there is
         // no point to read back, and the SET was a no-op snapshot round-trip.
         if written > 0 {
-            let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> =
-                Box::new(unsafe { std::mem::zeroed() });
+            let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
+                    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+                    b.assume_init()
+                };
             verify.version =
                 sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
             verify.seed_masks_from_info(&info);

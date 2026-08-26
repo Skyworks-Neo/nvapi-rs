@@ -1234,6 +1234,25 @@ impl Gpu {
         }
     }
 
+    /// Raw mode/value CONTROL override table from the private ClockClient
+    /// V/F-POINTS GetControl (0xDA025C3E) — the direct readback of what
+    /// SetControl 0xFEC00D04 writes. All-zero at stock. `Ok(None)` where the
+    /// driver doesn't expose the private interface.
+    pub fn clk_vf_control_private(&self) -> nvapi::Result<Option<nvapi::ClkVfControlPrivate>> {
+        match self.gpu.clk_vf_control_private() {
+            Ok(v) => Ok(Some(v)),
+            Err(nvapi::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Sparse mode-1 (reverse-volt) V/F calibration over one domain segment
     /// of the private table — see the middle layer for the full contract
     /// (one DOMAIN per call: GPC 0-127, XBAR 128-255, …; every `pt_step`-th

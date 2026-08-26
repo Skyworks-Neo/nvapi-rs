@@ -6,9 +6,9 @@ mod gpu;
 pub use gpu::*;
 
 pub use nvapi::{
-    ClkVfDomainClass, ClkVfDomainHint, ClkVfPointPrivate, ClkVfPointsPrivate, ClkVfSegmentKind,
-    Error, NvapiError, Result, Status, chipset_info, driver_version, error_message, initialize,
-    interface_version, sys, unload,
+    ClkVfControlPointPrivate, ClkVfControlPrivate, ClkVfDomainClass, ClkVfDomainHint,
+    ClkVfPointPrivate, ClkVfPointsPrivate, ClkVfSegmentKind, Error, NvapiError, Result, Status,
+    chipset_info, driver_version, error_message, initialize, interface_version, sys, unload,
 };
 
 use std::result::Result as StdResult;
