@@ -99,7 +99,7 @@ macro_rules! nvstruct {
     (@int fields $name:ident ($($tt:tt)*)) => { };
 }
 
-macro_rules! nvenum {
+macro_rules! nvenum_legacy {
     (
         $(#[$meta:meta])*
         pub enum $enum:ident / $enum_name:ident {
@@ -177,103 +177,16 @@ macro_rules! nvenum {
     };
 }
 
+macro_rules! nvenum {
+    ($($tt:tt)*) => { nvapi_macros::nvenum! { $($tt)* } };
+}
+
 macro_rules! nvbits {
-    (
-        $(#[$meta:meta])*
-        pub enum $enum:ident / $enum_name:ident {
-            $(
-                $(#[$($metai:tt)*])*
-                $symbol:ident / $name:ident = $value:expr,
-            )*
-        }
-    ) => {
-        $(#[$meta])*
-        pub type $enum = u32;
-        $(
-            $(#[$($metai)*])*
-            pub const $symbol: $enum = $value as _;
-        )*
-
-        bitflags::bitflags! {
-            $(#[$meta])*
-            #[derive(Default)]
-            #[allow(clippy::unsafe_derive_deserialize)]
-            #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-            pub struct $enum_name: $enum {
-            $(
-                $(#[$($metai)*])*
-                const $name = $value;
-            )*
-            }
-        }
-
-        #[allow(clippy::copy_iterator)]
-        impl Iterator for $enum_name {
-            type Item = Self;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                $(
-                    if self.contains($enum_name::$name) {
-                        self.remove($enum_name::$name);
-                        Some($enum_name::$name)
-                    } else
-                 )*
-                { None }
-            }
-        }
-
-        impl TryFrom<$enum> for $enum_name {
-            type Error = crate::ArgumentRangeError;
-
-            fn try_from(v: $enum) -> Result<Self, Self::Error> {
-                Self::from_bits(v).ok_or(crate::ArgumentRangeError)
-            }
-        }
-
-        impl From<$enum_name> for $enum {
-            fn from(v: $enum_name) -> $enum {
-                v.bits()
-            }
-        }
-    };
+    ($($tt:tt)*) => { nvapi_macros::nvbits! { $($tt)* } };
 }
 
 macro_rules! nvenum_display {
-    ($enum:ident => _) => {
-        impl ::std::fmt::Display for $enum {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-                ::std::fmt::Debug::fmt(self, f)
-            }
-        }
-    };
-    ($enum:ident => {
-        $(
-            $name:tt = $value:tt,
-        )*
-    }) => {
-        impl ::std::fmt::Display for $enum {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-                match *self {
-                $(
-                    nvenum_display!(@q $enum $name) => nvenum_display!(@expr self f $value),
-                    //$enum::$name => nvenum_display!(@expr self f $value),
-                )*
-                }
-            }
-        }
-    };
-    (@q $enum:ident _) => {
-        _
-    };
-    (@q $enum:ident $name:ident) => {
-        $enum::$name
-    };
-    (@expr $this:tt $fmt:ident _) => {
-        ::std::fmt::Debug::fmt($this, $fmt)
-    };
-    (@expr $this:tt $fmt:ident $expr:expr) => {
-        write!($fmt, "{}", $expr)
-    };
+    ($($tt:tt)*) => { nvapi_macros::nvenum_display! { $($tt)* } };
 }
 
 macro_rules! nvapi {

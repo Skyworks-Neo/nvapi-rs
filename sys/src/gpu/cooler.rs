@@ -371,7 +371,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_FAN_ARBITER_INFO_V1 {
         pub fn flags(&self) -> FanArbiterInfoFlags {
-            FanArbiterInfoFlags::from_bits_truncate(self.flags)
+            FanArbiterInfoFlags::from_bits_truncate(self.flags.value)
         }
     }
 
@@ -450,7 +450,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
         pub fn flags(&self) -> FanArbiterControlFlags {
-            FanArbiterControlFlags::from_bits_truncate(self.flags)
+            FanArbiterControlFlags::from_bits_truncate(self.flags.value)
         }
     }
 

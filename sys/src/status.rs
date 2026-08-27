@@ -3,7 +3,7 @@ use crate::status_result;
 use std::convert::Infallible;
 use std::{error, fmt};
 
-nvenum! {
+nvenum_legacy! {
     /// NvAPI Status Values
     ///
     /// All NvAPI functions return one of these codes.

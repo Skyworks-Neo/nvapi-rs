@@ -455,12 +455,12 @@ pub mod private {
 
         /// Hot spot (GPU_MAX) primary channel index.
         pub fn hotspot_index(&self) -> Option<usize> {
-            self.primary_index(NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_MAX as usize)
+            self.primary_index(NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_MAX.repr() as usize)
         }
 
         /// VRAM (MEMORY) primary channel index.
         pub fn memory_index(&self) -> Option<usize> {
-            self.primary_index(NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY as usize)
+            self.primary_index(NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY.repr() as usize)
         }
 
         /// The per-channel info record for a thermal type's primary channel,

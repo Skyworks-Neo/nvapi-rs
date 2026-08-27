@@ -36,11 +36,11 @@ nvstruct! {
 
 impl NV_GPU_CLOCK_FREQUENCIES_V1 {
     pub fn clock_type(&self) -> NV_GPU_CLOCK_FREQUENCIES_CLOCK_TYPE {
-        (self.reserved & 3) as _
+        NV_GPU_CLOCK_FREQUENCIES_CLOCK_TYPE::with_repr((self.reserved & 3) as i32)
     }
 
     pub fn set_clock_type(&mut self, value: NV_GPU_CLOCK_FREQUENCIES_CLOCK_TYPE) {
-        self.reserved = (value as u32) & 3;
+        self.reserved = (value.repr() as u32) & 3;
     }
 }
 

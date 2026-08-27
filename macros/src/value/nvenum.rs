@@ -68,7 +68,7 @@ impl NvEnumBody {
         } = self;
 
         let variants = self.variants.iter().map(|v| v.clone().into_variant());
-        let consts = self.variants.iter().map(|v| v.output_const(ident));
+        let consts = self.variants.iter().map(|v| v.output_const(ident, repr));
         let value_consts = self.variants.iter().map(|v| v.output_value_const(ident));
 
         let serde = call_path_absolute(["serde"]);
@@ -189,7 +189,7 @@ impl NvEnumValue {
         }
     }
 
-    pub fn output_const(&self, enum_ident: &Ident) -> TokenStream {
+    pub fn output_const(&self, enum_ident: &Ident, repr: &Ident) -> TokenStream {
         let NvEnumValue {
             symbol,
             ident,
@@ -204,7 +204,7 @@ impl NvEnumValue {
         quote! {
             #[doc = #doc]
             #[allow(overflowing_literals)]
-            pub const #symbol: #NvEnum<#enum_ident> #eq_token #NvEnum::<#enum_ident>::with_repr(#value);
+            pub const #symbol: #NvEnum<#enum_ident> #eq_token #NvEnum::<#enum_ident>::with_repr((#value) as #repr);
         }
     }
 
