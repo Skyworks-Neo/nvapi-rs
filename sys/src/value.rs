@@ -33,13 +33,6 @@ pub trait NvValueData:
     fn from_repr_ref(value: &Self::Repr) -> Result<&Self, ArgumentRangeError>;
     fn from_repr_mut(value: &mut Self::Repr) -> Result<&mut Self, ArgumentRangeError>;
 
-    fn from_value(value: NvValue<Self>) -> Result<Self, ArgumentRangeError>
-    where
-        Self: TryFrom<NvValue<Self>, Error = ArgumentRangeError>,
-    {
-        value.try_into()
-    }
-
     fn value(self) -> NvValue<Self> {
         NvValue::new(self)
     }
@@ -76,13 +69,6 @@ impl<T: NvValueData> NvValue<T> {
 
     pub fn cast<U: NvValueData<Repr = T::Repr>>(self) -> NvValue<U> {
         NvValue::with_repr(self.repr())
-    }
-
-    pub fn get(self) -> T {
-        match self.try_get() {
-            Ok(v) => v,
-            Err(..) => panic!("nvapi unknown value {} for {}", self.value, T::NAME),
-        }
     }
 
     pub fn try_get(self) -> Result<T, ArgumentRangeError> {
