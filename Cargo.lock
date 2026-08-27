@@ -90,6 +90,7 @@ dependencies = [
  "log",
  "nvapi-macros",
  "serde",
+ "serde_json",
  "winapi",
  "zerocopy",
 ]
@@ -150,6 +151,17 @@ version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1d4ddca14104cd60529e8c7f7ba71a2c8acd8f7f5cfcdc2faf97eeb7c3010a4"
 dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.99"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46266871c240a00b8f503b877622fe33430b3c7d963bdc0f2adc511e54a1eae3"
+dependencies = [
+ "itoa",
+ "ryu",
  "serde",
 ]
 

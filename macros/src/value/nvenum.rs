@@ -14,6 +14,8 @@ pub struct NvEnumBody {
     pub enum_token: Token![enum],
     pub ident: Ident,
     pub value_ident: Ident,
+    // token fields are stored to consume tokens during Parse but never read (donor parity)
+    #[allow(dead_code)]
     pub brace_token: Brace,
     pub variants: Punctuated<NvEnumValue, Token![,]>,
 }
@@ -228,7 +230,10 @@ impl Parse for NvEnumValue {
 
 pub struct NvEnumDisplayBody {
     pub ident: Ident,
+    // token fields are stored to consume tokens during Parse but never read (donor parity)
+    #[allow(dead_code)]
     pub arrow: Token![=>],
+    #[allow(dead_code)]
     pub brace_token: Option<Brace>,
     pub variants: Punctuated<NvEnumDisplayValue, Token![,]>,
 }
@@ -296,12 +301,16 @@ impl NvEnumDisplayBody {
 #[derive(Clone)]
 pub enum NvEnumDisplayValue {
     Wildcard {
+        // token fields are stored to consume tokens during Parse but never read (donor parity)
+        #[allow(dead_code)]
         underscore: Token![_],
+        #[allow(dead_code)]
         eq_token: Token![=],
         value: Option<Expr>,
     },
     Value {
         ident: Ident,
+        #[allow(dead_code)]
         eq_token: Token![=],
         value: Expr,
     },

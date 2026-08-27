@@ -383,3 +383,74 @@ macro_rules! nvvalue_reprs {
 nvvalue_reprs! {
     u32, i32,
 }
+
+/// Pin the serde wire format of the two enum flavors introduced by the
+/// `nvenum!`/`nvbits!` proc-macros, so downstream JSON consumers (nvoc GUI/TUI
+/// dashboards) don't silently break:
+///
+/// * the typed enum (`SystemType`) derives `Serialize`/`Deserialize` and
+///   serializes as a variant-name JSON string — same as the pre-migration
+///   `macro_rules!` output;
+/// * the FFI alias (`NV_SYSTEM_TYPE`, an `NvEnum`/`NvValue` newtype) is
+///   transparently serialized as the raw repr integer — matching the old bare
+///   `c_int` alias fields;
+/// * `nvbits!` flags serialize as bitflags' `{"bits": N}` object.
+///
+/// Note the asymmetry this implies: alias integers deserialize *unknown* values
+/// fine (transparent passthrough), while typed enum strings reject unknown
+/// variant names.
+#[cfg(all(test, feature = "serde"))]
+mod serde_format_tests {
+    use crate::gpu::display::ConnectedIdsFlags;
+    use crate::gpu::{NV_SYSTEM_TYPE_DESKTOP, NV_SYSTEM_TYPE_LAPTOP, SystemType};
+    use serde_json::json;
+
+    #[test]
+    fn typed_enum_serializes_as_variant_name_string() {
+        assert_eq!(
+            serde_json::to_value(SystemType::Laptop).unwrap(),
+            json!("Laptop")
+        );
+        assert_eq!(
+            serde_json::to_value(SystemType::Desktop).unwrap(),
+            json!("Desktop")
+        );
+
+        let round: SystemType =
+            serde_json::from_str("\"Laptop\"").expect("variant-name string must round-trip");
+        assert_eq!(round, SystemType::Laptop);
+
+        serde_json::from_str::<SystemType>("\"NotAVariant\"")
+            .expect_err("unknown variant names must be rejected");
+    }
+
+    #[test]
+    fn enum_alias_serializes_as_raw_repr_integer() {
+        assert_eq!(
+            serde_json::to_value(NV_SYSTEM_TYPE_LAPTOP).unwrap(),
+            json!(1)
+        );
+        assert_eq!(
+            serde_json::to_value(NV_SYSTEM_TYPE_DESKTOP).unwrap(),
+            json!(2)
+        );
+
+        let round: crate::gpu::NV_SYSTEM_TYPE =
+            serde_json::from_str("1").expect("repr integer must round-trip");
+        assert_eq!(round, NV_SYSTEM_TYPE_LAPTOP);
+
+        let unknown: crate::gpu::NV_SYSTEM_TYPE =
+            serde_json::from_str("99").expect("unknown reprs pass through transparently");
+        assert_eq!(unknown.repr(), 99);
+    }
+
+    #[test]
+    fn bits_flags_serialize_as_bitflags_object() {
+        let flags = ConnectedIdsFlags::UNCACHED | ConnectedIdsFlags::SLI;
+        assert_eq!(serde_json::to_value(flags).unwrap(), json!({"bits": 3}));
+
+        let round: ConnectedIdsFlags =
+            serde_json::from_str("{\"bits\":3}").expect("bitflags object must round-trip");
+        assert_eq!(round, flags);
+    }
+}

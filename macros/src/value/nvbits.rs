@@ -14,6 +14,8 @@ pub struct NvBitsBody {
     pub enum_token: Token![enum],
     pub ident: Ident,
     pub value_ident: Ident,
+    // token fields are stored to consume tokens during Parse but never read (donor parity)
+    #[allow(dead_code)]
     pub brace_token: Brace,
     pub variants: Punctuated<NvBitsValue, Token![,]>,
 }

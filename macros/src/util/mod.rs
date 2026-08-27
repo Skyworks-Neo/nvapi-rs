@@ -1,7 +1,7 @@
 use {
     crate::prelude::*,
     proc_macro::TokenStream,
-    proc_macro2::{TokenStream as TokenStream2, TokenTree},
+    proc_macro2::TokenTree,
     std::{
         borrow::Borrow,
         env::var_os,
@@ -68,20 +68,6 @@ pub fn sys_path<I: AsRef<str>, P: IntoIterator<Item = I>>(idents: P) -> Path {
     path
 }
 
-pub fn nvapi_path<I: AsRef<str>, P: IntoIterator<Item = I>>(idents: P) -> Path {
-    let mut path = if crate_name() == Some(OsStr::new("nvapi")) {
-        call_path(["crate"])
-    } else {
-        call_path(["nvapi"])
-    };
-    path.segments
-        .extend(idents.into_iter().map(call_ident).map(|ident| PathSegment {
-            ident,
-            arguments: Default::default(),
-        }));
-    path
-}
-
 pub fn call_ident<I: AsRef<str>>(ident: I) -> Ident {
     Ident::new(ident.as_ref(), Span::call_site())
 }
@@ -98,13 +84,6 @@ pub fn result_stream<T: Into<TokenStream>>(res: Result<T>) -> TokenStream {
     match res {
         Ok(tokens) => tokens.into(),
         Err(e) => e.into_compile_error().into(),
-    }
-}
-
-pub fn result_stream2<T: Into<TokenStream2>>(res: Result<T>) -> TokenStream2 {
-    match res {
-        Ok(tokens) => tokens.into(),
-        Err(e) => e.into_compile_error(),
     }
 }
 

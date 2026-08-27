@@ -1,4 +1,4 @@
-#![allow(non_snake_case, dead_code, unused_imports)]
+#![allow(non_snake_case)]
 
 use {crate::util::result_stream, proc_macro::TokenStream};
 
@@ -15,11 +15,11 @@ pub(crate) mod prelude {
             attrs::{ContextualAttr, get_attr, get_field_attr, try_parse_attr},
             attrs_repr, attrs_require_repr, call_attr, call_error, call_ident, call_path_absolute,
             derive::{DeriveEnum, DeriveStruct, ParseEof},
-            error, nvapi_path, path_tail_is, result_stream2, sys_crate, sys_path,
+            error, path_tail_is, sys_crate, sys_path,
         },
         proc_macro2::{Span, TokenStream},
-        quote::{ToTokens, quote, quote_spanned},
-        std::{ops::AddAssign, result::Result as StdResult},
+        quote::{ToTokens, quote},
+        std::ops::AddAssign,
         syn::{
             Attribute, Data, DeriveInput, Error, Expr, Field, Ident, Path, PathSegment, Result,
             Token, Type,
