@@ -2031,7 +2031,7 @@ impl PhysicalGpu {
         let mut ctrl = unsafe {
             let b = Box::<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             let mut b = b.assume_init();
-            b.version = NvVersion::with_version(clock::private::clk_vfp_control::MAGIC as u32);
+            b.version = NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
             b
         };
         ctrl.seed_masks_from_info(&info);

@@ -1,0 +1,58 @@
+#![allow(non_snake_case, dead_code, unused_imports)]
+
+use {crate::util::result_stream, proc_macro::TokenStream};
+
+pub(crate) mod util;
+pub(crate) mod value;
+
+pub(crate) mod prelude {
+    pub(crate) use {
+        crate::util::{
+            attr_derives,
+            attrs::{ContextualAttr, get_attr, get_field_attr, try_parse_attr},
+            attrs_repr, attrs_require_repr, call_attr, call_error, call_ident, call_path_absolute,
+            derive::{DeriveEnum, DeriveStruct, ParseEof},
+            error, nvapi_path, path_tail_is, result_stream2, sys_crate, sys_path,
+        },
+        proc_macro2::{Span, TokenStream},
+        quote::{ToTokens, quote, quote_spanned},
+        std::{ops::AddAssign, result::Result as StdResult},
+        syn::{
+            Attribute, Data, DeriveInput, Error, Expr, Field, Ident, Path, PathSegment, Result,
+            Token, Type,
+            parse::{Parse, ParseStream, Parser},
+            parse_quote, parse2 as parse,
+            spanned::Spanned,
+        },
+    };
+}
+
+#[proc_macro]
+pub fn nvenum(input: TokenStream) -> TokenStream {
+    result_stream(self::value::nvenum(input.into()))
+}
+
+#[proc_macro]
+pub fn nvenum_display(input: TokenStream) -> TokenStream {
+    result_stream(self::value::nvenum_display(input.into()))
+}
+
+#[proc_macro_derive(NvValueEnum)]
+pub fn derive_value_enum(input: TokenStream) -> TokenStream {
+    result_stream(self::value::derive_value_enum(input.into()))
+}
+
+#[proc_macro]
+pub fn nvbits(input: TokenStream) -> TokenStream {
+    result_stream(self::value::nvbits(input.into()))
+}
+
+#[proc_macro_derive(NvValueBits)]
+pub fn derive_value_bits(input: TokenStream) -> TokenStream {
+    result_stream(self::value::derive_value_bits(input.into()))
+}
+
+#[proc_macro_derive(NvValueData, attributes(nv_value_symbol))]
+pub fn derive_value_data(input: TokenStream) -> TokenStream {
+    result_stream(self::value::derive_value_data(input.into()))
+}

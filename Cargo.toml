@@ -32,4 +32,4 @@ log = ["nvapi-sys/log"]
 log-kv = ["nvapi-sys/log-kv"]
 
 [workspace]
-members = ["sys", "hi"]
+members = ["sys", "hi", "macros"]
