@@ -162,35 +162,11 @@ macro_rules! nvapi {
     };
 }
 
+/// Proc-macro shim: accepts the exact v0.2.x `nvversion!` syntax
+/// (`@ = Alias Target(ver) = size`) and expands to the same code the old
+/// `macro_rules!` arms produced. See `nvapi_macros::nvversion` for the
+/// deliberate deviation from the donor's family syntax (Default pins the
+/// marked `@` version, not the oldest declared one).
 macro_rules! nvversion {
-    (@ $(=$name:ident)? $target:ident($ver:expr) $(= $sz:expr)?) => {
-        nvversion! { $(=$name)? $target($ver) $(=$sz)? }
-
-        impl crate::nvapi::StructVersion for $target {
-            const NVAPI_VERSION: crate::nvapi::NvVersion = <$target as crate::nvapi::StructVersion<{$ver}>>::NVAPI_VERSION;
-
-            fn versioned() -> Self {
-                <$target as crate::nvapi::StructVersion<{$ver}>>::versioned()
-            }
-        }
-
-        impl Default for $target {
-            fn default() -> Self {
-                crate::nvapi::StructVersion::<0>::versioned()
-            }
-        }
-    };
-    ($(=$name:ident)? $target:ident($ver:expr) $(= $sz:expr)?) => {
-        $(
-            pub type $name = $target;
-        )?
-
-        impl crate::nvapi::StructVersion<$ver> for $target {
-            const NVAPI_VERSION: crate::nvapi::NvVersion = NvVersion::with_struct::<$target>($ver);
-        }
-
-        $(
-            const _: () = assert!($sz == std::mem::size_of::<$target>());
-        )?
-    };
+    ($($tt:tt)*) => { nvapi_macros::nvversion! { $($tt)* } };
 }

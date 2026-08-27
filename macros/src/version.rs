@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use syn::{LitInt, parenthesized, token::Paren};
 
 pub struct NvVersionArgs {
     span: Span,
@@ -121,4 +122,131 @@ pub fn derive_versioned_struct(input: TokenStream) -> Result<TokenStream> {
             }
         }
     })
+}
+
+/// Input shape (v0.2.x `nvversion!` syntax, kept verbatim so ~137 call sites
+/// need zero changes):
+///
+/// * `nvversion! { Target(3) }` — emit `StructVersion<3>` impl (+ size assert)
+/// * `nvversion! { Target(3) = 128 }` — … and assert `size_of::<Target>() == 128`
+/// * `nvversion! { = Alias Target(3) … }` — … and `pub type Alias = Target;`
+/// * `nvversion! { @… }` — additionally emit the unversioned `StructVersion`
+///   (VER = 0) alias impl + `Default` pinning this version as the struct's
+///   default, matching the legacy `macro_rules!` `@` arm byte for byte.
+///
+/// This deliberately deviates from the donor's `Name: A(1), B(2) = size`
+/// family syntax: the donor's `Default` resolves to the *oldest* declared
+/// version, while v0.2.x's `@` arm resolves to the *marked* (latest) version.
+/// Flipping that would silently change which struct version the FFI boundary
+/// sends by default.
+pub struct NvVersionBody {
+    pub at: Option<Token![@]>,
+    pub alias: Option<(Token![=], Ident)>,
+    pub target: Ident,
+    // stored to consume tokens during Parse but never read (donor parity)
+    #[allow(dead_code)]
+    pub paren: Paren,
+    pub version: LitInt,
+    /// `= <size>` trailing assertion, asserts `size_of::<T>() == size` in bytes
+    /// (the donor instead asserts the size encoded in `NvVersion`; v0.2.x has
+    /// always asserted the real `size_of`).
+    pub size: Option<(Token![=], LitInt)>,
+}
+
+impl Parse for NvVersionBody {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let at = input.parse()?;
+        let alias = if input.peek(Token![=]) {
+            let eq = input.parse()?;
+            let ident = input.parse()?;
+            Some((eq, ident))
+        } else {
+            None
+        };
+        let target = input.parse()?;
+        let content;
+        let paren = parenthesized!(content in input);
+        let version: LitInt = content.parse()?;
+        let _: u16 = version.base10_parse()?;
+        let _: ParseEof = content.parse()?;
+        let size = if input.peek(Token![=]) {
+            let eq = input.parse()?;
+            let size = input.parse()?;
+            Some((eq, size))
+        } else {
+            None
+        };
+        let _: ParseEof = input.parse()?;
+        Ok(Self {
+            at,
+            alias,
+            target,
+            paren,
+            version,
+            size,
+        })
+    }
+}
+
+impl NvVersionBody {
+    pub fn output(&self) -> TokenStream {
+        let Self {
+            at,
+            alias,
+            target,
+            version,
+            size,
+            ..
+        } = self;
+
+        let StructVersion = sys_path(["nvapi", "StructVersion"]);
+        let NvVersion = sys_path(["nvapi", "NvVersion"]);
+
+        let mut expanded = TokenStream::new();
+
+        if let Some((_, name)) = alias {
+            expanded.extend(quote! {
+                pub type #name = #target;
+            });
+        }
+
+        expanded.extend(quote! {
+            impl #StructVersion<#version> for #target {
+                const NVAPI_VERSION: #NvVersion = #NvVersion::with_struct::<#target>(#version);
+            }
+        });
+
+        if let Some((_, size)) = size {
+            expanded.extend(quote! {
+                const _: () = assert!(#size == ::core::mem::size_of::<#target>());
+            });
+        }
+
+        if at.is_some() {
+            // legacy `@` arm: unversioned alias impl + Default pinned to this version
+            expanded.extend(quote! {
+                impl #StructVersion for #target {
+                    const NVAPI_VERSION: #NvVersion =
+                        <#target as #StructVersion<{ #version }>>::NVAPI_VERSION;
+
+                    fn versioned() -> Self {
+                        <#target as #StructVersion<{ #version }>>::versioned()
+                    }
+                }
+
+                impl ::core::default::Default for #target {
+                    fn default() -> Self {
+                        #StructVersion::<0>::versioned()
+                    }
+                }
+            });
+        }
+
+        expanded
+    }
+}
+
+pub fn nvversion(input: TokenStream) -> Result<TokenStream> {
+    let body: NvVersionBody = parse(input)?;
+    Ok(body.output())
 }

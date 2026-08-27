@@ -74,3 +74,8 @@ pub fn derive_inherit(input: TokenStream) -> TokenStream {
 pub fn derive_versioned_struct(input: TokenStream) -> TokenStream {
     result_stream(self::version::derive_versioned_struct(input.into()))
 }
+
+#[proc_macro]
+pub fn nvversion(input: TokenStream) -> TokenStream {
+    result_stream(self::version::nvversion(input.into()))
+}
