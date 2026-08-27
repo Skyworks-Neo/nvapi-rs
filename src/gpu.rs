@@ -5639,7 +5639,9 @@ impl Architecture {
             sys::gpu::NV_GPU_ARCHITECTURE_T3X => Architecture::T3X(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_NV40 => Architecture::NV40(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_NV50 => Architecture::NV50(implementation.try_into()?),
-            sys::gpu::NV_GPU_ARCHITECTURE_G78 => Architecture::G78(sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(implementation)),
+            sys::gpu::NV_GPU_ARCHITECTURE_G78 => Architecture::G78(
+                sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(implementation),
+            ),
             sys::gpu::NV_GPU_ARCHITECTURE_G80 => Architecture::G80(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_G90 => Architecture::G90(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GT200 => Architecture::GT200(implementation.try_into()?),
@@ -5647,11 +5649,15 @@ impl Architecture {
             sys::gpu::NV_GPU_ARCHITECTURE_GK100 => Architecture::GK100(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GK110 => Architecture::GK110(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GK200 => Architecture::GK200(implementation.try_into()?),
-            sys::gpu::NV_GPU_ARCHITECTURE_GM000 => Architecture::GM000(sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(implementation)),
+            sys::gpu::NV_GPU_ARCHITECTURE_GM000 => Architecture::GM000(
+                sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(implementation),
+            ),
             sys::gpu::NV_GPU_ARCHITECTURE_GM200 => Architecture::GM200(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GP100 => Architecture::GP100(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GV100 => Architecture::GV100(implementation.try_into()?),
-            sys::gpu::NV_GPU_ARCHITECTURE_GV110 => Architecture::GV110(sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(implementation)),
+            sys::gpu::NV_GPU_ARCHITECTURE_GV110 => Architecture::GV110(
+                sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(implementation),
+            ),
             sys::gpu::NV_GPU_ARCHITECTURE_TU100 => Architecture::TU100(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GA100 => Architecture::GA100(implementation.try_into()?),
             _ => return Err(Default::default()),

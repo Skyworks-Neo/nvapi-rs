@@ -1,7 +1,10 @@
 use {
     super::NvValueSymbol,
     crate::prelude::*,
-    syn::{Fields, MacroDelimiter, MetaList, Variant, Visibility, braced, punctuated::Punctuated, token::Brace},
+    syn::{
+        Fields, MacroDelimiter, MetaList, Variant, Visibility, braced, punctuated::Punctuated,
+        token::Brace,
+    },
 };
 
 pub struct NvEnumBody {
