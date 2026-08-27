@@ -519,3 +519,35 @@ mod bool_u32_tests {
         assert!(b.get());
     }
 }
+
+/// `counted()` clamp guarantee (audit #17): a driver-reported count past the
+/// array capacity must degrade to a short view, never panic — 27 call sites
+/// depend on this in monitoring loops.
+#[cfg(test)]
+mod counted_tests {
+    use super::counted;
+
+    #[test]
+    fn clamps_over_count() {
+        // u32 counts have no Into<usize>; call sites cast (see doc)
+        assert_eq!(counted(&[1u32, 2, 3], 10u32 as usize), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn exact_count() {
+        assert_eq!(counted(&[1u32, 2, 3], 3usize), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn short_and_zero_count() {
+        assert_eq!(counted(&[1u32, 2, 3], 1usize), &[1]);
+        assert!(counted(&[1u32, 2, 3], 0usize).is_empty());
+    }
+
+    #[test]
+    fn count_field_types() {
+        // driver structs use both u8 and u32 count fields
+        assert_eq!(counted(&[0u16; 4], 255u8).len(), 4);
+        assert_eq!(counted(&[0u16; 4], 2u16).len(), 2);
+    }
+}

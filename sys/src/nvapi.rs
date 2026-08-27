@@ -282,3 +282,42 @@ pub trait StructVersion<const VER: u16 = 0>: VersionedStruct {
         VersionedStructField::new_versioned::<VER>()
     }
 }
+
+/// Version-dword encoding pins (audit #17): macro constants and NvVersion
+/// methods must agree on the same bit layout, live-RE magics must not drift,
+/// and the >64 KiB truncation semantics stay documented (see NvVersion::new).
+#[cfg(test)]
+mod nvversion_tests {
+    use super::NvVersion;
+    use crate::types::{GET_NVAPI_SIZE, GET_NVAPI_VERSION};
+
+    #[test]
+    fn cascade_roundtrip() {
+        for &(size, version) in &[(0usize, 0u16), (0xFFFF, 0xFFFF), (456, 3), (7416, 3)] {
+            let v = NvVersion::new(size, version);
+            assert_eq!(v.version(), version);
+            assert_eq!(v.size(), size & 0xffff);
+            assert_eq!(GET_NVAPI_VERSION(v.data), version);
+            assert_eq!(GET_NVAPI_SIZE(v.data), size & 0xffff);
+        }
+    }
+
+    #[test]
+    fn pinned_live_magics() {
+        // GetPstates20 cascade head (live-verified R610.74, see pstates20_size_tests)
+        use crate::api::NV_GPU_PERF_PSTATES20_INFO_V2;
+        assert_eq!(
+            NvVersion::with_struct::<NV_GPU_PERF_PSTATES20_INFO_V2>(3).data,
+            0x31CF8
+        );
+    }
+
+    #[test]
+    fn size_truncation_documented() {
+        // >64 KiB structs truncate the size field by design: the driver builds
+        // the same lossy dword from its own struct, so both sides compare
+        // equal. Pin it so a change here is a conscious one.
+        assert_eq!(NvVersion::new(0x10000, 1).size(), 0);
+        assert_eq!(NvVersion::new(0x10000, 1).data, 0x10000);
+    }
+}

@@ -2005,3 +2005,65 @@ mod tests {
         assert!(all_clocks_from_raw(&raw).is_empty());
     }
 }
+
+/// Synthetic RawConversion tests (audit #17) — no GPU required: build the raw
+/// sys struct, pin the decode. The PerfStatus match is deliberately strict
+/// (flags/zero0/zero1 must be zero); this pins that strictness.
+#[cfg(test)]
+mod convert_raw_tests {
+    use crate::clock::ClockDomain;
+    use crate::sys::gpu::power::undocumented::NV_VOLT_STATUS;
+    use crate::sys::gpu::power::undocumented::NV_GPU_PERF_POLICIES_STATUS_PARAMS;
+    use crate::sys::types::BoolU32;
+    use crate::types::RawConversion;
+    use crate::{Kilohertz, Microvolts};
+
+    #[test]
+    fn perf_status_convert() {
+        let raw = NV_GPU_PERF_POLICIES_STATUS_PARAMS {
+            flags: 0,
+            limits: crate::sys::gpu::power::undocumented::NV_GPU_PERF_FLAGS::with_repr(1), // power limit bit
+            zero0: 0,
+            unknown: 0xAB,
+            zero1: 0,
+            ..unsafe { std::mem::zeroed() }
+        };
+        let status = raw.convert_raw().unwrap();
+        assert_eq!(status.unknown, 0xAB);
+        assert_eq!(status.limits.bits(), 1);
+
+        let bad = NV_GPU_PERF_POLICIES_STATUS_PARAMS {
+            flags: 1,
+            ..unsafe { std::mem::zeroed() }
+        };
+        assert!(bad.convert_raw().is_err());
+    }
+
+    #[test]
+    fn clock_frequencies_convert() {
+        let mut raw: crate::sys::gpu::clock::NV_GPU_CLOCK_FREQUENCIES =
+            unsafe { std::mem::zeroed() };
+        raw.domain[ClockDomain::Graphics.repr() as usize].bIsPresent = BoolU32::from(true);
+        raw.domain[ClockDomain::Graphics.repr() as usize].frequency = 1_680_000;
+        raw.domain[ClockDomain::Memory.repr() as usize].bIsPresent = BoolU32::from(true);
+        raw.domain[ClockDomain::Memory.repr() as usize].frequency = 8_000_000;
+        let clocks = raw.convert_raw().unwrap();
+        assert_eq!(clocks.len(), 2);
+        assert_eq!(clocks[&ClockDomain::Graphics], Kilohertz(1_680_000));
+        assert_eq!(clocks[&ClockDomain::Memory], Kilohertz(8_000_000));
+    }
+
+    #[test]
+    fn volt_status_convert() {
+        let raw = NV_VOLT_STATUS {
+            flags: 0,
+            count: 2,
+            unknown: 0,
+            value_uV: 1_050_000,
+            ..unsafe { std::mem::zeroed() }
+        };
+        let status = raw.convert_raw().unwrap();
+        assert_eq!(status.count, 2);
+        assert_eq!(status.voltage, Microvolts(1_050_000));
+    }
+}

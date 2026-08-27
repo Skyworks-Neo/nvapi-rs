@@ -446,3 +446,51 @@ mod serde_format_tests {
         assert_eq!(round, flags);
     }
 }
+
+/// Core NvValue semantics (audit #17): unknown reprs must flow through
+/// try_get as errors, display as the raw number, and compare/hash by repr —
+/// the transparent-alias contract the CLI rendering depends on.
+#[cfg(test)]
+mod nvvalue_tests {
+    use super::NvValue;
+    use crate::gpu::{SystemType, NV_SYSTEM_TYPE_LAPTOP};
+    use std::collections::HashSet;
+
+    #[test]
+    fn try_get_known_and_unknown() {
+        let known = NvValue::<SystemType>::with_repr(NV_SYSTEM_TYPE_LAPTOP.value);
+        assert_eq!(known.try_get(), Ok(SystemType::Laptop));
+        let unknown = NvValue::<SystemType>::with_repr(99);
+        assert!(unknown.try_get().is_err());
+        assert!(unknown.try_ref().is_err());
+    }
+
+    #[test]
+    fn display_falls_back_to_repr() {
+        let unknown = NvValue::<SystemType>::with_repr(99);
+        assert_eq!(format!("{}", unknown.display()), "99");
+        let known = NvValue::<SystemType>::with_repr(NV_SYSTEM_TYPE_LAPTOP.value);
+        assert_eq!(format!("{}", known.display()), "Laptop");
+    }
+
+    #[test]
+    fn partial_eq_compares_repr() {
+        assert_eq!(
+            NvValue::<SystemType>::with_repr(99),
+            NvValue::<SystemType>::with_repr(99)
+        );
+        assert_ne!(
+            NvValue::<SystemType>::with_repr(99),
+            NvValue::<SystemType>::with_repr(1)
+        );
+    }
+
+    #[test]
+    fn unknown_repr_hashes_distinctly() {
+        let mut set = HashSet::new();
+        set.insert(NvValue::<SystemType>::with_repr(99));
+        set.insert(NvValue::<SystemType>::with_repr(1));
+        set.insert(NvValue::<SystemType>::with_repr(99));
+        assert_eq!(set.len(), 2);
+    }
+}

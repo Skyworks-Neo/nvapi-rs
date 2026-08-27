@@ -433,3 +433,25 @@ pub struct Delta<T> {
     pub value: T,
     pub range: Range<T>,
 }
+
+#[cfg(test)]
+mod percentage_tests {
+    use super::{Percentage, Percentage1000};
+
+    #[test]
+    fn from_raw_bounds() {
+        assert_eq!(Percentage::from_raw(0), Ok(Percentage(0)));
+        assert_eq!(Percentage::from_raw(100), Ok(Percentage(100)));
+        assert!(Percentage::from_raw(101).is_err());
+        assert!(Percentage::from_raw(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn percentage1000_roundtrip() {
+        let p = Percentage(50);
+        let p1000: Percentage1000 = p.into();
+        assert_eq!(p1000, Percentage1000(50_000));
+        let back: Percentage = p1000.into();
+        assert_eq!(back, p);
+    }
+}
