@@ -169,7 +169,14 @@ nvstruct! {
 #[derive(Copy, Clone, Debug)]
 pub struct NV_GPU_PSTATE20_CLOCK_ENTRY_DATA(NV_GPU_PSTATE20_CLOCK_ENTRY_RANGE);
 
-unsafe impl zerocopy::AsBytes for NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
+unsafe impl zerocopy::IntoBytes for NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+unsafe impl zerocopy::Immutable for NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,
@@ -177,6 +184,28 @@ unsafe impl zerocopy::AsBytes for NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
     }
 }
 unsafe impl zerocopy::FromBytes for NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+unsafe impl zerocopy::TryFromBytes for NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+    fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+    where
+        A: zerocopy::invariant::Alignment,
+    {
+        // plain old data: every bit pattern is valid
+        let _ = candidate;
+        true
+    }
+}
+unsafe impl zerocopy::FromZeros for NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,

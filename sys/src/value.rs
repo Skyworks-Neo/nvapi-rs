@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::mem::transmute;
 use std::ops;
 use std::{fmt, iter};
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 pub use nvapi_macros::{NvValueBits, NvValueData, NvValueEnum};
 
@@ -50,7 +50,7 @@ pub trait NvValueBits: NvValueData {
     fn from_repr_truncate(value: Self::Repr) -> Self;
 }
 
-#[derive(FromBytes, PartialEq, Eq)]
+#[derive(FromBytes, PartialEq, Eq, Immutable)]
 #[repr(transparent)]
 pub struct NvValue<T: NvValueData> {
     pub value: T::Repr,
@@ -136,9 +136,9 @@ impl<'a, T: NvValueData> From<&'a NvValue<T>> for NvValue<T> {
     }
 }
 
-unsafe impl<T: NvValueData> AsBytes for NvValue<T>
+unsafe impl<T: NvValueData> IntoBytes for NvValue<T>
 where
-    T::Repr: AsBytes,
+    T::Repr: IntoBytes,
 {
     fn only_derive_is_allowed_to_implement_this_trait()
     where

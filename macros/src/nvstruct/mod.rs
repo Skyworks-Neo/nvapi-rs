@@ -92,13 +92,18 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
     // clone: `name` is used inside the padding-rewrite loop below, where
     // `item` is mutably borrowed by `data_mut()`
     let name = item.ident.clone();
-    let AsBytes = call_path_absolute(["zerocopy", "AsBytes"]);
+    let IntoBytes = call_path_absolute(["zerocopy", "IntoBytes"]);
     let FromBytes = call_path_absolute(["zerocopy", "FromBytes"]);
+    let FromZeros = call_path_absolute(["zerocopy", "FromZeros"]);
+    let Immutable = call_path_absolute(["zerocopy", "Immutable"]);
+    let TryFromBytes = call_path_absolute(["zerocopy", "TryFromBytes"]);
+    let Maybe = call_path_absolute(["zerocopy", "Maybe"]);
+    let InvariantAlignment = call_path_absolute(["zerocopy", "invariant", "Alignment"]);
 
     let (struct_attrs, expanded) = match unchecked {
         false => (
             quote! {
-                #[derive(Copy, Clone, Debug, #AsBytes, #FromBytes, #derives)]
+                #[derive(Copy, Clone, Debug, #IntoBytes, #FromBytes, #Immutable, #derives)]
                 #repr
             },
             quote! {
@@ -112,7 +117,7 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
                     /// `Box::<Self>::new_zeroed()` instead — see the
                     /// `Box::new(Default)` debug stack-overflow incident.
                     pub fn zeroed() -> Self {
-                        #FromBytes::new_zeroed()
+                        #FromZeros::new_zeroed()
                     }
                 }
             },
@@ -139,7 +144,31 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
                     }
                 }
 
-                unsafe impl #AsBytes for #name {
+                unsafe impl #IntoBytes for #name {
+                    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+                }
+
+                // zerocopy 0.8: Immutable is a standalone marker (no longer a
+                // supertrait); the nested-array/as_bytes bounds require it
+                unsafe impl #Immutable for #name {
+                    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+                }
+
+                unsafe impl #TryFromBytes for #name {
+                    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+
+                    fn is_bit_valid<A>(candidate: #Maybe<'_, Self, A>) -> bool
+                    where
+                        A: #InvariantAlignment,
+                    {
+                        // #[nv_unchecked] asserts the all-zero pattern is
+                        // valid; as plain old data every pattern is
+                        let _ = candidate;
+                        true
+                    }
+                }
+
+                unsafe impl #FromZeros for #name {
                     fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
                 }
 

@@ -318,7 +318,6 @@ nvbits! {
     ///
     /// Used in `NvAPI_GPU_GetPerfDecreaseInfo`
     pub enum NVAPI_GPU_PERF_DECREASE / PerformanceDecreaseReason {
-        NV_GPU_PERF_DECREASE_NONE / NONE = 0x00,
         NV_GPU_PERF_DECREASE_REASON_THERMAL_PROTECTION / THERMAL_PROTECTION = 0x01,
         NV_GPU_PERF_DECREASE_REASON_POWER_CONTROL / POWER_CONTROL = 0x02,
         NV_GPU_PERF_DECREASE_REASON_AC_BATT / AC_BATTERY = 0x04,
@@ -920,7 +919,14 @@ pub struct NV_GPU_UUID_V1 {
     pub uuid: [u8; NVAPI_UUID_LEN],
 }
 
-unsafe impl zerocopy::AsBytes for NV_GPU_UUID_V1 {
+unsafe impl zerocopy::IntoBytes for NV_GPU_UUID_V1 {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+unsafe impl zerocopy::Immutable for NV_GPU_UUID_V1 {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,
@@ -929,6 +935,28 @@ unsafe impl zerocopy::AsBytes for NV_GPU_UUID_V1 {
 }
 
 unsafe impl zerocopy::FromBytes for NV_GPU_UUID_V1 {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+unsafe impl zerocopy::TryFromBytes for NV_GPU_UUID_V1 {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+    fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+    where
+        A: zerocopy::invariant::Alignment,
+    {
+        // plain old data: every bit pattern is valid
+        let _ = candidate;
+        true
+    }
+}
+unsafe impl zerocopy::FromZeros for NV_GPU_UUID_V1 {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,

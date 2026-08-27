@@ -76,12 +76,10 @@ impl NvBitsBody {
         let flags = self.variants.iter().map(|v| v.clone().output_flag());
         let consts = self.variants.iter().map(|v| v.output_const(repr));
 
-        let variant_names_0 = self.variants.iter().map(|v| &v.ident);
         let variant_names_1 = self.variants.iter().map(|v| &v.ident);
 
         let ArgumentRangeError = sys_path(["ArgumentRangeError"]);
         let Default = call_path_absolute(["core", "default", "Default"]);
-        let Iterator = call_path_absolute(["core", "iter", "Iterator"]);
         let TryFrom = call_path_absolute(["core", "convert", "TryFrom"]);
         let Into = call_path_absolute(["core", "convert", "Into"]);
         let Result = call_path_absolute(["core", "result", "Result"]);
@@ -90,6 +88,10 @@ impl NvBitsBody {
         let NvBits = sys_path(["value", "NvBits"]);
         let NvValueBits = sys_path(["value", "NvValueBits"]);
         let NvValueData = sys_path(["value", "NvValueData"]);
+        let serialize = call_path_absolute(["serde", "Serialize"]);
+        let deserialize = call_path_absolute(["serde", "Deserialize"]);
+        let serializer = call_path_absolute(["serde", "Serializer"]);
+        let deserializer = call_path_absolute(["serde", "Deserializer"]);
         quote! {
             #(#attrs)*
             #vis type #value_ident = #NvBits<#ident>;
@@ -98,11 +100,35 @@ impl NvBitsBody {
 
             bitflags::bitflags! {
                 #(#attrs)*
-                #[cfg_attr(feature = "serde", derive(#serde::Serialize, #serde::Deserialize))]
-                #[derive(#Default, #NvValueBits)]
+                // bitflags 2 no longer auto-derives the std traits
+                #[derive(#Default, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, #NvValueBits)]
                 #[repr(transparent)]
                 #vis #struct_token #ident: #repr {
                     #(#flags)*
+                }
+            }
+
+            // bitflags 2's serde feature serializes flag NAMES ("A | B");
+            // keep the historical bitflags 1 wire format `{"bits": N}` that
+            // the nvoc JSON consumers (CLI bitmask decoding, GUI/TUI) parse
+            #[cfg(feature = "serde")]
+            impl #serialize for #ident {
+                fn serialize<__S: #serializer>(&self, serializer: __S) -> #Result<__S::Ok, __S::Error> {
+                    use #serde::ser::SerializeStruct;
+                    let mut s = serializer.serialize_struct("Bits", 1)?;
+                    s.serialize_field("bits", &self.bits())?;
+                    s.end()
+                }
+            }
+
+            #[cfg(feature = "serde")]
+            impl<'de> #deserialize<'de> for #ident {
+                fn deserialize<__D: #deserializer<'de>>(deserializer: __D) -> #Result<Self, __D::Error> {
+                    #[derive(#deserialize)]
+                    struct Bits { bits: #repr }
+                    let bits = Bits::deserialize(deserializer)?.bits;
+                    // lenient on unknown bits: monitoring degrades, never fails
+                    Ok(Self::from_bits_truncate(bits))
                 }
             }
 
@@ -116,20 +142,6 @@ impl NvBitsBody {
             impl #ident {
                 pub const fn value(self) -> #value_ident {
                     #value_ident::with_repr(self.bits())
-                }
-            }
-
-            impl #Iterator for #ident {
-                type Item = Self;
-
-                fn next(&mut self) -> Option<Self::Item> {
-                    #(
-                        if self.contains(#ident::#variant_names_0) {
-                            self.remove(#ident::#variant_names_0);
-                            Some(#ident::#variant_names_0)
-                        } else
-                     )*
-                    { None }
                 }
             }
 

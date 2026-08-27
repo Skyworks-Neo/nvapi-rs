@@ -20,11 +20,28 @@ macro_rules! nv_declare_handle {
             }
         }
 
-        unsafe impl zerocopy::AsBytes for $name {
+        unsafe impl zerocopy::IntoBytes for $name {
+            fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+        }
+        unsafe impl zerocopy::Immutable for $name {
             fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
         }
 
         unsafe impl zerocopy::FromBytes for $name {
+            fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+        }
+unsafe impl zerocopy::TryFromBytes for $name {
+    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+    fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+    where
+        A: zerocopy::invariant::Alignment,
+    {
+        // plain old data: every bit pattern is valid
+        let _ = candidate;
+        true
+    }
+}
+        unsafe impl zerocopy::FromZeros for $name {
             fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
         }
     };

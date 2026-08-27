@@ -73,21 +73,25 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
 #[cfg(windows)]
 pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
     use std::mem;
-    use std::os::raw::c_char;
-    use winapi::um::libloaderapi::{GetProcAddress, LoadLibraryA};
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 
     unsafe {
         let ptr = match QUERY_INTERFACE_CACHE.load(Ordering::Relaxed) {
             p if p.is_null() => {
-                let lib = LoadLibraryA(LIBRARY_NAME.as_ptr() as *const c_char);
+                let lib = LoadLibraryA(LIBRARY_NAME.as_ptr());
                 if lib.is_null() {
                     Err(Status::LibraryNotFound)
                 } else {
-                    let ptr = GetProcAddress(lib, FN_NAME.as_ptr() as *const c_char);
+                    // FARPROC is Option<fn>; a missing symbol is None, and a
+                    // present one transmutes to an opaque pointer for caching
+                    let proc_ = GetProcAddress(lib, FN_NAME.as_ptr());
+                    let ptr = match proc_ {
+                        Some(f) => f as *mut c_void,
+                        None => std::ptr::null_mut(),
+                    };
                     if ptr.is_null() {
                         Err(Status::LibraryNotFound)
                     } else {
-                        let ptr = ptr as *mut c_void;
                         QUERY_INTERFACE_CACHE.store(ptr, Ordering::Relaxed);
                         Ok(ptr)
                     }
@@ -173,7 +177,8 @@ nvapi! {
     Ord,
     Hash,
     zerocopy::FromBytes,
-    zerocopy::AsBytes,
+    zerocopy::IntoBytes,
+    zerocopy::Immutable,
 )]
 #[repr(transparent)]
 pub struct NvVersion {
@@ -244,7 +249,7 @@ pub trait VersionedStructField {
     where
         Self: Sized + zerocopy::FromBytes + StructVersion<VER>,
     {
-        let mut zero = <Self as zerocopy::FromBytes>::new_zeroed();
+        let mut zero = <Self as zerocopy::FromZeros>::new_zeroed();
         zero.nvapi_version_init::<VER>();
         zero
     }

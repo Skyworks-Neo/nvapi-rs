@@ -1,5 +1,11 @@
 use crate::prelude_::*;
-use winapi::um::unknwnbase::IUnknown;
+/// Opaque COM `IUnknown` stand-in: the NVAPI D3D entry points only pass these
+/// through as opaque pointer targets, so an empty #[repr(C)] type is
+/// ABI-equivalent without pulling in windows-sys's COM interface definitions.
+#[repr(C)]
+pub struct IUnknown {
+    _opaque: [u8; 0],
+}
 
 nv_declare_handle! { NVDX_ObjectHandle }
 pub const NVDX_OBJECT_NONE: NVDX_ObjectHandle = NVDX_ObjectHandle(::std::ptr::null());

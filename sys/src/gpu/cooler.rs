@@ -679,7 +679,14 @@ pub mod undocumented {
         pub curves: Array<[NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1; 4]>,
     }
 
-    unsafe impl zerocopy::AsBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
+    unsafe impl zerocopy::IntoBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::Immutable for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
         fn only_derive_is_allowed_to_implement_this_trait()
         where
             Self: Sized,
@@ -687,6 +694,28 @@ pub mod undocumented {
         }
     }
     unsafe impl zerocopy::FromBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::TryFromBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+        fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+        where
+            A: zerocopy::invariant::Alignment,
+        {
+            // plain old data: every bit pattern is valid
+            let _ = candidate;
+            true
+        }
+    }
+    unsafe impl zerocopy::FromZeros for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
         fn only_derive_is_allowed_to_implement_this_trait()
         where
             Self: Sized,

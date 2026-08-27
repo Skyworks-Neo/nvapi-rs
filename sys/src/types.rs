@@ -5,7 +5,7 @@ use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use std::os::raw::c_char;
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, TryFromBytes};
 
 pub type NvBool = u8;
 
@@ -13,7 +13,20 @@ pub const NV_TRUE: NvBool = 1;
 pub const NV_FALSE: NvBool = 0;
 
 /// A boolean containing reserved bits
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, AsBytes, FromBytes)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    IntoBytes,
+    FromBytes,
+    Immutable,
+)]
 #[repr(transparent)]
 pub struct BoolU32(pub u32);
 
@@ -163,7 +176,15 @@ impl<const N: usize> From<NvString<N>> for String {
     }
 }
 
-unsafe impl<const N: usize> AsBytes for NvString<N> {
+unsafe impl<const N: usize> IntoBytes for NvString<N> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
+unsafe impl<const N: usize> Immutable for NvString<N> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,
@@ -172,6 +193,31 @@ unsafe impl<const N: usize> AsBytes for NvString<N> {
 }
 
 unsafe impl<const N: usize> FromBytes for NvString<N> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
+unsafe impl<const N: usize> TryFromBytes for NvString<N> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+
+    fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+    where
+        A: zerocopy::invariant::Alignment,
+    {
+        // plain old data: every bit pattern is valid
+        let _ = candidate;
+        true
+    }
+}
+
+unsafe impl<const N: usize> FromZeros for NvString<N> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,
@@ -252,7 +298,15 @@ where
     }
 }
 
-unsafe impl<T: AsBytes> AsBytes for Padding<T> {
+unsafe impl<T: IntoBytes> IntoBytes for Padding<T> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
+unsafe impl<T: IntoBytes> Immutable for Padding<T> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,
@@ -268,17 +322,42 @@ unsafe impl<T: FromBytes> FromBytes for Padding<T> {
     }
 }
 
+unsafe impl<T: FromBytes> TryFromBytes for Padding<T> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+
+    fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+    where
+        A: zerocopy::invariant::Alignment,
+    {
+        // plain old data: every bit pattern is valid
+        let _ = candidate;
+        true
+    }
+}
+
+unsafe impl<T: FromBytes> FromZeros for Padding<T> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
 impl<T: FromBytes, const N: usize> Default for Padding<[T; N]> {
     fn default() -> Self {
         unsafe { MaybeUninit::zeroed().assume_init() }
     }
 }
 
-fn all_zero<T: AsBytes>(v: &T) -> bool {
+fn all_zero<T: IntoBytes + Immutable>(v: &T) -> bool {
     v.as_bytes().iter().all(|&v| v == 0)
 }
 
-impl<T: AsBytes, const N: usize> Padding<[T; N]> {
+impl<T: IntoBytes + Immutable, const N: usize> Padding<[T; N]> {
     pub fn all_zero(&self) -> bool {
         all_zero(self)
     }
@@ -291,7 +370,7 @@ impl<T: AsBytes, const N: usize> Padding<[T; N]> {
     }
 }
 
-impl<T: AsBytes + fmt::Debug, const N: usize> fmt::Debug for Padding<[T; N]> {
+impl<T: IntoBytes + Immutable + fmt::Debug, const N: usize> fmt::Debug for Padding<[T; N]> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let it = self.data.iter();
         f.write_str("[")?;
@@ -391,7 +470,15 @@ impl<const N: usize> Default for ClockMask<N> {
     }
 }
 
-unsafe impl<const N: usize> AsBytes for ClockMask<N> {
+unsafe impl<const N: usize> IntoBytes for ClockMask<N> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
+unsafe impl<const N: usize> Immutable for ClockMask<N> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,
@@ -400,6 +487,31 @@ unsafe impl<const N: usize> AsBytes for ClockMask<N> {
 }
 
 unsafe impl<const N: usize> FromBytes for ClockMask<N> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
+unsafe impl<const N: usize> TryFromBytes for ClockMask<N> {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+
+    fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+    where
+        A: zerocopy::invariant::Alignment,
+    {
+        // plain old data: every bit pattern is valid
+        let _ = candidate;
+        true
+    }
+}
+
+unsafe impl<const N: usize> FromZeros for ClockMask<N> {
     fn only_derive_is_allowed_to_implement_this_trait()
     where
         Self: Sized,

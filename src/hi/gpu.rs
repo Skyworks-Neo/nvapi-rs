@@ -1,9 +1,9 @@
 use super::{allowable_result, allowable_result_fallback};
 use crate::sys::value::NvValueData;
-use once_cell::sync::OnceCell;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 fn collect_domain<T: Copy, U: From<T>>(
     points: &BTreeMap<ClockDomain, Vec<(usize, T)>>,
@@ -37,7 +37,7 @@ use crate::{
 
 pub struct Gpu {
     gpu: PhysicalGpu,
-    vfp_info: OnceCell<VfpInfo>,
+    vfp_info: OnceLock<VfpInfo>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -194,7 +194,7 @@ impl Gpu {
     pub fn new(gpu: PhysicalGpu) -> Self {
         Gpu {
             gpu,
-            vfp_info: OnceCell::new(),
+            vfp_info: OnceLock::new(),
         }
     }
 
@@ -315,7 +315,16 @@ impl Gpu {
     }
 
     fn vfp_info(&self) -> crate::Result<crate::Result<&VfpInfo>> {
-        allowable_result(self.vfp_info.get_or_try_init(|| self.gpu.vfp_info()))
+        // std OnceLock has no stable get_or_try_init; a failed init must not
+        // be cached, so store only after success
+        let res: crate::NvapiResult<&VfpInfo> = match self.vfp_info.get() {
+            Some(info) => Ok(info),
+            None => {
+                let info = self.gpu.vfp_info()?;
+                Ok(self.vfp_info.get_or_init(|| info))
+            }
+        };
+        allowable_result(res)
     }
 
     pub fn status(&self) -> crate::Result<GpuStatus> {
@@ -484,7 +493,7 @@ impl Gpu {
             // than aborting the whole status read.
             performance_decrease: allowable_result_fallback(
                 self.gpu.performance_decrease(),
-                PerformanceDecreaseReason::NONE,
+                PerformanceDecreaseReason::empty(),
             )?,
             fan_arbiter_status: allowable_result_fallback(
                 self.gpu.fan_arbiter_status(),

@@ -323,7 +323,14 @@ pub mod undocumented {
         Bb2Active = 3,
     }
 
-    unsafe impl zerocopy::AsBytes for JpacFeature {
+    unsafe impl zerocopy::IntoBytes for JpacFeature {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::Immutable for JpacFeature {
         fn only_derive_is_allowed_to_implement_this_trait()
         where
             Self: Sized,
@@ -331,6 +338,28 @@ pub mod undocumented {
         }
     }
     unsafe impl zerocopy::FromBytes for JpacFeature {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::TryFromBytes for JpacFeature {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+        fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+        where
+            A: zerocopy::invariant::Alignment,
+        {
+            // plain old data: every bit pattern is valid
+            let _ = candidate;
+            true
+        }
+    }
+    unsafe impl zerocopy::FromZeros for JpacFeature {
         fn only_derive_is_allowed_to_implement_this_trait()
         where
             Self: Sized,
@@ -350,7 +379,14 @@ pub mod undocumented {
         Balanced = 2,
     }
 
-    unsafe impl zerocopy::AsBytes for Wm2AcousticMode {
+    unsafe impl zerocopy::IntoBytes for Wm2AcousticMode {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::Immutable for Wm2AcousticMode {
         fn only_derive_is_allowed_to_implement_this_trait()
         where
             Self: Sized,
@@ -358,6 +394,28 @@ pub mod undocumented {
         }
     }
     unsafe impl zerocopy::FromBytes for Wm2AcousticMode {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::TryFromBytes for Wm2AcousticMode {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+        fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+        where
+            A: zerocopy::invariant::Alignment,
+        {
+            // plain old data: every bit pattern is valid
+            let _ = candidate;
+            true
+        }
+    }
+    unsafe impl zerocopy::FromZeros for Wm2AcousticMode {
         fn only_derive_is_allowed_to_implement_this_trait()
         where
             Self: Sized,
