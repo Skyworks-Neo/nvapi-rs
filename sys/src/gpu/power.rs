@@ -323,6 +323,21 @@ pub mod private {
         Bb2Active = 3,
     }
 
+    unsafe impl zerocopy::AsBytes for JpacFeature {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::FromBytes for JpacFeature {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+
     /// Whisper Mode 2.0 acoustic mode (dword[19] when op=2, feature=Wm2Mode).
     #[repr(u32)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,6 +348,21 @@ pub mod private {
         Quiet = 1,
         /// Balanced — SL value 60.
         Balanced = 2,
+    }
+
+    unsafe impl zerocopy::AsBytes for Wm2AcousticMode {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::FromBytes for Wm2AcousticMode {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
     }
 
     impl Wm2AcousticMode {
@@ -1520,7 +1550,8 @@ pub mod private {
             pub ch_rel_mask: u32,
             pub total_gpu_power_channel_mask: u32,
             pub total_gpu_channel_idx: u8,
-            pub rsvd: Padding<[u8; 8]>,
+            /// explicit padding to 4-byte alignment for `channels` (29 -> 32)
+            pub rsvd: Padding<[u8; 11]>,
             pub channels: Array<[NV_GPU_POWER_MONITOR_POWER_CHANNEL_INFO_V2; NV_GPU_POWER_MONITOR_POWER_CHANNELS_MAX]>,
             pub ch_rels: Array<[NV_GPU_POWER_MONITOR_POWER_CHANNEL_RELATIONSHIP_INFO_V3; NV_GPU_POWER_MONITOR_POWER_CHANNELS_MAX]>,
         }

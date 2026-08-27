@@ -65,21 +65,60 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
             .collect()
     };
 
+    // `#[nv_unchecked]`: structs with fields zerocopy's derive rejects
+    // (function pointers, etc). Skip the derive and emit the manual
+    // unsafe impls instead — same semantics as the pre-proc-macro macro_rules.
+    let unchecked = item.attrs.iter().any(|a| a.path().is_ident("nv_unchecked"));
+    if unchecked {
+        if let Some(i) = item
+            .attrs
+            .iter()
+            .position(|a| a.path().is_ident("nv_unchecked"))
+        {
+            item.attrs.remove(i);
+        }
+    }
+
     let name = &item.ident;
     let AsBytes = call_path_absolute(["zerocopy", "AsBytes"]);
     let FromBytes = call_path_absolute(["zerocopy", "FromBytes"]);
 
-    let struct_attrs = quote! {
-        #[derive(Copy, Clone, Debug, #AsBytes, #FromBytes, #derives)]
-        #repr
-    };
+    let (struct_attrs, expanded) = match unchecked {
+        false => (
+            quote! {
+                #[derive(Copy, Clone, Debug, #AsBytes, #FromBytes, #derives)]
+                #repr
+            },
+            quote! {
+                impl #name {
+                    pub fn zeroed() -> Self {
+                        #FromBytes::new_zeroed()
+                    }
+                }
+            },
+        ),
+        true => (
+            quote! {
+                #[derive(Copy, Clone, Debug, #derives)]
+                #repr
+            },
+            quote! {
+                impl #name {
+                    pub fn zeroed() -> Self {
+                        let mut zero = ::core::mem::MaybeUninit::<Self>::zeroed();
+                        unsafe { zero.assume_init() }
+                    }
+                }
 
-    let expanded = quote! {
-        impl #name {
-            pub fn zeroed() -> Self {
-                #FromBytes::new_zeroed()
-            }
-        }
+                unsafe impl #AsBytes for #name {
+                    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+                }
+
+                unsafe impl #FromBytes for #name {
+                    fn only_derive_is_allowed_to_implement_this_trait() where Self: Sized { }
+                }
+            },
+        ),
     };
 
     let padding_fields = item
@@ -100,7 +139,7 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let requires_rewrite = !padding_fields.is_empty();
+    let requires_rewrite = !padding_fields.is_empty() || unchecked;
 
     let input = match requires_rewrite {
         false => input,

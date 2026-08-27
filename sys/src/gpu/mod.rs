@@ -936,13 +936,13 @@ unsafe impl zerocopy::FromBytes for NV_GPU_UUID_V1 {
     }
 }
 
-impl crate::nvapi::VersionedStruct for NV_GPU_UUID_V1 {
-    fn nvapi_version_mut(&mut self) -> &mut NvVersion {
-        &mut self.version
+impl crate::nvapi::VersionedStructField for NV_GPU_UUID_V1 {
+    fn nvapi_version_ref(&self) -> &NvVersion {
+        &self.version
     }
 
-    fn nvapi_version(&self) -> NvVersion {
-        self.version
+    fn nvapi_version_mut(&mut self) -> &mut NvVersion {
+        &mut self.version
     }
 }
 

@@ -87,7 +87,7 @@ pub mod api {
 
 pub(crate) mod prelude_ {
     pub(crate) use crate::handles::{self, NvPhysicalGpuHandle};
-    pub(crate) use crate::nvapi::NvVersion;
+    pub(crate) use crate::nvapi::{NvInherit, NvVersion, VersionedStructField};
     pub(crate) use crate::status::NvAPI_Status;
     pub(crate) use crate::types::*;
     pub(crate) type Array<T> = Padding<T>;

@@ -169,6 +169,21 @@ nvstruct! {
 #[derive(Copy, Clone, Debug)]
 pub struct NV_GPU_PSTATE20_CLOCK_ENTRY_DATA(NV_GPU_PSTATE20_CLOCK_ENTRY_RANGE);
 
+unsafe impl zerocopy::AsBytes for NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+unsafe impl zerocopy::FromBytes for NV_GPU_PSTATE20_CLOCK_ENTRY_DATA {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE {
     Single(NV_GPU_PSTATE20_CLOCK_ENTRY_SINGLE),
@@ -268,6 +283,8 @@ nvstruct! {
 nvstruct! {
     /// Used in NvAPI_GPU_GetPstates20() interface call.
     pub struct NV_GPU_PERF_PSTATES20_INFO_V2 {
+        #[nv_inherit]
+        #[nv_version_field]
         pub v1: NV_GPU_PERF_PSTATES20_INFO_V1,
         /// Number of populated voltages
         pub numVoltages: u32,
@@ -282,7 +299,6 @@ nvstruct! {
         pub voltages: Array<[NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1; NVAPI_MAX_GPU_PSTATE20_BASE_VOLTAGES]>,
     }
 }
-nvinherit! { NV_GPU_PERF_PSTATES20_INFO_V2(v1: NV_GPU_PERF_PSTATES20_INFO_V1) }
 
 nvversion! { NV_GPU_PERF_PSTATES20_INFO_V1(1) }
 nvversion! { NV_GPU_PERF_PSTATES20_INFO_V2(2) }

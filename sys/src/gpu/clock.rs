@@ -636,6 +636,7 @@ pub mod private {
         /// status struct: eventType(0/1)@+24, status byte@+28, flags@+32,
         /// and eventType 1 carries a ~9KB per-point payload starting at
         /// +0x6C.
+        #[nv_unchecked]
         pub struct NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1 {
             pub version: NvVersion,
             pub pad0: Padding<[u8; 44]>,
@@ -715,6 +716,7 @@ pub mod private {
         /// fn pointer sits at +0x50; UNREGISTER = the same call with a NULL
         /// callback. The callback receives (ctx, pStatus: *const
         /// NV_GPU_OC_SCANNER_STATUS) and returns u32.
+        #[nv_unchecked]
         pub struct NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX {
             pub version: NvVersion,
             pub pad0: Padding<[u8; 0x4C]>,
@@ -1266,6 +1268,8 @@ pub mod private {
             /// +16 QPC nanosecond timestamp
             pub timestamp_ns: u64,
             pub rsvd2: u32,
+            /// explicit tail padding (align 8: 28 -> 32 bytes)
+            pub rsvd3: u32,
         }
     }
 
@@ -1288,6 +1292,8 @@ pub mod private {
             pub timestamp_ns: u64,
             /// +24 extra dword out
             pub extra: u32,
+            /// explicit tail padding (align 8: 28 -> 32 bytes)
+            pub rsvd: u32,
         }
     }
 

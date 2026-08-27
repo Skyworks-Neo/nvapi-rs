@@ -1047,7 +1047,7 @@ impl PhysicalGpu {
         let mut v1 = unsafe {
             std::mem::zeroed::<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL>()
         };
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         *v1.nvapi_version_mut() = NvVersion::with_version(1 << 16 | 9248);
         v1.mask = info.mask.mask;
         unsafe { nvcall!(NvAPI_GPU_ClockClientClkVfPointsGetControl@get{v1}(self.0) => err) }
@@ -1151,7 +1151,7 @@ impl PhysicalGpu {
                 return v3_result;
             }
 
-            use crate::sys::nvapi::VersionedStruct;
+            use crate::sys::nvapi::VersionedStructField;
             let mut data_v1 =
                 std::mem::zeroed::<power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>();
             *data_v1.nvapi_version_mut() = NvVersion::with_struct::<
@@ -3353,7 +3353,7 @@ impl PhysicalGpu {
     ///   TBD (fill order +4/+8u8/+12, five mode dwords +16..+32).
     pub fn rated_tdp_readback(&self) -> crate::NvapiResult<(u32, u8, [u32; 10])> {
         trace!("gpu.rated_tdp_readback()");
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         use clock::private::{
             NV_GPU_RATED_TDP_CONTROL, NV_GPU_RATED_TDP_INFO, NV_GPU_RATED_TDP_STATUS,
         };
@@ -3486,7 +3486,7 @@ impl PhysicalGpu {
     /// 9-byte feature GUID 0B 0A 0E 08 E8 72 9D D9 F3 @+10 (validated).
     pub fn oem_oc_scanner_set_background(&self, enable: bool) -> crate::NvapiResult<()> {
         trace!("gpu.oem_oc_scanner_set_background({enable})");
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         use clock::private::NV_GPU_OC_BACKGROUND_SCANNER_CONTROL;
         let mut control = unsafe { std::mem::zeroed::<NV_GPU_OC_BACKGROUND_SCANNER_CONTROL>() };
         *control.nvapi_version_mut() = NvVersion::with_version(0x10048);
@@ -3659,7 +3659,7 @@ impl PhysicalGpu {
     /// currently in force (empty when unrestricted).
     pub fn pstate_client_limits(&self) -> crate::NvapiResult<Vec<PstateClientLimit>> {
         trace!("gpu.pstate_client_limits()");
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         use pstate::private::NV_GPU_PSTATE_CLIENT_LIMITS;
         let mut raw = unsafe { std::mem::zeroed::<NV_GPU_PSTATE_CLIENT_LIMITS>() };
         *raw.nvapi_version_mut() = NvVersion::with_struct::<NV_GPU_PSTATE_CLIENT_LIMITS>(1);
@@ -3688,7 +3688,7 @@ impl PhysicalGpu {
     /// PerfClientLimits (0x39442CFB) family — prefer that one on Pascal+.
     pub fn set_pstate_client_limits(&self, limits: &[PstateClientLimit]) -> crate::NvapiResult<()> {
         trace!("gpu.set_pstate_client_limits(len={})", limits.len());
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         use pstate::private::NV_GPU_PSTATE_CLIENT_LIMITS;
         if limits.len() > pstate::NVAPI_MAX_GPU_PSTATE20_PSTATES {
             return Err(crate::NvapiError::new(
@@ -3761,7 +3761,7 @@ impl PhysicalGpu {
     /// dGPU that would otherwise make overclock ops fail with -220.
     pub fn gc6_control(&self, cmd: u32) -> crate::NvapiResult<u32> {
         trace!("gpu.gc6_control(cmd={})", cmd);
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         let mut data = unsafe { std::mem::zeroed::<power::private::NV_GPU_GC6_CONTROL_V1>() };
         *data.nvapi_version_mut() =
             NvVersion::with_struct::<power::private::NV_GPU_GC6_CONTROL_V1>(1);
@@ -4302,7 +4302,7 @@ impl PhysicalGpu {
     /// ClientVoltRails percent family.
     pub fn pmgr_voltage_arbiter(&self) -> crate::NvapiResult<[u32; 11]> {
         trace!("gpu.pmgr_voltage_arbiter()");
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         use power::private::NV_PMGR_VOLTAGE_ARBITER_VALUES;
         let mut values = unsafe { std::mem::zeroed::<NV_PMGR_VOLTAGE_ARBITER_VALUES>() };
         *values.nvapi_version_mut() = NvVersion::with_version(0x20030);
@@ -4317,7 +4317,7 @@ impl PhysicalGpu {
     /// Elevation-gated (-104). Prefer the GET→patch→SET RMW pattern.
     pub fn set_pmgr_voltage_arbiter(&self, values: &[u32; 11]) -> crate::NvapiResult<()> {
         trace!("gpu.set_pmgr_voltage_arbiter({:?})", &values[..3]);
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         use power::private::NV_PMGR_VOLTAGE_ARBITER_VALUES;
         let mut buf = unsafe { std::mem::zeroed::<NV_PMGR_VOLTAGE_ARBITER_VALUES>() };
         *buf.nvapi_version_mut() = NvVersion::with_version(0x20030);
@@ -4335,7 +4335,7 @@ impl PhysicalGpu {
         trace!("gpu.power_modes_capability()");
         let mut info =
             unsafe { std::mem::zeroed::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>() };
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         *info.nvapi_version_mut() =
             NvVersion::with_struct::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>(1);
         let st = unsafe { sys::api::NvAPI_GPU_ClientPowerModesGetInfo(self.0, &mut info) };
@@ -4375,7 +4375,7 @@ impl PhysicalGpu {
             unsafe { std::mem::zeroed::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>() };
         let mut control =
             unsafe { std::mem::zeroed::<power::private::NV_GPU_CLIENT_POWER_MODES_CONTROL>() };
-        use crate::sys::nvapi::VersionedStruct;
+        use crate::sys::nvapi::VersionedStructField;
         *info.nvapi_version_mut() =
             NvVersion::with_struct::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>(1);
         *control.nvapi_version_mut() =
@@ -5288,12 +5288,12 @@ impl PhysicalGpu {
             } as _,
             i2cDevAddress: address << 1,
             pbI2cRegAddress: if register.is_empty() {
-                ptr::null_mut()
+                0
             } else {
-                register.as_ptr() as *mut _
+                register.as_ptr() as usize
             },
             regAddrSize: register.len() as _,
-            pbData: bytes.as_mut_ptr(),
+            pbData: bytes.as_mut_ptr() as usize,
             cbSize: bytes.len() as _,
             i2cSpeed: i2c::NVAPI_I2C_SPEED_DEPRECATED,
             i2cSpeedKhz: speed.raw(),
@@ -5335,12 +5335,12 @@ impl PhysicalGpu {
             } as _,
             i2cDevAddress: address << 1,
             pbI2cRegAddress: if register.is_empty() {
-                ptr::null_mut()
+                0
             } else {
-                register.as_ptr() as *mut _
+                register.as_ptr() as usize
             },
             regAddrSize: register.len() as _,
-            pbData: bytes.as_ptr() as *mut _,
+            pbData: bytes.as_ptr() as usize,
             cbSize: bytes.len() as _,
             i2cSpeed: i2c::NVAPI_I2C_SPEED_DEPRECATED,
             i2cSpeedKhz: speed.raw(),

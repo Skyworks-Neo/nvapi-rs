@@ -3,7 +3,10 @@
 use crate::prelude_::*;
 use std::os::raw::c_char;
 
-pub(crate) type Luid = (u32, i32);
+/// Locally unique ID (LUID) of a display adapter (donor-style tuple struct;
+/// replaces the old `(u32, i32)` alias so NvStruct can derive zerocopy).
+#[crate::nvapi::NvStruct]
+pub struct Luid(pub u32, pub i32);
 
 nvapi! {
     pub type EnumNvidiaDisplayHandleFn = extern "C" fn(thisEnum: u32, pNvDispHandle: *mut handles::NvDisplayHandle) -> NvAPI_Status;
