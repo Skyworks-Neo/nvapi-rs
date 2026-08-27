@@ -556,7 +556,7 @@ pub mod private {
 
     // ------------------------------------------------------------------
     // PerfLimits family — GPU frequency perf-cap (NDA). RE'd byte-exact from
-    // GPUMonCmd v7.0's `-gpuclk:<MHz>` (`GPUHandle::setGpcClock`). DISTINCT
+    // ref tool 2's `-gpuclk:<MHz>` (`GPUHandle::setGpcClock`). DISTINCT
     // from PerfClientLimits above (P-state lock, 780B): this is a 287KB
     // struct that clamps the perf max/min frequency to a cap value, not a
     // P-state/mode entry table. The medium GetInfo struct returns the entry
@@ -582,21 +582,21 @@ pub mod private {
     nvapi! {
         /// PerfLimits GetInfo (NDA 0xE63AE22B). Medium struct (magic 0x1300C);
         /// fills `count` at +0x08 — the entry count for the paired large
-        /// GetStatus/SetStatus struct. RE'd from GPUMonCmd isPStateLocked.
+        /// GetStatus/SetStatus struct. RE'd from ref tool 2 isPStateLocked.
         pub unsafe fn NvAPI_GPU_PerfLimitsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pPerfLimitsInfo: *mut u8) -> NvAPI_Status;
     }
 
     nvapi! {
         /// PerfLimits GetStatus (NDA 0xEFCEDD1F). Large struct (magic 0x6642C,
         /// 0x4642C B): reads back the current perf frequency caps. RE'd from
-        /// GPUMonCmd isPStateLocked.
+        /// ref tool 2 isPStateLocked.
         pub unsafe fn NvAPI_GPU_PerfLimitsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPerfLimits: *mut u8) -> NvAPI_Status;
     }
 
     nvapi! {
         /// PerfLimits SetStatus (NDA 0x32CA4983). Large struct (magic 0x6642C,
         /// 0x4642C B): sets the perf max/min frequency cap. RE'd from
-        /// GPUMonCmd `-gpuclk:<MHz>` (setGpcClock). MHz→kHz (×1000); -1=reset.
+        /// ref tool 2 `-gpuclk:<MHz>` (setGpcClock). MHz→kHz (×1000); -1=reset.
         pub unsafe fn NvAPI_GPU_PerfLimitsSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pPerfLimits: *const u8) -> NvAPI_Status;
     }
 
@@ -2487,7 +2487,10 @@ pub mod private {
             assert_eq!(size_of::<NV_PERF_VFE_EQU_INFO>() - 4, 83992);
             assert_eq!(size_of::<NV_PERF_VFE_VAR_INFO>(), vfe_var_info::SIZE);
             assert_eq!(size_of::<NV_PERF_VFE_VAR_CONTROL>(), vfe_var_control::SIZE);
-            assert_eq!(size_of::<NV_PERF_VFE_EQU_CONTROL>(), vfe_equ_control::SIZE_MAX);
+            assert_eq!(
+                size_of::<NV_PERF_VFE_EQU_CONTROL>(),
+                vfe_equ_control::SIZE_MAX
+            );
         }
 
         /// equ-info: synthetic entry decode round-trip at the calibrated
@@ -2569,7 +2572,8 @@ pub mod private {
             put_u32(&mut s.rest, base + vfe_var_control::TYPE, 13);
             put_u32(&mut s.rest, base + vfe_var_control::PAYLOAD, 7);
             assert_eq!(s.entry_dwords(3, 2), Some(vec![13, 7]));
-            let over = (vfe_var_control::SIZE - vfe_var_control::ENTRIES) / vfe_var_control::STRIDE + 2;
+            let over =
+                (vfe_var_control::SIZE - vfe_var_control::ENTRIES) / vfe_var_control::STRIDE + 2;
             assert!(over > vfe_var_control::MAX_ENTRIES);
             assert_eq!(s.entry_dwords(over, 1), None);
         }

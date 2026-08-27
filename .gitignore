@@ -4,6 +4,7 @@
 /.gitattributes
 *.swp
 /.idea/
+/examples/
 
 # reverse-engineering probe artifacts (binary dumps)
 reverse_*.bin

@@ -1235,11 +1235,11 @@ Unknown_2AD3DBAB_PowerMonitorGetStatusV45 = 0x2ad3dbab,
 /// documentation-only record so the IID is reserved/known.
 Unknown_D7C61344_InternalUnload = 0xd7c61344,
 
-// source: gpumon.exe (NVIDIA OEM partner tool, reverse/the ref tool/the ref-tool GUI)
+// source: ref tool (NVIDIA OEM partner tool, reverse/the ref tool/the ref-tool GUI)
 //
 // These IDs were discovered by extracting the ref-tool GUI's complete
 // `nvapi_QueryInterface` surface (128 call sites on the cached
-// qword_140F1A7B8 pointer; see reverse/gpumon-raw-id-table.md) and naming
+// qword_140F1A7B8 pointer; naming
 // each via its caller's labeled `GPUHandle::*` / `DriverInvoker::*` /
 // `Connector::*` method (the ref tool embeds the method name in its own
 // `[Class::method] NvAPI fail to ...` log strings). They are NDA /
@@ -1249,8 +1249,7 @@ Unknown_D7C61344_InternalUnload = 0xd7c61344,
 // NvAPI_* name unless independently confirmed); the doc comment records
 // the the ref tool method + role as the evidence trail. id_hex values are
 // re-verified from fresh decompiles (the phase-1 extraction misread a
-// few probe-wrapper literals). See reverse/gpumon-id-catalog-for-review.md
-// for the prioritized wrap list.
+// few probe-wrapper literals).
 
 /// `Unknown_845866AD` — GPUHandle::pollPcieErrorCount - PCIe link error COUNT (new NDA, !=GetPCIEInfo)
 Unknown_845866AD = 0x845866ad,
@@ -1323,7 +1322,7 @@ NvAPI_GPU_GetSKUInfo = 0x32464c6c,
 /// `NvAPI_GPU_PerfLimitsSetStatus` — GPUHandle::setGpcClock - limit perf frequency
 NvAPI_GPU_PerfLimitsSetStatus = 0x32ca4983,
 /// `Unknown_33C7F5EC` — sub_140001060 init: debug-probe register (stored qword_140F1A7C8) [the ref tool init/teardown].
-/// In gpumoncmd.exe this SAME ID is additionally the per-call ENTER profiling hook (wrapped around every API call).
+/// In ref tool 2 this SAME ID is additionally the per-call ENTER profiling hook (wrapped around every API call).
 Unknown_33C7F5EC = 0x33c7f5ec,
 /// `Unknown_34249506` — GPUHandle::setTgpPercent sub-call - client power policy
 Unknown_34249506 = 0x34249506,
@@ -1355,7 +1354,7 @@ NvAPI_GPU_ClockClkDomainsGetInfo = 0x57b5a5df,
 /// `Unknown_57FA8E2C` — GPUHandle::queryFrameBuffer sub-call - frame-buffer/VRAM query
 Unknown_57FA8E2C = 0x57fa8e2c,
 /// `Unknown_594762E4` — sub_140001060 init: debug-probe unregister (stored qword_140F1A7D0) [the ref tool init/teardown].
-/// In gpumoncmd.exe this SAME ID is additionally the per-call EXIT profiling hook (paired with Unknown_33C7F5EC).
+/// In ref tool 2 this SAME ID is additionally the per-call EXIT profiling hook (paired with Unknown_33C7F5EC).
 Unknown_594762E4 = 0x594762e4,
 /// `NvAPI_DISP_DP_LinkConfiguration` — Connector::doLinkTraining/getCurrentLinkConfig - set/get display link config
 NvAPI_DISP_DP_LinkConfiguration = 0x595e3ef6,
@@ -1469,7 +1468,7 @@ NvAPI_GPU_ClientTgpWattSetStatus = 0xaffc2279,
 /// this ID. Returns NULL from QI on the RTX 4060 Laptop driver (the
 /// the ref-tool CLI/the ref-tool CLI variant 0xAFFC2279 is the live one there). Kept
 /// registered for completeness.
-NvAPI_GPU_ClientTgpWattSetStatus_GpuMonExe = 0xbff09e59,
+NvAPI_GPU_ClientTgpWattSetStatus_Variant = 0xbff09e59,
 /// `NvAPI_GPU_ClientThermalTargetGetStatus` — GPUHandle::setTargetTemperature
 /// GET-prime (NDA-private, ID 0xC4554575). The read half of the mobile temp-wall
 /// (targettemp) RMW: fills a 992-byte control buffer that the caller patches then
@@ -1485,7 +1484,7 @@ Unknown_C9F86A33 = 0xc9f86a33,
 Unknown_CF0AB99F = 0xcf0ab99f,
 /// `NvAPI_GPU_FanCoolerGetControl` — GPUHandle::pollFanSpeed/setFanSim - ClientFanCoolersGetControl
 NvAPI_GPU_FanCoolerGetControl = 0xcf86b990,
-/// `NvAPI_SYS_ClientJpacSetControl` — GPUMonCmd.exe's setBb2Active/setWm2Active/setWm2Mode:
+/// `NvAPI_SYS_ClientJpacSetControl` — ref tool 2's setBb2Active/setWm2Active/setWm2Mode:
 /// multi-feature BB2/WM2 control (1224B buffer, magic 0x104C8). dword[1]=op (1=active,2=mode),
 /// dword[18]=feature (0=WM2-active,1=WM2-mode,3=BB2-active), dword[19]=enable flag or mode enum.
 NvAPI_SYS_ClientJpacSetControl = 0xd2561b69,
@@ -1511,17 +1510,15 @@ NvAPI_DISP_GetEdidParsed = 0xf576f5cf,
 Unknown_F9E92A44 = 0xf9e92a44,
 
 // ---------------------------------------------------------------------------
-// source: gpumon.exe + gpumoncmd.exe — second extraction pass (complete surface)
+// source: ref tools — second extraction pass (complete surface)
 //
 // These IDs come from a FULL re-extraction of BOTH the ref tool binaries' nvapi
 // QueryInterface surface (authoritative: xref walk of the cached QI pointer
 // in each binary — the ref-tool GUI 124 distinct IDs @ qword_140F1A7B8, the ref-tool CLI
-// 100 distinct IDs @ qword_1400AA948; union = 127). The earlier gpumon.exe
+// 100 distinct IDs @ qword_1400AA948; union = 127). The earlier ref tools
 // block above was hand-built from a PARTIAL extraction and missed these; the
-// complete walk plus the previously-unreversed gpumoncmd.exe surfaced 22 IDs
-// absent from this registry. See reverse/full_surface_final.json for the
-// per-binary presence table and reverse/gpumoncmd-nvapi-extract.md for the
-// gpumoncmd-specific pass. Each name below is grounded in the the ref tool
+// complete walk plus the previously-unreversed ref tools surfaced 22 IDs
+// absent from this registry.  Each name below is grounded in the the ref tool
 // `[GPUHandle::method]` / `[DriverInvoker::method]` log string of the thunk's
 // caller (re-verified via IDA MCP this pass), not guessed from the ID.
 
@@ -1588,11 +1585,11 @@ NvAPI_GPU_PerfLimitsGetStatus = 0xefcedd1f,
 /// `Unknown_F9D60904` — GPUHandle::pollPowerState - power supply state (AC/DC) read
 Unknown_F9D60904 = 0xf9d60904,
 
-// --- gpumoncmd.exe-only IDs (NOT present in the ref-tool GUI) ---
-/// `Unknown_01510308` — gpumoncmd.exe init stub - private init/enum resolver (cached @ 0x1400AA940)
+// --- ref tool 2 -only IDs (NOT present in the ref-tool GUI) ---
+/// `Unknown_01510308` — ref tool 2 init stub - private init/enum resolver (cached @ 0x1400AA940)
 Unknown_01510308 = 0x01510308,
 // NOTE: 0x33C7F5EC and 0x594762E4 are already registered above (the ref tool init
-// debug-probe). In gpumoncmd.exe these SAME two IDs are additionally used as
+// debug-probe). In ref tool 2  these SAME two IDs are additionally used as
 // per-call ENTER/EXIT profiling hooks wrapping every API call — see the
 // existing entries at Unknown_33C7F5EC / Unknown_594762E4 above.
 

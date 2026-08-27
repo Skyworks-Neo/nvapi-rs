@@ -630,7 +630,7 @@ pub mod private {
     }
 
     // One user-editable temperature→RPM point of the CURVE table. Layout RE'd
-    // byte-for-byte from GPUMon.exe setFanCurve/pollFanCurve and cross-checked
+    // byte-for-byte from ref tool's setFanCurve/pollFanCurve and cross-checked
     // against the nvapi64_impl.dll ObjInfo handler for the ClientFanPolicies
     // {Get,Set}Control pair. The driver's Set handler enforces strict
     // monotonicity across all three dword lanes (temp, reserved, rpm) plus
@@ -638,20 +638,20 @@ pub mod private {
     nvstruct! {
         pub struct NV_GPU_CLIENT_FAN_POLICIES_POINT_V1 {
             /// input temperature, Q8.8 fixed-point (celsius × 256) — the
-            /// GPUMon dialog stores `temp << 8` here and reads it back as
+            /// stores `temp << 8` here and reads it back as
             /// `(x + 128) >> 8`.
             pub temp_q8: u32,
-            /// reserved lane — GPUMon never writes it (kept from the GET
+            /// reserved lane — ref tool 2 never writes it (kept from the GET
             /// snapshot); the driver still requires it monotonic.
             pub reserved: u32,
-            /// target fan speed, Q16 scaled (RPM × 65536/100); GPUMon reads
+            /// target fan speed, Q16 scaled (RPM × 65536/100); ref tool 2 reads
             /// it back as `(x * 100 + 32768) / 65536`.
             pub rpm_q16: u32,
         }
     }
 
     // One fan-curve slot (temperature→RPM points) in the control table.
-    // 52 bytes — the per-curve stride GPUMon and the impl handler share.
+    // 52 bytes — the per-curve stride ref tool and the impl handler share.
     nvstruct! {
         pub struct NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1 {
             /// curve slot index (byte @ slot+0, abs +20)
@@ -664,11 +664,11 @@ pub mod private {
     }
 
     /// Undocumented client fan-policy curve table (structure magic `0x200DC`;
-    /// legacy sibling `0x10038`). RE'd from GPUMon.exe (`setFanCurve`, pane
+    /// legacy sibling `0x10038`). RE'd from ref tool 2 (`setFanCurve`, pane
     /// "DialogFanCurve") and nvapi64_impl.dll — both GET and SET marshal the
     /// same table through RM escape `0x07000198`. To change one curve you GET
     /// a snapshot, edit the slot (`+20 + 52·k`), then SET it back (RMW).
-    /// `count` ≤ 4 curves; "Next Curve" in GPUMon just cycles `(idx+1) % count`.
+    /// `count` ≤ 4 curves; "Next Curve" in ref tool 2 just cycles `(idx+1) % count`.
     #[repr(C)]
     #[derive(Copy, Clone, Debug)]
     pub struct NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1 {
@@ -790,11 +790,11 @@ pub mod private {
     }
 
     // ------------------------------------------------------------------
-    // FanPolicy whole-block reset family (NDA). RE'd from GPUMon.exe
+    // FanPolicy whole-block reset family (NDA). RE'd from ref tool 2
     // `GPUHandle::resetFanCurve` (sub_140030830): GET the full 0x14AC-byte
     // fan-policy block, write `1 << curve_index` into the bitmask dword at
     // +0x04 and set the flag bit0 at +0x08, SET it back — the driver
-    // restores that curve slot to factory. This is GPUMon's NVAPI fan
+    // restores that curve slot to factory. This is ref tool 2's NVAPI fan
     // reset, NOT the public RestoreCoolerSettings (which the driver rejects
     // with NOT_SUPPORTED on GPUs whose user-mode cooler table isn't
     // exposed, e.g. desktop 3060/2070; NVML's SetDefaultFanSpeed_v2 goes
@@ -803,7 +803,7 @@ pub mod private {
     // Struct layout (magic 0x214AC = size 0x14AC | version 2):
     //   +0x00 u32  magic 0x214AC
     //   +0x04 u32  reset bitmask: bit N set = reset curve slot N
-    //   +0x08 u32  flag dword: bit0 set by GPUMon's reset (meaning: apply)
+    //   +0x08 u32  flag dword: bit0 set by ref tool 2's reset (meaning: apply)
     //   +0x0C..    opaque driver-filled policy data (memset from +0x0C,
     //              0x14A4 bytes; GET fills the rest first)
     // Cross-checked against nvapi64_impl.dll's 0x214AC handler.
@@ -819,7 +819,7 @@ pub mod private {
         pub type GPU_FanPolicyGetControlFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pPolicy: *mut u8) -> NvAPI_Status;
 
         /// Undocumented (NDA 0x0FE87B7F). Fills the full fan-policy block
-        /// (magic 0x214AC, 0x14AC bytes). RE'd from GPUMon resetFanCurve.
+        /// (magic 0x214AC, 0x14AC bytes). RE'd from ref tool 2's resetFanCurve.
         pub unsafe fn NvAPI_GPU_FanPolicyGetControl;
     }
 
@@ -828,12 +828,12 @@ pub mod private {
 
         /// Undocumented (NDA 0x2B2A2A45). Writes the full fan-policy block;
         /// a set bit in the +0x04 bitmask resets that curve slot to factory.
-        /// RE'd from GPUMon resetFanCurve.
+        /// RE'd from ref tool 2's resetFanCurve.
         pub unsafe fn NvAPI_GPU_FanPolicySetControl;
     }
 
     // ------------------------------------------------------------------
-    // Private FanCoolers family (NDA). RE'd from GPUMon.exe
+    // Private FanCoolers family (NDA). RE'd from ref tool
     // `GPUHandle::setFanSim` (sub_140030F40): the private cooler info +
     // control path used for RPM-direct fan simulation. DISTINCT from the
     // public ClientFanCoolers family (0xFB85B01E etc.) — different IDs,
@@ -848,7 +848,7 @@ pub mod private {
     // Info struct (0x108A8 = version 1, size 0x8A8 = 2216B):
     //   +0x00 u32  magic 0x108A8
     //   +0x04 u32  32-bit cooler presence MASK (bit i = cooler i exists;
-    //              NOT a count — popcount it. GPUMon pollFanSpeed iterates
+    //              NOT a count — popcount it. ref tool 2 pollFanSpeed iterates
     //              bits, so a GPU with 2 fans can report bits 0,1,2 set).
     //
     // Control struct (0x210AC, per-cooler stride 33 dword = 0x84):
@@ -886,12 +886,12 @@ pub mod private {
     /// Per-cooler entry stride (33 dword = 0x84 bytes). Field addressing is
     /// `dword[33*cooler + field_idx]` straight from the struct base — the
     /// magic/count header occupies entry0's first two dword slots and the
-    /// driver tolerates that overlap (GPUMon's exact arithmetic).
+    /// driver tolerates that overlap (ref tool 2's exact arithmetic).
     pub const NV_GPU_FAN_COOLER_ENTRY_STRIDE: usize = 0x84;
     /// Byte offset of the first entry (= 0; fields index from struct base).
     pub const NV_GPU_FAN_COOLER_ENTRY0_BASE: usize = 0x00;
     // Per-cooler field offsets (dword index × 4, from struct base +
-    // cooler * 0x84). RE'd from GPUMon v19[33*v4 + N]:
+    // cooler * 0x84). RE'd from ref tool 2 v19[33*v4 + N]:
     pub const NV_GPU_FAN_COOLER_OFF_TYPE: usize = 11 * 4; // dword 11
     pub const NV_GPU_FAN_COOLER_OFF_MIN_RPM: usize = 20 * 4; // dword 20
     pub const NV_GPU_FAN_COOLER_OFF_MAX_RPM: usize = 21 * 4; // dword 21
@@ -913,7 +913,7 @@ pub mod private {
 
         /// Undocumented (NDA 0x65CE5BFC). Fills the private cooler info
         /// struct (magic 0x108A8): per-cooler type + min/max RPM range.
-        /// RE'd from GPUMon setFanSim.
+        /// RE'd from ref tool 2's setFanSim.
         pub unsafe fn NvAPI_GPU_FanCoolerGetInfo;
     }
 
@@ -922,7 +922,7 @@ pub mod private {
 
         /// Undocumented (NDA 0xCF86B990). Fills the private cooler control
         /// struct (magic 0x210AC): per-cooler enable/level snapshot.
-        /// RE'd from GPUMon setFanSim (RMW baseline).
+        /// RE'd from ref tool 2's setFanSim (RMW baseline).
         pub unsafe fn NvAPI_GPU_FanCoolerGetControl;
     }
 
@@ -931,7 +931,7 @@ pub mod private {
 
         /// Undocumented (NDA 0x3CC2D181). Fills the private cooler status
         /// struct (magic 0x210A8): per-cooler current speed (dword 19,
-        /// driver scale) + current PWM (dword 24, Q16). RE'd from GPUMon
+        /// driver scale) + current PWM (dword 24, Q16). RE'd from ref tool 2
         /// pollFanSpeed.
         pub unsafe fn NvAPI_GPU_FanCoolerGetStatus;
     }
@@ -940,7 +940,7 @@ pub mod private {
         pub type GPU_FanCoolerSetControlFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const u8) -> NvAPI_Status;
 
         /// Undocumented (NDA 0xEB44E8AA). Writes the private cooler control
-        /// struct. RE'd from GPUMon setFanSim (RMW write-back).
+        /// struct. RE'd from ref tool 2's setFanSim (RMW write-back).
         pub unsafe fn NvAPI_GPU_FanCoolerSetControl;
     }
 }

@@ -1858,9 +1858,8 @@ impl PhysicalGpu {
         let mut status = unsafe {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE>::new_zeroed();
             let mut b = b.assume_init();
-            b.version = NvVersion::with_version(
-                NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE::MAGIC,
-            );
+            b.version =
+                NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE::MAGIC);
             b
         };
         info.seed_status_header(&mut status);
@@ -2032,8 +2031,7 @@ impl PhysicalGpu {
         let mut ctrl = unsafe {
             let b = Box::<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             let mut b = b.assume_init();
-            b.version =
-                NvVersion::with_version(clock::private::clk_vfp_control::MAGIC as u32);
+            b.version = NvVersion::with_version(clock::private::clk_vfp_control::MAGIC as u32);
             b
         };
         ctrl.seed_masks_from_info(&info);
@@ -2104,11 +2102,12 @@ impl PhysicalGpu {
 
         // 1. GetInfo → seed bank masks (mandatory, same as the read path)
         let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
-    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
-    let mut b = b.assume_init();
-    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
-    b
-};
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+            let mut b = b.assume_init();
+            b.version =
+                NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+            b
+        };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
@@ -2118,9 +2117,9 @@ impl PhysicalGpu {
         // Use unsafe { zeroed() } not default() — the 4MB rest[] array
         // would overflow the stack when Box::new moves it from stack to heap.
         let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
-                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
-                b.assume_init()
-            };
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+            b.assume_init()
+        };
         snapshot.version =
             sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
@@ -2155,9 +2154,9 @@ impl PhysicalGpu {
 
         // 5. Readback + verify
         let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
-                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
-                b.assume_init()
-            };
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+            b.assume_init()
+        };
         verify.version = sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
@@ -2243,11 +2242,12 @@ impl PhysicalGpu {
         // baseline: info + seeded status read (the ladder reuses `info` to
         // re-read status after each write)
         let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
-    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
-    let mut b = b.assume_init();
-    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
-    b
-};
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+            let mut b = b.assume_init();
+            b.version =
+                NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+            b
+        };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
@@ -2398,11 +2398,12 @@ impl PhysicalGpu {
 
         // 1. GetInfo → seed masks
         let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
-    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
-    let mut b = b.assume_init();
-    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
-    b
-};
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+            let mut b = b.assume_init();
+            b.version =
+                NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+            b
+        };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
@@ -2410,9 +2411,9 @@ impl PhysicalGpu {
 
         // 2. GetControl snapshot (on heap, zeroed to avoid stack overflow)
         let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
-                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
-                b.assume_init()
-            };
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+            b.assume_init()
+        };
         snapshot.version =
             sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
@@ -2445,9 +2446,9 @@ impl PhysicalGpu {
 
         // 5. Readback first + last point's mode to verify SET succeeded
         let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
-                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
-                b.assume_init()
-            };
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+            b.assume_init()
+        };
         verify.version = sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
@@ -2501,20 +2502,21 @@ impl PhysicalGpu {
         }
 
         let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
-    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
-    let mut b = b.assume_init();
-    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
-    b
-};
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+            let mut b = b.assume_init();
+            b.version =
+                NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+            b
+        };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
             .map_err(crate::Error::from)?;
 
         let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
-                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
-                b.assume_init()
-            };
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+            b.assume_init()
+        };
         snapshot.version =
             sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
@@ -2545,9 +2547,9 @@ impl PhysicalGpu {
 
         // verify the first point took mode=1
         let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
-                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
-                b.assume_init()
-            };
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+            b.assume_init()
+        };
         verify.version = sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
@@ -2601,11 +2603,12 @@ impl PhysicalGpu {
 
         // 1. GetInfo → point masks + descriptors (mandatory seed).
         let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
-    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
-    let mut b = b.assume_init();
-    b.version = NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
-    b
-};
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
+            let mut b = b.assume_init();
+            b.version =
+                NvVersion::with_version(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC);
+            b
+        };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
@@ -2613,9 +2616,9 @@ impl PhysicalGpu {
 
         // 2. GetControl snapshot with seeded masks — the RMW source.
         let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
-                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
-                b.assume_init()
-            };
+            let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+            b.assume_init()
+        };
         snapshot.version =
             sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
@@ -2668,9 +2671,9 @@ impl PhysicalGpu {
         // no point to read back, and the SET was a no-op snapshot round-trip.
         if written > 0 {
             let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
-                    let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
-                    b.assume_init()
-                };
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+                b.assume_init()
+            };
             verify.version =
                 sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
             verify.seed_masks_from_info(&info);
@@ -2708,7 +2711,7 @@ impl PhysicalGpu {
     pub fn vfe_equ_info(&self) -> crate::Result<crate::clock::VfeEquInfo> {
         trace!("gpu.vfe_equ_info()");
         use crate::sys::api::NvAPI_GPU_PerfVfeEquGetInfo;
-        use clock::private::{vfe_equ_info, NV_PERF_VFE_EQU_INFO};
+        use clock::private::{NV_PERF_VFE_EQU_INFO, vfe_equ_info};
 
         let mut buf = vec![0u8; vfe_equ_info::SIZE];
         buf[0..4].copy_from_slice(&vfe_equ_info::MAGIC.to_le_bytes());
@@ -2742,7 +2745,7 @@ impl PhysicalGpu {
     pub fn vfe_equ_control(&self) -> crate::Result<crate::clock::VfeEquControl> {
         trace!("gpu.vfe_equ_control()");
         use crate::sys::api::NvAPI_GPU_PerfVfeEquGetControl;
-        use clock::private::{vfe_equ_control, vfe_equ_info, NV_PERF_VFE_EQU_CONTROL};
+        use clock::private::{NV_PERF_VFE_EQU_CONTROL, vfe_equ_control, vfe_equ_info};
 
         let info = self.vfe_equ_info().ok();
         let mut buf = vec![0u8; vfe_equ_control::SIZE_MAX];
@@ -2757,8 +2760,7 @@ impl PhysicalGpu {
             buf.iter_mut().for_each(|b| *b = 0);
             buf[0..4].copy_from_slice(&magic.to_le_bytes());
             {
-                let s: &mut NV_PERF_VFE_EQU_CONTROL =
-                    unsafe { &mut *buf.as_mut_ptr().cast() };
+                let s: &mut NV_PERF_VFE_EQU_CONTROL = unsafe { &mut *buf.as_mut_ptr().cast() };
                 match &info {
                     Some(i) => {
                         // seed mask dwords from GetInfo's mask
@@ -2816,18 +2818,13 @@ impl PhysicalGpu {
     /// elevation-gated. Takes a prepared control block (snapshot from a
     /// GetControl buffer re-read via this method's buffer conventions).
     /// Only for privileged tooling; not exposed to hi/core/CLI.
-    pub fn set_vfe_equ_control_raw(
-        &self,
-        block: &[u8],
-    ) -> crate::Result<()> {
+    pub fn set_vfe_equ_control_raw(&self, block: &[u8]) -> crate::Result<()> {
         trace!("gpu.set_vfe_equ_control_raw(len={})", block.len());
         use crate::sys::api::NvAPI_GPU_PerfVfeEquSetControl;
         if block.len() < 4 || block.len() > clock::private::vfe_equ_control::SIZE_MAX {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
-        let st = unsafe {
-            NvAPI_GPU_PerfVfeEquSetControl(self.0, block.as_ptr().cast())
-        };
+        let st = unsafe { NvAPI_GPU_PerfVfeEquSetControl(self.0, block.as_ptr().cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_PerfVfeEquSetControl, st)
             .map_err(crate::Error::from)?;
         Ok(())
@@ -2839,7 +2836,7 @@ impl PhysicalGpu {
     pub fn vfe_var_info(&self) -> crate::Result<crate::clock::VfeVarInfo> {
         trace!("gpu.vfe_var_info()");
         use crate::sys::api::NvAPI_GPU_PerfVfeVarGetInfo;
-        use clock::private::{vfe_var_info, NV_PERF_VFE_VAR_INFO};
+        use clock::private::{NV_PERF_VFE_VAR_INFO, vfe_var_info};
 
         let mut buf = vec![0u8; vfe_var_info::SIZE];
         buf[0..4].copy_from_slice(&vfe_var_info::MAGIC.to_le_bytes());
@@ -2870,7 +2867,7 @@ impl PhysicalGpu {
     pub fn vfe_var_control(&self) -> crate::Result<crate::clock::VfeVarControl> {
         trace!("gpu.vfe_var_control()");
         use crate::sys::api::NvAPI_GPU_PerfVfeVarGetControl;
-        use clock::private::{vfe_var_control, NV_PERF_VFE_VAR_CONTROL};
+        use clock::private::{NV_PERF_VFE_VAR_CONTROL, vfe_var_control};
 
         let mut buf = vec![0u8; vfe_var_control::SIZE];
         buf[0..4].copy_from_slice(&vfe_var_control::MAGIC.to_le_bytes());
@@ -3254,13 +3251,13 @@ impl PhysicalGpu {
     }
 
     /// Set the GPU frequency perf-cap (the ref tool `-gpuclk:<MHz>` SETTER,
-    /// PerfLimitsSetStatus NDA 0x32CA4983). RE'd byte-exact from GPUMonCmd v7.0's
+    /// PerfLimitsSetStatus NDA 0x32CA4983). RE'd byte-exact from ref tool 2's
     /// `GPUHandle::setGpcClock`: clamps the perf max/min frequency to a cap
     /// value — NOT an offset, NOT a P-state lock (that's [`set_pstate_native`]).
     ///
     /// `PerfFreqCap::Cap { max_khz, min_khz }` writes two entries (max + min);
     /// `PerfFreqCap::Reset` clears both (the `-gpuclk:-1` path). `freq_khz` is
-    /// MHz × 1000. Faithful to GPUMon: does NOT call `private_lifecycle_init`
+    /// MHz × 1000. Faithful to source: does NOT call `private_lifecycle_init`
     /// (setGpcClock calls the raw setter directly, unlike setPState).
     pub fn set_perf_freq_cap(&self, cap: PerfFreqCap) -> crate::NvapiResult<()> {
         trace!("gpu.set_perf_freq_cap({:?})", cap);
@@ -3274,7 +3271,7 @@ impl PhysicalGpu {
     }
 
     /// Read back the active GPU frequency perf-caps (PerfLimitsGetStatus NDA
-    /// 0xEFCEDD1F). RE'd from GPUMonCmd `isPStateLocked`: the 3-step query —
+    /// 0xEFCEDD1F). RE'd from ref tool 2 `isPStateLocked`: the 3-step query —
     /// GetInfo (count) → large GetStatus. Returns one entry per active cap
     /// (max/min); `locked` is true where the cap is currently applied.
     pub fn perf_freq_caps(&self) -> crate::NvapiResult<Vec<PerfFreqCapEntry>> {
@@ -3305,7 +3302,7 @@ impl PhysicalGpu {
             };
             // Skip empty slots: the driver returns a large count (the struct's
             // full capacity) but only a few entries are active caps. Mirror
-            // GPUMon's isPStateLocked, which only acts on entries where the
+            // ref tool 2's isPStateLocked, which only acts on entries where the
             // locked flag / type / freq are non-zero.
             if entry.locked || entry.type_marker != 0 || entry.freq_khz != 0 {
                 out.push(entry);
@@ -3315,7 +3312,7 @@ impl PhysicalGpu {
     }
 
     /// Read the entry count from the medium PerfLimitsGetInfo struct (NDA
-    /// 0xE63AE22B, magic 0x1300C). GPUMon's `isPStateLocked` uses this as the
+    /// 0xE63AE22B, magic 0x1300C). ref tool 2's `isPStateLocked` uses this as the
     /// entry count for the paired large GetStatus struct.
     fn perf_limits_info_count(&self) -> crate::NvapiResult<u32> {
         let mut buf = vec![0u8; PERF_LIMITS_INFO_SIZE];
@@ -3354,19 +3351,15 @@ impl PhysicalGpu {
     /// - info: one capability byte (0x87BD35EF, 0x10008)
     /// - status: 36B rich view (0xFCBDF642, 0x10024) — raw dwords; decode
     ///   TBD (fill order +4/+8u8/+12, five mode dwords +16..+32).
-    pub fn rated_tdp_readback(
-        &self,
-    ) -> crate::NvapiResult<(u32, u8, [u32; 10])> {
+    pub fn rated_tdp_readback(&self) -> crate::NvapiResult<(u32, u8, [u32; 10])> {
         trace!("gpu.rated_tdp_readback()");
         use crate::sys::nvapi::VersionedStruct;
-        use clock::private::{NV_GPU_RATED_TDP_CONTROL, NV_GPU_RATED_TDP_INFO, NV_GPU_RATED_TDP_STATUS};
-        let mut control =
-            unsafe { std::mem::zeroed::<NV_GPU_RATED_TDP_CONTROL>() };
-        *control.nvapi_version_mut() =
-            NvVersion::with_version(0x1000C);
-        let st = unsafe {
-            sys::api::NvAPI_GPU_PerfRatedTdpGetControl(self.0, &mut control)
+        use clock::private::{
+            NV_GPU_RATED_TDP_CONTROL, NV_GPU_RATED_TDP_INFO, NV_GPU_RATED_TDP_STATUS,
         };
+        let mut control = unsafe { std::mem::zeroed::<NV_GPU_RATED_TDP_CONTROL>() };
+        *control.nvapi_version_mut() = NvVersion::with_version(0x1000C);
+        let st = unsafe { sys::api::NvAPI_GPU_PerfRatedTdpGetControl(self.0, &mut control) };
         crate::status_result(sys::Api::NvAPI_GPU_PerfRatedTdpGetControl, st)?;
 
         let mut info = unsafe { std::mem::zeroed::<NV_GPU_RATED_TDP_INFO>() };
@@ -3495,17 +3488,12 @@ impl PhysicalGpu {
         trace!("gpu.oem_oc_scanner_set_background({enable})");
         use crate::sys::nvapi::VersionedStruct;
         use clock::private::NV_GPU_OC_BACKGROUND_SCANNER_CONTROL;
-        let mut control =
-            unsafe { std::mem::zeroed::<NV_GPU_OC_BACKGROUND_SCANNER_CONTROL>() };
+        let mut control = unsafe { std::mem::zeroed::<NV_GPU_OC_BACKGROUND_SCANNER_CONTROL>() };
         *control.nvapi_version_mut() = NvVersion::with_version(0x10048);
         control.enable = enable as u8;
-        control.feature_guid =
-            [0x0B, 0x0A, 0x0E, 0x08, 0xE8, 0x72, 0x9D, 0xD9, 0xF3];
+        control.feature_guid = [0x0B, 0x0A, 0x0E, 0x08, 0xE8, 0x72, 0x9D, 0xD9, 0xF3];
         let st = unsafe {
-            sys::api::private::NvAPI_GPU_ClientEnableBackgroundOcScanner(
-                self.0,
-                &mut control,
-            )
+            sys::api::private::NvAPI_GPU_ClientEnableBackgroundOcScanner(self.0, &mut control)
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClientEnableBackgroundOcScanner, st)
     }
@@ -3606,7 +3594,7 @@ impl PhysicalGpu {
     }
 
     /// Battery Boost 2.0 enable/disable (NDA 0xD2561B69, private).
-    /// GPUMonCmd `-bb:state` (state 1=enable, 0=disable). Mobile-only.
+    /// (state 1=enable, 0=disable). Mobile-only.
     pub fn set_bb2_active(&self, enable: bool) -> crate::NvapiResult<()> {
         trace!("gpu.set_bb2_active(enable={})", enable);
         use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
@@ -3618,7 +3606,7 @@ impl PhysicalGpu {
     }
 
     /// Whisper Mode 2.0 enable/disable (NDA 0xD2561B69, private).
-    /// GPUMonCmd `-wm:state` (state 1=enable, 0=disable). Mobile-only.
+    /// (state 1=enable, 0=disable). Mobile-only.
     pub fn set_wm2_active(&self, enable: bool) -> crate::NvapiResult<()> {
         trace!("gpu.set_wm2_active(enable={})", enable);
         use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
@@ -3630,7 +3618,7 @@ impl PhysicalGpu {
     }
 
     /// Whisper Mode 2.0 acoustic mode (NDA 0xD2561B69, private).
-    /// GPUMonCmd `-wmMode:mode` (0=Quieter, 1=Quiet, 2=Balanced).
+    ///  (0=Quieter, 1=Quiet, 2=Balanced).
     pub fn set_wm2_mode(&self, mode: power::private::Wm2AcousticMode) -> crate::NvapiResult<()> {
         trace!("gpu.set_wm2_mode(mode={:?})", mode);
         use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
@@ -4318,9 +4306,8 @@ impl PhysicalGpu {
         use power::private::NV_PMGR_VOLTAGE_ARBITER_VALUES;
         let mut values = unsafe { std::mem::zeroed::<NV_PMGR_VOLTAGE_ARBITER_VALUES>() };
         *values.nvapi_version_mut() = NvVersion::with_version(0x20030);
-        let st = unsafe {
-            sys::api::NvAPI_GPU_GetPMGRVoltageRequestArbiterValues(self.0, &mut values)
-        };
+        let st =
+            unsafe { sys::api::NvAPI_GPU_GetPMGRVoltageRequestArbiterValues(self.0, &mut values) };
         crate::status_result(sys::Api::NvAPI_GPU_GetPMGRVoltageRequestArbiterValues, st)?;
         Ok(values.values)
     }
@@ -4405,7 +4392,7 @@ impl PhysicalGpu {
     /// (boost/throttle) reacts to a synthetic temperature. Requires VBIOS
     /// "Secured Overrides" table with `<Temp faking allowed>` enabled;
     /// otherwise returns `NotSupported` (observed on Ada mobile).
-    /// RE'd from GPUMon.exe + ThermSpyPremium (both use the same 4-arg
+    /// RE'd from ref tool 2 + ThermSpyPremium (both use the same 4-arg
     /// signature on `NvAPI_GPU_SetExtendedThermalSimulationMode`).
     /// Falls back to the BASIC variant `NvAPI_GPU_SetThermalSimulationMode`
     /// (0x8CD42541, same 4-arg shape per R610.74 RE) when the Extended call
@@ -4545,12 +4532,12 @@ impl PhysicalGpu {
     }
 
     /// Read the GPU fan-curve table (`ClientFanPoliciesGetControl` NDA
-    /// 0xE543C540, structure magic `0x200DC`). RE'd from GPUMon.exe
+    /// 0xE543C540, structure magic `0x200DC`). RE'd from ref tool 2
     /// `pollFanCurve`: one table snapshot holds up to 4 curve slots, each
     /// with 3 monotonic (temperature, RPM) points. Returns one `FanCurve`
     /// per slot reported by the driver's `count` byte.
     ///
-    /// Point encodings (matching GPUMon's dialog round-trip): temperature
+    /// Point encodings (matching ref tool's dialog round-trip): temperature
     /// stored Q8.8 (`temp << 8`, read back as `(x + 128) >> 8`), RPM stored
     /// Q16-scaled (`(x * 100 + 32768) / 65536`).
     pub fn fan_curves(&self) -> crate::NvapiResult<Vec<FanCurve>> {
@@ -4582,7 +4569,7 @@ impl PhysicalGpu {
     }
 
     /// Set one fan-curve slot (`ClientFanPoliciesSetControl` NDA 0xC181947A,
-    /// structure magic `0x200DC`). RE'd from GPUMon.exe `setFanCurve`: mirror
+    /// structure magic `0x200DC`). RE'd from ref tool 2's `setFanCurve`: mirror
     /// the RMW protocol — GET the current table, overwrite the `index` slot's
     /// three (temperature, RPM) points, SET the whole table back. This leaves
     /// the driver-owned reserved lane untouched.
@@ -4622,17 +4609,17 @@ impl PhysicalGpu {
     }
 
     /// Reset one fan-curve slot to factory (`FanPolicySetControl` NDA
-    /// 0x2B2A2A45, structure magic `0x214AC`). RE'd byte-exact from GPUMon.exe
+    /// 0x2B2A2A45, structure magic `0x214AC`). RE'd byte-exact from ref tool 2
     /// `GPUHandle::resetFanCurve` and cross-checked against the impl.dll
     /// handler: GET the full 0x14AC policy block, write `1 << curve_index`
     /// into the reset bitmask at +0x04, set flag bit0 at +0x08, SET back.
     ///
-    /// This is GPUMon's NVAPI fan reset — NOT the public
+    /// This is ref tool 2's NVAPI fan reset — NOT the public
     /// `RestoreCoolerSettings`, which the driver rejects with
     /// NOT_SUPPORTED(-104) on GPUs whose user-mode cooler table isn't
     /// exposed (observed on desktop RTX 3060/2070; NVML's
     /// SetDefaultFanSpeed_v2 uses a separate RM arbiter channel and works
-    /// there). `curve_index` is the slot to reset (0..=3; GPUMon's reset
+    /// there). `curve_index` is the slot to reset (0..=3; ref tool 2's reset
     /// button uses 0).
     pub fn reset_fan_curve(&self, curve_index: u32) -> crate::NvapiResult<()> {
         trace!("gpu.reset_fan_curve({})", curve_index);
@@ -4654,8 +4641,8 @@ impl PhysicalGpu {
                 buf.as_mut_ptr() as *mut _
             ))?;
         }
-        // Reset bitmask at +0x04 (GPUMon assigns, not ORs) + apply flag
-        // bit0 at +0x08 (GPUMon sets it unconditionally on the reset path).
+        // Reset bitmask at +0x04 (ref tool 2 assigns, not ORs) + apply flag
+        // bit0 at +0x08 (ref tool 2 sets it unconditionally on the reset path).
         let mask = 1u32 << curve_index;
         buf[NV_GPU_FAN_POLICY_OFF_RESET_MASK..NV_GPU_FAN_POLICY_OFF_RESET_MASK + 4]
             .copy_from_slice(&mask.to_ne_bytes());
@@ -4674,7 +4661,7 @@ impl PhysicalGpu {
 
     /// Toggle fan stop / zero-RPM for a curve slot (`FanArbiterSet` NDA
     /// 0x44CD3014, versioned struct `0x10124` = the 292-byte V1). RE'd from
-    /// GPUMon.exe `setFanCurve`'s tail call: count=1 at +0x04, then
+    /// ref tool 2's `setFanCurve`'s tail call: count=1 at +0x04, then
     /// arbiters[0] at +0x24 = {arbiter_index = curve_index, flags bit0 =
     /// FAN_STOP enable}.
     pub fn set_fan_stop(&self, curve_index: u32, enable: bool) -> crate::NvapiResult<()> {
@@ -4703,7 +4690,7 @@ impl PhysicalGpu {
     /// Query per-cooler info via the private FanCoolerGetInfo (NDA 0x65CE5BFC,
     /// struct magic 0x10888). Returns one entry per cooler with its type
     /// (0=active, 1=pwm, 2=pwm-tach) and min/max RPM range. RE'd from
-    /// GPUMon.exe `setFanSim` — this is the private path, richer than the
+    /// ref tool 2's `setFanSim` — this is the private path, richer than the
     /// public `GetCoolerSettings` (which only returns level/defaultPolicy).
     pub fn cooler_info_private(&self) -> crate::NvapiResult<Vec<PrivateCoolerInfo>> {
         trace!("gpu.cooler_info_private()");
@@ -4723,7 +4710,7 @@ impl PhysicalGpu {
                 buf.as_mut_ptr() as *mut _
             ))?;
         }
-        // info+0x04 is a 32-bit presence MASK, not a count (GPUMon
+        // info+0x04 is a 32-bit presence MASK, not a count (ref tool 2)
         // pollFanSpeed iterates set bits — a 2-fan GPU can report 3 bits).
         let mask = read_u32(&buf, 0x04);
 
@@ -4770,7 +4757,7 @@ impl PhysicalGpu {
     }
 
     /// Set fan speed by RPM via the private FanCoolerSetControl (NDA
-    /// 0xEB44E8AA, struct 0x210AC). RE'd byte-exact from GPUMon.exe
+    /// 0xEB44E8AA, struct 0x210AC). RE'd byte-exact from ref tool 2
     /// `GPUHandle::setFanSim`: GET the control snapshot, patch the target
     /// cooler's enable + level per its cooler type, SET back.
     ///
@@ -4806,7 +4793,7 @@ impl PhysicalGpu {
         };
         let mut buf = vec![0u8; NV_GPU_FAN_COOLER_CONTROL_SIZE];
         buf[..4].copy_from_slice(&NV_GPU_FAN_COOLER_CONTROL_MAGIC.to_ne_bytes());
-        // FanCoolerGetInfo fills the count; mirror GPUMon by querying info
+        // FanCoolerGetInfo fills the count; mirror ref tool 2 by querying info
         // first to set count, then GET control.
         let mask = {
             let mut info = vec![0u8; NV_GPU_FAN_COOLER_INFO_SIZE];
@@ -5933,7 +5920,7 @@ pub enum PStateNativeLock {
 }
 
 /// GPU frequency perf-cap request (the ref tool `-gpuclk:<MHz>` SETTER,
-/// PerfLimitsSetStatus NDA 0x32CA4983). RE'd byte-exact from GPUMonCmd v7.0's
+/// PerfLimitsSetStatus NDA 0x32CA4983). RE'd byte-exact from ref tool 2's
 /// `GPUHandle::setGpcClock`: clamps the perf max/min frequency to a cap value
 /// (NOT an offset, NOT a P-state lock — see [[PStateNativeLock]] for that).
 /// `freq_khz` is MHz × 1000.
@@ -5943,13 +5930,13 @@ pub enum PerfFreqCap {
     /// no frequency written.
     Reset,
     /// Clamp perf frequency to `[min_khz, max_khz]`. Either bound may be 0 to
-    /// leave that side unset (GPUMon sets both to the same cap value).
+    /// leave that side unset (ref tool 2 sets both to the same cap value).
     Cap { max_khz: u32, min_khz: u32 },
 }
 
 /// One entry read back by `Gpu::perf_freq_caps` (PerfLimitsGetStatus NDA
 /// 0xEFCEDD1F). `type_marker` is the driver's entry-type code (0x5D='Pmax',
-/// 0x49='I'=Pmin observed in GPUMon); `freq_khz` is the cap (MHz × 1000);
+/// 0x49='I'=Pmin observed in ref tool 2); `freq_khz` is the cap (MHz × 1000);
 /// `locked` is non-zero when the cap is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PerfFreqCapEntry {
@@ -5960,7 +5947,7 @@ pub struct PerfFreqCapEntry {
 
 /// Per-cooler info aggregated from the private FanCoolers family (NDA):
 /// GetInfo (mask) + GetControl (type/min/max) + GetStatus (current).
-/// RE'd from GPUMon.exe pollFanSpeed. NOTE the speed fields are in the
+/// RE'd from ref tool 2's pollFanSpeed. NOTE the speed fields are in the
 /// DRIVER's scale — on some GPUs (2070 desktop observed) that grid is the
 /// normalized 0..65536 duty scale, not physical RPM; `current_pwm_percent`
 /// is the observable duty for cross-checking.
@@ -5980,7 +5967,7 @@ pub struct PrivateCoolerInfo {
 }
 
 /// Result of a `set_fan_rpm` call (private FanCoolerSetControl NDA 0xEB44E8AA).
-/// RE'd from GPUMon.exe setFanSim. `cooler_type`: 0=active, 1=pwm, 2=pwm-tach.
+/// RE'd from ref tool 2's setFanSim. `cooler_type`: 0=active, 1=pwm, 2=pwm-tach.
 /// `applied_rpm` is `None` when simulation was disabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SetFanRpmResult {
@@ -5992,7 +5979,7 @@ pub struct SetFanRpmResult {
 }
 
 // ── PerfLimits large-struct byte offsets (magic 0x6642C, 0x4642C B) ──
-// RE'd from GPUMonCmd setGpcClock (sub_140023FE0) / isPStateLocked
+// RE'd from ref tool 2's setGpcClock (sub_140023FE0) / isPStateLocked
 // (sub_14002C8E0). Entry stride 0x464; entry0 data @ +0x2C, entry1 @ +0x490.
 pub(super) const PERF_LIMITS_MAGIC: u32 = 0x6642C;
 pub(super) const PERF_LIMITS_SIZE: usize = 0x4642C;
@@ -6062,7 +6049,7 @@ impl VfpInfo {
 }
 
 /// One temperature→RPM point of a GPU fan curve (`ClientFanPolicies` table,
-/// structure magic `0x200DC`). RE'd from GPUMon.exe's `DialogFanCurve` pane:
+/// structure magic `0x200DC`). RE'd from ref tool 2's `DialogFanCurve` pane:
 /// the dialog edits three monotonic (temp, RPM) pairs per curve slot, and the
 /// driver's Set handler rejects non-strictly-increasing input with -5.
 #[derive(Clone, Copy, Debug)]
@@ -6076,7 +6063,7 @@ pub struct FanCurvePoint {
 
 /// A single fan-curve slot as reported by [`PhysicalGpu::fan_curves`] /
 /// targeted by [`PhysicalGpu::set_fan_curve`]. The table holds up to 4 slots
-/// (GPUMon's runtime "Next Curve" cycles `(idx + 1) % count`); `count` — the
+/// (ref tool 2's runtime "Next Curve" cycles `(idx + 1) % count`); `count` — the
 /// table's first byte after the magic — is the authoritative curve count.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -6103,7 +6090,7 @@ fn read_u32(buf: &[u8], off: usize) -> u32 {
 
 /// Build the PerfLimits SetStatus buffer (magic 0x6642C, 0x4642C B) for a
 /// [`PerfFreqCap`]. Extracted from `set_perf_freq_cap` so the byte layout is
-/// unit-testable without a live GPU handle. RE'd from GPUMonCmd setGpcClock.
+/// unit-testable without a live GPU handle. RE'd from ref tool's setGpcClock.
 fn build_perf_freq_cap_buffer(cap: PerfFreqCap) -> Vec<u8> {
     let mut buf = vec![0u8; PERF_LIMITS_SIZE];
     buf[..4].copy_from_slice(&PERF_LIMITS_MAGIC.to_ne_bytes());
@@ -6153,7 +6140,7 @@ fn build_perf_freq_cap_buffer(cap: PerfFreqCap) -> Vec<u8> {
 mod perflimits_tests {
     use super::*;
 
-    /// The large-struct layout RE'd from GPUMonCmd setGpcClock must hold.
+    /// The large-struct layout RE'd from ref tool's setGpcClock must hold.
     #[test]
     fn perf_limits_layout_constants() {
         assert_eq!(PERF_LIMITS_MAGIC, 0x6642C);
@@ -6178,7 +6165,7 @@ mod perflimits_tests {
 
     #[test]
     fn build_perf_freq_cap_buffer_cap_writes_both_entries() {
-        // -gpuclk:300 → max=min=300 MHz = 300_000 kHz (the GPUMon pattern).
+        // -gpuclk:300 → max=min=300 MHz = 300_000 kHz (the ref tool's pattern).
         let buf = build_perf_freq_cap_buffer(PerfFreqCap::Cap {
             max_khz: 300_000,
             min_khz: 300_000,
@@ -6228,7 +6215,7 @@ mod perflimits_tests {
             read_u32(&buf, PERF_LIMITS_ENTRY1_BASE + PERF_LIMITS_OFF_ENABLE),
             0
         );
-        // type markers still written (GPUMon writes them even on reset path).
+        // type markers still written (ref tool 2 writes them even on reset path).
         assert_eq!(
             read_u32(&buf, PERF_LIMITS_ENTRY0_BASE + PERF_LIMITS_OFF_TYPE),
             PERF_LIMITS_TYPE_MAX
@@ -6292,7 +6279,7 @@ mod perflimits_tests {
 mod fan_curve_tests {
     use super::*;
 
-    /// The `0x200DC` curve-table layout RE'd from GPUMon.exe + impl.dll: magic
+    /// The `0x200DC` curve-table layout RE'd from ref tool 2 + impl.dll: magic
     /// at +0, count byte at +4, slots at +20 with a 52-byte stride, each slot's
     /// 3 points at +4h/+10h/+1Ch (12-byte points, {temp<<8, reserved, rpm}).
     #[test]
@@ -6339,7 +6326,7 @@ mod fan_curve_tests {
         );
     }
 
-    /// Round-trip encoding matches GPUMon's dialog read logic
+    /// Round-trip encoding matches ref tool's dialog read logic
     /// ((x + 128) >> 8 for temp, (x*100 + 32768) / 65536 for RPM).
     #[test]
     fn fan_curve_encode_roundtrip() {

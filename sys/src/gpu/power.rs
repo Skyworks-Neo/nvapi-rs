@@ -294,9 +294,9 @@ pub mod private {
     }
 
     // ------------------------------------------------------------------
-    // NvAPI_SYS_ClientJpacSetControl (NDA, ID 0xD2561B69) — GPUMonCmd's
-    // multi-feature BB2/WM2 control. RE'd from GPUMonCmd.exe
-    // (reverse/GPUMon/GPUMonCmd.exe, handler sub_140017C00 cmdBb2Active /
+    // NvAPI_SYS_ClientJpacSetControl (NDA, ID 0xD2561B69) — ref tool 2's
+    // multi-feature BB2/WM2 control. RE'd from ref tool
+    // (handler sub_140017C00 cmdBb2Active /
     // sub_140024A90 setWm2Active / sub_140017720 cmdWm2Mode, all route
     // through sub_140005EC0 which QueryInterface's 0xD27D0629).
     //
@@ -347,7 +347,7 @@ pub mod private {
     }
 
     nvstruct! {
-        /// BB2/WM2 multi-feature control (RE'd from GPUMonCmd; NDA).
+        /// BB2/WM2 multi-feature control (RE'd from ref tool 2;).
         /// 1224 bytes, version magic 0x104C8. Use the builders below — the
         /// raw layout is op/feature multiplexed and most dwords must stay 0.
         pub struct NV_SYS_CLIENT_JPAC_CONTROL_V1 {
@@ -405,9 +405,9 @@ pub mod private {
     }
 
     nvapi! {
-        /// Undocumented (NDA, ID 0xD27D0629). BB2/WM2 multi-feature control.
+        /// Undocumented (ID 0xD27D0629). BB2/WM2 multi-feature control.
         /// Single-parameter: the 1224-byte control struct (handle inside).
-        /// GPUMonCmd uses this for `-bb` (Battery Boost 2.0 on/off) and
+        /// ref tool 2 uses this for `-bb` (Battery Boost 2.0 on/off) and
         /// `-wm`/`-wmMode` (Whisper Mode 2.0 on/off + acoustic mode).
         pub unsafe fn NvAPI_SYS_ClientJpacSetControl(pControl: *mut NV_SYS_CLIENT_JPAC_CONTROL) -> NvAPI_Status;
     }

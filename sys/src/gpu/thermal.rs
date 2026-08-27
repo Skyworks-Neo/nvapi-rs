@@ -299,12 +299,12 @@ pub mod private {
     // driver's thermal policy (boost/throttle) reacts to a synthetic value.
     // Requires VBIOS "Secured Overrides" table with <Temp faking allowed>
     // enabled; otherwise returns NotSupported (confirmed on Ada mobile).
-    // RE'd from GPUMon.exe [GPUHandle::setTempSim/disableTempSim/pollTempSim]
+    // RE'd from ref tool [GPUHandle::setTempSim/disableTempSim/pollTempSim]
     // + ThermSpyPremium (both call the same 4-arg signature).
 
     nvapi! {
         /// 4-arg: `(hGpu, flags=0, enable: 1=on/0=off, temperature: °C as i32)`.
-        /// Confirmed by GPUMon + Thermspy cross-check. `disableTempSim` =
+        /// Confirmed by ref tool + Thermspy cross-check. `disableTempSim` =
         /// same call with enable=0, temp=0.
         pub unsafe fn NvAPI_GPU_SetExtendedThermalSimulationMode(hPhysicalGPU: NvPhysicalGpuHandle, flags: u32, enable: u32, temperature: i32) -> NvAPI_Status;
     }

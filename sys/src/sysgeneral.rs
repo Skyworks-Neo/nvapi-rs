@@ -165,7 +165,7 @@ nvapi! {
 
     /// Undocumented (ID 0xD3B24D2D). Legacy-driver sibling of
     /// [`NvAPI_EnumPhysicalGPUs`] with the same signature — the GPU Caps
-    /// Viewer GPUMon plugin (plugin_gxc_gpumon_x32.dll) uses this pair as
+    /// Viewer ref tool plugin uses this pair as
     /// its pre-R530 enumeration path when EnumPhysicalGPUs/
     /// EnumTCCPhysicalGPUs fail. Bound for old-driver compatibility probing.
     pub unsafe fn NvAPI_SYS_GetPhysicalGPUs;
@@ -176,6 +176,6 @@ nvapi! {
 
     /// Undocumented (ID 0xCCFFFC10) — logical-GPU counterpart of
     /// [`NvAPI_SYS_GetPhysicalGPUs`] (same legacy-driver fallback path used
-    /// by the GPUMon plugin).
+    /// by the ref tool plugin).
     pub unsafe fn NvAPI_SYS_GetLogicalGPUs;
 }
