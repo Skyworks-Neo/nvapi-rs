@@ -2,8 +2,11 @@
 
 use {crate::util::result_stream, proc_macro::TokenStream};
 
+pub(crate) mod inherit;
+pub(crate) mod nvstruct;
 pub(crate) mod util;
 pub(crate) mod value;
+pub(crate) mod version;
 
 pub(crate) mod prelude {
     pub(crate) use {
@@ -55,4 +58,19 @@ pub fn derive_value_bits(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(NvValueData, attributes(nv_value_symbol))]
 pub fn derive_value_data(input: TokenStream) -> TokenStream {
     result_stream(self::value::derive_value_data(input.into()))
+}
+
+#[proc_macro_attribute]
+pub fn NvStruct(attr: TokenStream, input: TokenStream) -> TokenStream {
+    result_stream(self::nvstruct::NvStruct(attr.into(), input.into()))
+}
+
+#[proc_macro_derive(NvInherit, attributes(nv_inherit))]
+pub fn derive_inherit(input: TokenStream) -> TokenStream {
+    result_stream(self::inherit::derive_inherit(input.into()))
+}
+
+#[proc_macro_derive(VersionedStructField, attributes(nv_version_field))]
+pub fn derive_versioned_struct(input: TokenStream) -> TokenStream {
+    result_stream(self::version::derive_versioned_struct(input.into()))
 }
