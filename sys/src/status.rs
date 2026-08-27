@@ -1,3 +1,18 @@
+//! NvAPI status codes, dual-tracked by design.
+//!
+//! [`NvAPI_Status`] (a bare `c_int` type alias plus `NVAPI_*` constants) is
+//! the FFI ABI every entry point actually returns, while [`Status`] is the
+//! typed, `#[non_exhaustive]` Rust-side view. This module deliberately stays
+//! on the legacy `nvenum_legacy!` macro instead of the proc-macro
+//! `NvValue<T>`-based enums: it must export bare constants and a raw type
+//! alias for the FFI signatures — a shape `NvValue` does not provide.
+//!
+//! Unknown codes: `Status::from_raw` returns `Err(ArgumentRangeError)`; the
+//! sys-level `status_result` shim coerces them to `Status::Error`. Callers
+//! that must not lose the original code (e.g. RE workflows probing new
+//! driver surfaces) should use the safe crate, which preserves it in
+//! `NvapiError::raw_status`.
+
 use crate::nvapi::NvAPI_GetErrorMessage;
 use crate::status_result;
 use std::convert::Infallible;

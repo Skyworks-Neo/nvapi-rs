@@ -7,7 +7,13 @@ use zerocopy::{AsBytes, FromBytes};
 
 pub use nvapi_macros::{NvValueBits, NvValueData, NvValueEnum};
 
+/// Alias of [`NvValue<T>`] as emitted by `nvenum!` (`type NV_X = NvEnum<T>`).
+/// Same transparent newtype — the name documents that the alias field holds a
+/// single enum discriminant, nothing more.
 pub type NvEnum<T> = NvValue<T>;
+/// Alias of [`NvValue<T>`] as emitted by `nvbits!` (`type NV_X = NvBits<T>`).
+/// Same transparent newtype — the name documents that the alias field holds a
+/// bitflags value, nothing more.
 pub type NvBits<T> = NvValue<T>;
 
 pub trait NvValueData:

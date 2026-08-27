@@ -103,6 +103,14 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
             },
             quote! {
                 impl #name {
+                    /// Returns a zero-filled instance.
+                    ///
+                    /// # Stack hazard
+                    ///
+                    /// Constructs by value on the caller's stack. For structs
+                    /// near or above 1 MiB (VF-points family and friends) use
+                    /// `Box::<Self>::new_zeroed()` instead — see the
+                    /// `Box::new(Default)` debug stack-overflow incident.
                     pub fn zeroed() -> Self {
                         #FromBytes::new_zeroed()
                     }
@@ -116,6 +124,15 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
             },
             quote! {
                 impl #name {
+                    /// Returns a zero-filled instance.
+                    ///
+                    /// # Stack hazard
+                    ///
+                    /// Constructs by value on the caller's stack. For structs
+                    /// near or above 1 MiB use `Box::<Self>::new_zeroed()`
+                    /// instead. The all-zero bit pattern is asserted valid for
+                    /// this struct via `#[nv_unchecked]`.
+                    #[inline]
                     pub fn zeroed() -> Self {
                         let mut zero = ::core::mem::MaybeUninit::<Self>::zeroed();
                         unsafe { zero.assume_init() }

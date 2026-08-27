@@ -135,10 +135,10 @@ macro_rules! nvapi {
         $(#[$meta])*
         #[doc = "# Safety\n\nThis function forwards to NVAPI. Callers must ensure all pointers are valid, the target NVAPI entry point is available, and the NVAPI library is initialized as required by the driver."]
         pub unsafe fn $fn($($arg: $arg_ty),*) -> $ret {
-            static CACHE: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
+            static CACHE: ::std::sync::atomic::AtomicPtr<::std::os::raw::c_void> = ::std::sync::atomic::AtomicPtr::new(::core::ptr::null_mut());
 
             let res = match crate::nvapi::query_interface(crate::nvid::Api::$fn.id(), &CACHE) {
-                Ok(ptr) => ::std::mem::transmute::<usize, extern "C" fn($($arg: $arg_ty),*) -> $ret>(ptr)($($arg),*),
+                Ok(ptr) => ::std::mem::transmute::<*mut ::std::os::raw::c_void, extern "C" fn($($arg: $arg_ty),*) -> $ret>(ptr)($($arg),*),
                 Err(e) => e.raw(),
             };
             #[cfg(feature = "log")] {

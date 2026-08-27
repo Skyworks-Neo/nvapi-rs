@@ -2,7 +2,7 @@ use crate::status::{NvAPI_Status, Status};
 use crate::types;
 use std::mem::size_of;
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 pub use nvapi_macros::{NvInherit, NvStruct, VersionedStructField};
 
@@ -17,18 +17,18 @@ pub const LIBRARY_NAME: &[u8; 19] = b"libnvidia-api.so.1\0";
 
 pub const FN_NAME: &[u8; 21] = b"nvapi_QueryInterface\0";
 
-static QUERY_INTERFACE_CACHE: AtomicUsize = AtomicUsize::new(0);
+static QUERY_INTERFACE_CACHE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
 
 /// # Safety
 ///
 /// `ptr` must point to a valid NVAPI `QueryInterface` implementation and remain callable for
 /// the lifetime of the process.
 pub unsafe fn set_query_interface(ptr: QueryInterfaceFn) {
-    QUERY_INTERFACE_CACHE.store(ptr as usize, Ordering::Relaxed);
+    QUERY_INTERFACE_CACHE.store(ptr as *mut c_void, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "macos")]
-pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
+pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
     // TODO: Apparently nvapi is available for macOS?
     Err(Status::LibraryNotFound)
 }
@@ -36,14 +36,14 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
 // Since v525 NVIDIA drivers have libnvidia-api.so.1 which implements NVAPI but the implementation is still poor
 // (many functions are not there, like it's impossible to identify physical handler by pci slot etc)
 #[cfg(target_os = "linux")]
-pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
+pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
     use libc::{RTLD_LAZY, RTLD_LOCAL, dlopen, dlsym};
     use std::mem;
     use std::os::raw::c_char;
 
     unsafe {
         let ptr = match QUERY_INTERFACE_CACHE.load(Ordering::Relaxed) {
-            0 => {
+            p if p.is_null() => {
                 let lib = dlopen(
                     LIBRARY_NAME.as_ptr() as *const c_char,
                     RTLD_LAZY | RTLD_LOCAL,
@@ -55,30 +55,30 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
                     if ptr.is_null() {
                         Err(Status::LibraryNotFound)
                     } else {
-                        QUERY_INTERFACE_CACHE.store(ptr as usize, Ordering::Relaxed);
-                        Ok(ptr as usize)
+                        QUERY_INTERFACE_CACHE.store(ptr, Ordering::Relaxed);
+                        Ok(ptr)
                     }
                 }
             }
             ptr => Ok(ptr),
         }?;
 
-        match mem::transmute::<usize, QueryInterfaceFn>(ptr)(id) as usize {
-            0 => Err(Status::NoImplementation),
-            ptr => Ok(ptr),
+        match mem::transmute::<*mut c_void, QueryInterfaceFn>(ptr)(id) as *mut c_void {
+            p if p.is_null() => Err(Status::NoImplementation),
+            p => Ok(p),
         }
     }
 }
 
 #[cfg(windows)]
-pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
+pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
     use std::mem;
     use std::os::raw::c_char;
     use winapi::um::libloaderapi::{GetProcAddress, LoadLibraryA};
 
     unsafe {
         let ptr = match QUERY_INTERFACE_CACHE.load(Ordering::Relaxed) {
-            0 => {
+            p if p.is_null() => {
                 let lib = LoadLibraryA(LIBRARY_NAME.as_ptr() as *const c_char);
                 if lib.is_null() {
                     Err(Status::LibraryNotFound)
@@ -87,24 +87,25 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<usize> {
                     if ptr.is_null() {
                         Err(Status::LibraryNotFound)
                     } else {
-                        QUERY_INTERFACE_CACHE.store(ptr as usize, Ordering::Relaxed);
-                        Ok(ptr as usize)
+                        let ptr = ptr as *mut c_void;
+                        QUERY_INTERFACE_CACHE.store(ptr, Ordering::Relaxed);
+                        Ok(ptr)
                     }
                 }
             }
             ptr => Ok(ptr),
         }?;
 
-        match mem::transmute::<usize, QueryInterfaceFn>(ptr)(id) as usize {
-            0 => Err(Status::NoImplementation),
-            ptr => Ok(ptr),
+        match mem::transmute::<*mut c_void, QueryInterfaceFn>(ptr)(id) as *mut c_void {
+            p if p.is_null() => Err(Status::NoImplementation),
+            p => Ok(p),
         }
     }
 }
 
-pub(crate) fn query_interface(id: u32, cache: &AtomicUsize) -> crate::Result<usize> {
+pub(crate) fn query_interface(id: u32, cache: &AtomicPtr<c_void>) -> crate::Result<*mut c_void> {
     match cache.load(Ordering::Relaxed) {
-        0 => {
+        p if p.is_null() => {
             let value = nvapi_QueryInterface(id)?;
             cache.store(value, Ordering::Relaxed);
             Ok(value)
@@ -185,7 +186,13 @@ impl NvVersion {
     }
 
     pub const fn new(size: usize, version: u16) -> Self {
-        //debug_assert!(size < 0x10000);
+        // NVAPI packs size into the low 16 bits of the version dword. For
+        // structs >64 KiB (the RE'd private mega-structs: pstates private V4,
+        // clk-vf-points V3, power-policies V1) the size bits are TRUNCATED —
+        // this is fine in practice because the driver builds its expected
+        // dword from its own struct the same way, so the lossy encoding
+        // compares equal on both sides. Layout drift is pinned separately by
+        // the `= size` literals in nvversion! and the layout tests.
         Self {
             data: size as u32 | (version as u32) << 16,
         }
