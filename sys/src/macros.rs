@@ -82,7 +82,7 @@ macro_rules! nvenum_legacy {
                     $(
                         $symbol
                     )|* => Ok(unsafe { ::std::mem::transmute::<$enum, $enum_name>(raw) }),
-                    _ => Err(Default::default()),
+                    _ => Err(crate::ArgumentRangeError::new(raw as _)),
                 }
             }
 

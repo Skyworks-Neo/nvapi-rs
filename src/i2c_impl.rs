@@ -76,7 +76,7 @@ impl<G> i2c::Master for I2c<G> {
 impl<G> i2c::Address for I2c<G> {
     fn set_slave_address(&mut self, addr: u16, tenbit: bool) -> crate::Result<()> {
         if tenbit {
-            Err(sys::ArgumentRangeError.into())
+            Err(sys::ArgumentRangeError::new(addr as _).into())
         } else {
             self.address = addr as u8;
             Ok(())
@@ -130,7 +130,7 @@ impl<G: Borrow<PhysicalGpu>> i2c::Smbus for I2c<G> {
         let mut buf = [0, 0];
         self.nvapi_read(&[command], &mut buf)
             .map_err(Into::into)
-            .map(|_| buf[0] as u16 | (buf[0] as u16) << 8)
+            .map(|_| buf[0] as u16 | (buf[1] as u16) << 8)
     }
 
     fn smbus_write_word_data(&mut self, command: u8, value: u16) -> Result<(), Self::Error> {

@@ -1491,7 +1491,9 @@ impl Gpu {
         let gpu = match domain {
             ClockDomain::Graphics => true,
             ClockDomain::Memory => false,
-            _ => return Err(nvapi::sys::ArgumentRangeError.into()),
+            _ => {
+                return Err(nvapi::sys::ArgumentRangeError::new(domain.repr() as _).into());
+            }
         };
         self.gpu
             .set_vfp_locks([

@@ -5,7 +5,18 @@ use std::fmt;
 use sys::ArgumentRangeError;
 
 pub fn status_result(nvid: sys::Api, status: sys::NvAPI_Status) -> Result<(), NvapiError> {
-    sys::status_result(status).map_err(|status| NvapiError::new(nvid, status))
+    match sys::Status::from_raw(status) {
+        Ok(sys::Status::Ok) => Ok(()),
+        Ok(status) => Err(NvapiError::new(nvid, status)),
+        // the driver returned a code outside the known table (newer driver or
+        // NDA surface) — keep the raw code instead of collapsing it to
+        // `Status::Error` where it is lost forever
+        Err(_) => Err(NvapiError {
+            nvid,
+            status: sys::Status::Error,
+            raw_status: Some(status),
+        }),
+    }
 }
 
 #[derive(Debug)]
@@ -27,11 +38,19 @@ impl Error {
 pub struct NvapiError {
     pub nvid: sys::Api,
     pub status: Status,
+    /// The raw driver status code, set only when it has no known `Status`
+    /// mapping (`status` is then `Status::Error`). Recognized statuses
+    /// carry `None`.
+    pub raw_status: Option<sys::NvAPI_Status>,
 }
 
 impl NvapiError {
     pub fn new(nvid: sys::Api, status: Status) -> Self {
-        Self { nvid, status }
+        Self {
+            nvid,
+            status,
+            raw_status: None,
+        }
     }
 }
 
@@ -43,7 +62,11 @@ impl StdError for NvapiError {
 
 impl fmt::Display for NvapiError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?} failed: {}", self.nvid, self.status)
+        write!(f, "{:?} failed: {}", self.nvid, self.status)?;
+        if let Some(raw) = self.raw_status {
+            write!(f, " (raw status {} / {:#x})", raw, raw)?;
+        }
+        Ok(())
     }
 }
 

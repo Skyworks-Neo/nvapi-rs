@@ -8,7 +8,9 @@ mod align;
 pub use self::align::NvAlignArgs;
 
 pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
-    assert!(attr.is_empty());
+    if !attr.is_empty() {
+        return Err(call_error("#[NvStruct] takes no arguments"));
+    }
     let item = input.clone();
     let mut item: DeriveStruct = parse(item)?;
 
@@ -19,9 +21,17 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
         },
     };
 
+    // surface malformed `#[derive(..)]` lists as spanned compile errors
+    // instead of silently ignoring them in `has_derive` below
+    for attr in &item.attrs {
+        attr_derives(attr)?;
+    }
+
     let has_derive = |derive: &'static str| {
         |a: &Attribute| {
             attr_derives(a)
+                .ok()
+                .flatten()
                 .map(|derives| {
                     derives
                         .iter()
@@ -79,7 +89,9 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
         }
     }
 
-    let name = &item.ident;
+    // clone: `name` is used inside the padding-rewrite loop below, where
+    // `item` is mutably borrowed by `data_mut()`
+    let name = item.ident.clone();
     let AsBytes = call_path_absolute(["zerocopy", "AsBytes"]);
     let FromBytes = call_path_absolute(["zerocopy", "FromBytes"]);
 
@@ -122,40 +134,72 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
     };
 
     let padding_fields = item
-        .data_mut()
+        .data()
         .fields
-        .iter_mut()
+        .iter()
         .enumerate()
         .flat_map(|(field_index, field)| {
-            field
-                .attrs
-                .iter()
-                .enumerate()
-                .filter_map(move |(attr_index, attr)| {
-                    try_parse_attr::<NvAlignArgs>(attr)
-                        .transpose()
-                        .map(|a| a.map(|attr| (field_index, attr_index, attr)))
-                })
+            field.attrs.iter().filter_map(move |attr| {
+                try_parse_attr::<NvAlignArgs>(attr)
+                    .transpose()
+                    .map(|a| a.map(|attr| (field_index, attr)))
+            })
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // more than one #[nv_align] on the same field is ambiguous; the old
+    // index-based attr removal would also corrupt unrelated attributes
+    {
+        let mut seen = std::collections::BTreeSet::new();
+        for (field_index, align) in &padding_fields {
+            if !seen.insert(*field_index) {
+                return Err(error(Some(align.span()), "duplicate #[nv_align] attribute"));
+            }
+        }
+    }
+
     let requires_rewrite = !padding_fields.is_empty() || unchecked;
+
+    let mut align_asserts: TokenStream = quote!();
 
     let input = match requires_rewrite {
         false => input,
         true => {
-            for (field_index, attr_index, align) in padding_fields {
+            for (field_index, align) in padding_fields {
                 let field = item.data_mut().fields.iter_mut().nth(field_index).unwrap();
-                field.attrs.remove(attr_index);
+                // remove by predicate: indices captured before any removal are
+                // invalidated by Vec::remove
+                field
+                    .attrs
+                    .retain(|a| !a.path().is_ident(NvAlignArgs::NAME));
                 match &mut field.ty {
                     Type::Array(TypeArray { len, elem, .. }) => {
-                        // TODO: just assert that elem is u8
                         let bit_align = align.bit_align;
                         let next_ty = align.ty.as_ref().unwrap();
                         let mem = quote! { ::core::mem };
                         *len = parse_quote! {
                             #mem::align_of::<#next_ty>().saturating_sub(#bit_align / #mem::size_of::<#elem>() / 8)
                         };
+
+                        // `bit_align` is a hand-computed bit offset the padding
+                        // length derives from — nothing checks it once fields
+                        // change. Pin it to reality at compile time: the padding
+                        // field's own offset, taken modulo the NEXT field's
+                        // alignment, must equal `bit_align / 8` bytes (this is
+                        // exactly the misalignment the padding exists to fix).
+                        if let Some(field_ident) = &field.ident {
+                            align_asserts.extend(quote! {
+                                const _: () = assert!(
+                                    #mem::offset_of!(#name, #field_ident) % #mem::align_of::<#next_ty>()
+                                        == #bit_align / #mem::size_of::<#elem>() / 8,
+                                    "stale #[nv_align] offset: padding field is no longer where the magic number says it is",
+                                );
+                                const _: () = assert!(
+                                    #mem::size_of::<#elem>() == 1,
+                                    "alignment padding must be a byte array",
+                                );
+                            });
+                        }
                     }
                     _ => {
                         return Err(Error::new_spanned(
@@ -169,6 +213,9 @@ pub fn NvStruct(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
             item.into_token_stream()
         }
     };
+
+    let mut expanded = expanded;
+    expanded.extend(align_asserts);
 
     Ok(struct_attrs
         .into_iter()

@@ -310,8 +310,12 @@ impl NvEnumDisplayValue {
                 ref v => #fmt::Debug::fmt(v, #f)
             },
             Self::Wildcard {
-                value: Some(..), ..
-            } => todo!(),
+                value: Some(value), ..
+            } => {
+                // rejected at parse time; keep a spanned error here so a future
+                // parse path can never turn this back into a proc-macro panic
+                Error::new_spanned(value, "wildcard display arm takes no value").to_compile_error()
+            }
             Self::Value { ident, value, .. } => quote! {
                 #enum_ident::#ident => write!(#f, "{}", #value)
             },
@@ -330,6 +334,12 @@ impl Parse for NvEnumDisplayValue {
             } else {
                 Some(input.parse()?)
             };
+            if let Some(value) = &value {
+                return Err(Error::new_spanned(
+                    value,
+                    "wildcard display arm takes no value; use `_ = _`",
+                ));
+            }
             Self::Wildcard {
                 underscore,
                 eq_token,

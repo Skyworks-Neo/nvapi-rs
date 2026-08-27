@@ -278,7 +278,7 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_ENTR
                     max: vfpIndexMax as usize,
                 },
             }),
-            _ => Err(sys::ArgumentRangeError),
+            _ => Err(sys::ArgumentRangeError::new(self.disabled as _)),
         }
     }
 }
@@ -1463,7 +1463,7 @@ impl RawConversion for power::private::NV_GPU_CLIENT_VOLT_RAILS_STATUS_V1 {
                 value_uV,
                 ref unknown,
             } if zero.all_zero() && unknown.all_zero() => Ok(Microvolts(value_uV)),
-            _ => Err(sys::ArgumentRangeError),
+            _ => Err(sys::ArgumentRangeError::new(self.value_uV as _)),
         }
     }
 }
@@ -1481,7 +1481,7 @@ impl RawConversion for power::private::NV_GPU_CLIENT_VOLT_RAILS_CONTROL_V1 {
                 percent,
                 ref unknown,
             } if unknown.all_zero() => Percentage::from_raw(percent),
-            _ => Err(sys::ArgumentRangeError),
+            _ => Err(sys::ArgumentRangeError::new(self.percent as _)),
         }
     }
 }
@@ -1757,7 +1757,7 @@ impl RawConversion for clock::private::NV_GPU_PERF_CLIENT_LIMITS {
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
         if self.flags != 0 {
-            Err(sys::ArgumentRangeError)
+            Err(sys::ArgumentRangeError::new(self.flags as _))
         } else {
             self.entries()
                 .iter()
@@ -1783,7 +1783,8 @@ impl RawConversion for power::private::NV_GPU_PERF_POLICIES_INFO_PARAMS {
         // TODO: check padding
         Ok(PerfInfo {
             max_unknown: self.maxUnknown,
-            limits: PerfFlags::from_bits(self.limitSupport.value).ok_or(sys::ArgumentRangeError)?,
+            limits: PerfFlags::from_bits(self.limitSupport.value)
+                .ok_or_else(|| sys::ArgumentRangeError::new(self.limitSupport.value as _))?,
         })
     }
 }
@@ -1812,9 +1813,10 @@ impl RawConversion for power::private::NV_GPU_PERF_POLICIES_STATUS_PARAMS {
                 ..
             } => Ok(PerfStatus {
                 unknown,
-                limits: PerfFlags::from_bits(limits.value).ok_or(sys::ArgumentRangeError)?,
+                limits: PerfFlags::from_bits(limits.value)
+                    .ok_or_else(|| sys::ArgumentRangeError::new(limits.value as _))?,
             }),
-            _ => Err(sys::ArgumentRangeError),
+            _ => Err(sys::ArgumentRangeError::new(self.flags as _)),
         }
     }
 }

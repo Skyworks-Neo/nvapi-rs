@@ -87,17 +87,17 @@ pub fn result_stream<T: Into<TokenStream>>(res: Result<T>) -> TokenStream {
     }
 }
 
-pub fn attr_derives(attr: &Attribute) -> Option<Punctuated<Path, Token![,]>> {
+pub fn attr_derives(attr: &Attribute) -> Result<Option<Punctuated<Path, Token![,]>>> {
     match &attr.meta {
         Meta::List(MetaList {
             delimiter: MacroDelimiter::Paren(..),
             path,
             tokens,
-        }) if path.is_ident("derive") => Some(
-            Parser::parse2(Punctuated::parse_terminated, tokens.clone())
-                .expect("expected derive paths"),
-        ),
-        _ => None,
+        }) if path.is_ident("derive") => Ok(Some(Parser::parse2(
+            Punctuated::parse_terminated,
+            tokens.clone(),
+        )?)),
+        _ => Ok(None),
     }
 }
 

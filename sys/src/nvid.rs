@@ -23,7 +23,7 @@ macro_rules! nvapis {
                 $(
                     $id
                 )|* => Ok(unsafe { mem::transmute::<u32, Api>(id) }),
-                    _ => Err(Default::default()),
+                    _ => Err(crate::ArgumentRangeError::new(id as _)),
                 }
             }
 

@@ -29,7 +29,7 @@ impl BoolU32 {
     }
 
     pub fn set(&mut self, value: bool) {
-        self.0 = self.0 & 0xffffffe | if value { NV_TRUE } else { NV_FALSE } as u32
+        self.0 = (self.0 & 0xffff_fffe) | if value { NV_TRUE } else { NV_FALSE } as u32
     }
 }
 
@@ -279,9 +279,9 @@ impl<T: AsBytes, const N: usize> Padding<[T; N]> {
     }
 
     pub fn check_zero(&self) -> Result<(), crate::ArgumentRangeError> {
-        match self.all_zero() {
-            true => Ok(()),
-            false => Err(crate::ArgumentRangeError),
+        match self.as_bytes().iter().position(|&b| b != 0) {
+            Some(offset) => Err(crate::ArgumentRangeError::new(offset as _)),
+            None => Ok(()),
         }
     }
 }
@@ -487,4 +487,30 @@ impl<'a> Iterator for ClockMaskIter<'a> {
 pub fn counted<T>(data: &[T], count: impl Into<usize>) -> &[T] {
     let len = count.into().min(data.len());
     &data[..len]
+}
+
+/// The mask in `BoolU32::set` must clear ONLY bit 0 — the remaining 31 bits are
+/// reserved and the driver may read them. This guards against the historic
+/// `0xffffffe` (7 hex digits) typo that silently zeroed bits 28-31.
+#[cfg(test)]
+mod bool_u32_tests {
+    use super::*;
+
+    #[test]
+    fn set_preserves_reserved_bits() {
+        let mut b = BoolU32(0xf000_0001);
+        b.set(true);
+        assert_eq!(b.0, 0xf000_0001);
+        assert!(b.get());
+        b.set(false);
+        assert_eq!(b.0, 0xf000_0000);
+        assert!(!b.get());
+    }
+
+    #[test]
+    fn new_preserves_rest() {
+        let b = BoolU32::new(true, 0xabcd_1230);
+        assert_eq!(b.0, 0xabcd_1231);
+        assert!(b.get());
+    }
 }

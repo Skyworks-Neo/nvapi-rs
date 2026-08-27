@@ -105,12 +105,22 @@ pub fn status_result(status: NvAPI_Status) -> Result<()> {
 }
 
 /// Error type indicating a raw value is out of the range of known enum values.
-#[derive(Debug, Copy, Clone, Default)]
-pub struct ArgumentRangeError;
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub struct ArgumentRangeError {
+    /// The offending raw value. For `Padding::check_zero`, this is the byte
+    /// offset of the first nonzero reserved byte instead.
+    pub value: i64,
+}
+
+impl ArgumentRangeError {
+    pub const fn new(value: i64) -> Self {
+        Self { value }
+    }
+}
 
 impl fmt::Display for ArgumentRangeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("received data out of range")
+        write!(f, "received value {} out of range", self.value)
     }
 }
 

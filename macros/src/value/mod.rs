@@ -21,7 +21,6 @@ pub fn derive_value_data(input: TokenStream) -> Result<TokenStream> {
     let ident_str = ident.to_string();
 
     let Result = call_path_absolute(["core", "result", "Result"]);
-    let Default = call_path_absolute(["core", "default", "Default"]);
     let Into = call_path_absolute(["core", "convert", "Into"]);
     let TryFrom = call_path_absolute(["core", "convert", "TryFrom"]);
     let transmute = call_path_absolute(["core", "mem", "transmute"]);
@@ -81,7 +80,7 @@ pub fn derive_value_data(input: TokenStream) -> Result<TokenStream> {
                     #(
                         #symbols
                     )|* => Ok(unsafe { #transmute(raw) }),
-                    _ => Err(#Default::default()),
+                    _ => Err(#error::new(raw as _)),
                 }
             }
 

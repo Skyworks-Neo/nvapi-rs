@@ -31,6 +31,7 @@ nvenum_display! {
 
 nvstruct! {
     /// Used in NvAPI_I2CRead() and NvAPI_I2CWrite()
+    #[nv_unchecked]
     pub struct NV_I2C_INFO_V1 {
         /// The structure version.
         pub version: NvVersion,
@@ -48,14 +49,14 @@ nvstruct! {
         pub padding0: [u8; ALIGN],
         /// The I2C target register address.  May be NULL, which indicates no register
         /// address should be sent.
-        pub pbI2cRegAddress: usize,
+        pub pbI2cRegAddress: *const u8,
         /// The size in bytes of target register address.  If pbI2cRegAddress is NULL, this
         /// field must be 0.
         pub regAddrSize: u32,
         #[nv_align(32, usize)]
         pub padding1: [u8; ALIGN],
         /// The buffer of data which is to be read or written (depending on the command).
-        pub pbData: usize,
+        pub pbData: *mut u8,
         /// The size of the data buffer, pbData, to be read or written.
         pub cbSize: u32,
         /// The target speed of the transaction (between 28Kbps to 40Kbps; not guaranteed).
@@ -67,6 +68,7 @@ nvstruct! {
 
 nvstruct! {
     /// Used in NvAPI_I2CRead() and NvAPI_I2CWrite()
+    #[nv_unchecked]
     pub struct NV_I2C_INFO_V2 {
         /*
         /// Must set `v1.i2cSpeed = NVAPI_I2C_SPEED_DEPRECATED`.
@@ -88,14 +90,14 @@ nvstruct! {
         pub padding0: [u8; ALIGN],
         /// The I2C target register address.  May be NULL, which indicates no register
         /// address should be sent.
-        pub pbI2cRegAddress: usize,
+        pub pbI2cRegAddress: *const u8,
         /// The size in bytes of target register address.  If pbI2cRegAddress is NULL, this
         /// field must be 0.
         pub regAddrSize: u32,
         #[nv_align(32, usize)]
         pub padding1: [u8; ALIGN],
         /// The buffer of data which is to be read or written (depending on the command).
-        pub pbData: usize,
+        pub pbData: *mut u8,
         /// The size of the data buffer, pbData, to be read or written.
         pub cbSize: u32,
         /// Deprecated - must be set to `NVAPI_I2C_SPEED_DEPRECATED`.
@@ -109,6 +111,7 @@ nvstruct! {
 
 nvstruct! {
     /// Used in NvAPI_I2CRead() and NvAPI_I2CWrite()
+    #[nv_unchecked]
     pub struct NV_I2C_INFO_V3 {
         //pub v2: NV_I2C_INFO_V2,
         /// The structure version.
@@ -127,14 +130,14 @@ nvstruct! {
         pub padding0: [u8; ALIGN],
         /// The I2C target register address.  May be NULL, which indicates no register
         /// address should be sent.
-        pub pbI2cRegAddress: usize,
+        pub pbI2cRegAddress: *const u8,
         /// The size in bytes of target register address.  If pbI2cRegAddress is NULL, this
         /// field must be 0.
         pub regAddrSize: u32,
         #[nv_align(32, usize)]
         pub padding1: [u8; ALIGN],
         /// The buffer of data which is to be read or written (depending on the command).
-        pub pbData: usize,
+        pub pbData: *mut u8,
         /// The size of the data buffer, pbData, to be read or written.
         pub cbSize: u32,
         /// Deprecated - must be set to `NVAPI_I2C_SPEED_DEPRECATED`.
@@ -215,6 +218,7 @@ pub mod private {
 
     nvstruct! {
         /// Used in NvAPI_I2CRead() and NvAPI_I2CWrite()
+        #[nv_unchecked]
         pub struct NV_I2C_INFO_EX_V3 {
             /// The structure version.
             pub version: NvVersion,
@@ -232,14 +236,14 @@ pub mod private {
             pub padding0: [u8; ALIGN],
             /// The I2C target register address.  May be NULL, which indicates no register
             /// address should be sent.
-            pub pbI2cRegAddress: usize,
+            pub pbI2cRegAddress: *const u8,
             /// The size in bytes of target register address.  If pbI2cRegAddress is NULL, this
             /// field must be 0.
             pub regAddrSize: u32,
             #[nv_align(32, usize)]
             pub padding1: [u8; ALIGN],
             /// The buffer of data which is to be read or written (depending on the command).
-            pub pbData: usize,
+            pub pbData: *mut u8,
             /// bytes to read ??? seems required on write too
             pub pbRead: u32,
             /// The size of the data buffer, pbData, to be read or written.

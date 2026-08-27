@@ -4946,7 +4946,7 @@ impl PhysicalGpu {
                         unknown: 0,
                     },
                 )),
-                _ => Err(sys::ArgumentRangeError.into()),
+                _ => Err(sys::ArgumentRangeError::new(id.repr() as _).into()),
             })
             .collect()
     }
@@ -5289,12 +5289,12 @@ impl PhysicalGpu {
             } as _,
             i2cDevAddress: address << 1,
             pbI2cRegAddress: if register.is_empty() {
-                0
+                core::ptr::null()
             } else {
-                register.as_ptr() as usize
+                register.as_ptr()
             },
             regAddrSize: register.len() as _,
-            pbData: bytes.as_mut_ptr() as usize,
+            pbData: bytes.as_mut_ptr(),
             cbSize: bytes.len() as _,
             i2cSpeed: i2c::NVAPI_I2C_SPEED_DEPRECATED,
             i2cSpeedKhz: speed.value(),
@@ -5336,12 +5336,14 @@ impl PhysicalGpu {
             } as _,
             i2cDevAddress: address << 1,
             pbI2cRegAddress: if register.is_empty() {
-                0
+                core::ptr::null()
             } else {
-                register.as_ptr() as usize
+                register.as_ptr()
             },
             regAddrSize: register.len() as _,
-            pbData: bytes.as_ptr() as usize,
+            // the driver only reads from pbData on write; the const→mut cast
+            // keeps the API ergonomic without an unsafe caller obligation
+            pbData: bytes.as_ptr() as *mut u8,
             cbSize: bytes.len() as _,
             i2cSpeed: i2c::NVAPI_I2C_SPEED_DEPRECATED,
             i2cSpeedKhz: speed.value(),

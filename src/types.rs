@@ -345,7 +345,7 @@ impl Percentage {
     pub fn from_raw(v: u32) -> Result<Self, sys::ArgumentRangeError> {
         match v {
             v @ 0..=100 => Ok(Percentage(v)),
-            _ => Err(sys::ArgumentRangeError),
+            _ => Err(sys::ArgumentRangeError::new(v as _)),
         }
     }
 }

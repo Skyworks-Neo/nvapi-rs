@@ -140,7 +140,7 @@ impl NvBitsBody {
                 type Repr = #repr;
 
                 fn from_repr(raw: Self::Repr) -> #Result<Self, #ArgumentRangeError> {
-                    Self::from_bits(raw).ok_or(#ArgumentRangeError)
+                    Self::from_bits(raw).ok_or(#ArgumentRangeError::new(raw as _))
                 }
 
                 fn from_repr_ref(raw: &Self::Repr) -> #Result<&Self, #ArgumentRangeError> {
