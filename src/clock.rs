@@ -26,7 +26,7 @@ impl RawConversion for clock::NV_GPU_CLOCK_FREQUENCIES {
         trace!("convert_raw({:#?})", self);
         Ok(ClockDomain::values()
             .filter(|&c| c != ClockDomain::Undefined)
-            .map(|id| (id, &self.domain[id.raw() as usize]))
+            .map(|id| (id, &self.domain[id.repr() as usize]))
             .filter(|&(_, clock)| clock.bIsPresent.get())
             .map(|(id, clock)| (id, Kilohertz(clock.frequency)))
             .collect())
@@ -110,7 +110,7 @@ pub fn all_clocks_from_raw(raw: &clock::private::NV_GPU_CLOCK_INFO_V2) -> AllClo
         .map(|id| {
             (
                 id,
-                raw.extended_domain[id.raw() as usize].effective_frequency,
+                raw.extended_domain[id.repr() as usize].effective_frequency,
             )
         })
         // Skip Pciegen(31): its effective_frequency holds the current PCIe link
@@ -131,7 +131,7 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_INFO_V2 {
         trace!("convert_raw({:#?})", self);
         Ok(ClockDomain::values()
             .filter(|&c| c != ClockDomain::Undefined)
-            .map(|id| (id, &self.extended_domain[id.raw() as usize]))
+            .map(|id| (id, &self.extended_domain[id.repr() as usize]))
             .filter(|(_, d)| d.effective_frequency != 0)
             .map(|(id, d)| (id, Kilohertz(d.effective_frequency)))
             .collect())
@@ -149,7 +149,7 @@ impl RawConversion for clock::private::NV_USAGES_INFO {
             .enumerate()
             .filter(|&(_, usage)| usage.bIsPresent.get())
             .map(|(i, usage)| {
-                crate::pstate::UtilizationDomain::from_raw(i as _)
+                crate::pstate::UtilizationDomain::try_from(i as i32)
                     .and_then(|i| Percentage::from_raw(usage.percentage).map(|p| (i, p)))
             })
             .collect()
@@ -168,7 +168,7 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_CL
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        VfPointType::from_raw(self.clock_type as i32)
+        VfPointType::try_from(self.clock_type as i32)
     }
 }
 
@@ -360,7 +360,7 @@ impl ClkDomainControlEntry {
     /// The typed clock-domain id for this entry's bit, or `None` if the bit
     /// doesn't map to a known [`ClockDomainId`] (e.g. an unnamed NDA domain).
     pub fn domain(&self) -> Option<ClockDomainId> {
-        ClockDomainId::from_raw(self.bit as i32).ok()
+        ClockDomainId::try_from(self.bit as i32).ok()
     }
 }
 
@@ -1364,7 +1364,7 @@ impl RawConversion for power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_STATUS_V
             ..
         } = *self;
         Ok(VfpEntry {
-            point_type: VfPointType::from_raw(clock_type as i32)?,
+            point_type: VfPointType::try_from(clock_type as i32)?,
             current: point.convert_raw()?,
             default: point_default.convert_raw()?,
             overclocked: point_overclocked.convert_raw()?,
@@ -1781,7 +1781,7 @@ impl RawConversion for power::private::NV_GPU_PERF_POLICIES_INFO_PARAMS {
         // TODO: check padding
         Ok(PerfInfo {
             max_unknown: self.maxUnknown,
-            limits: PerfFlags::from_bits(self.limitSupport).ok_or(sys::ArgumentRangeError)?,
+            limits: PerfFlags::from_bits(self.limitSupport.value).ok_or(sys::ArgumentRangeError)?,
         })
     }
 }
@@ -1810,7 +1810,7 @@ impl RawConversion for power::private::NV_GPU_PERF_POLICIES_STATUS_PARAMS {
                 ..
             } => Ok(PerfStatus {
                 unknown,
-                limits: PerfFlags::from_bits(limits).ok_or(sys::ArgumentRangeError)?,
+                limits: PerfFlags::from_bits(limits.value).ok_or(sys::ArgumentRangeError)?,
             }),
             _ => Err(sys::ArgumentRangeError),
         }
@@ -1973,7 +1973,7 @@ mod tests {
             (ClockDomainId::Pciegen, 8_000), // PCIe gen NUMBER -> filtered out
         ];
         for (dom, freq) in samples {
-            raw.extended_domain[dom.raw() as usize].effective_frequency = *freq;
+            raw.extended_domain[dom.repr() as usize].effective_frequency = *freq;
         }
 
         let all = all_clocks_from_raw(&raw);

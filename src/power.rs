@@ -782,7 +782,7 @@ pub fn power_rail_name(rail: u32) -> &'static str {
     // can't return a borrow of PowerRail's Display (it's formatted, not
     // &'static), so use a static match derived from the enum's known values.
     // For values outside the enum, callers should use power_rail_name_owned.
-    match PowerRail::from_raw(rail as i32) {
+    match PowerRail::try_from(rail as i32) {
         Ok(r) => match r {
             PowerRail::Unknown => "Unknown",
             PowerRail::OutputNvvdd => "OutputNvvdd",
@@ -840,7 +840,7 @@ pub fn power_rail_name(rail: u32) -> &'static str {
 /// Owned rail label for unknown values: `"UNNAMED_<n>"` when not in the enum.
 pub fn power_rail_name_owned(rail: u32) -> String {
     use crate::sys::gpu::power::private::PowerRail;
-    if PowerRail::from_raw(rail as i32).is_ok() {
+    if PowerRail::try_from(rail as i32).is_ok() {
         power_rail_name(rail).to_string()
     } else {
         format!("UNNAMED_{}", rail)

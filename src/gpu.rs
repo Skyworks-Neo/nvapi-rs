@@ -580,8 +580,8 @@ impl PhysicalGpu {
             nvcall!(NvAPI_GPU_WorkstationFeatureQuery@get2(self.0)).map(
                 |(configured, consistent)| {
                     (
-                        WorkstationFeatureMask::from_bits_truncate(configured),
-                        WorkstationFeatureMask::from_bits_truncate(consistent),
+                        WorkstationFeatureMask::from_bits_truncate(configured.value),
+                        WorkstationFeatureMask::from_bits_truncate(consistent.value),
                     )
                 },
             )
@@ -984,7 +984,7 @@ impl PhysicalGpu {
             numVoltages: 1,
             ..Default::default()
         };
-        info.voltages[0].domainId = pstate::VoltageInfoDomain::Core as i32;
+        info.voltages[0].domainId = pstate::VoltageInfoDomain::Core.into();
         info.voltages[0].voltDelta_uV.value = delta.0;
         unsafe { nvcall!(NvAPI_GPU_SetPstates20(self.0, &info)) }
     }
@@ -1469,7 +1469,7 @@ impl PhysicalGpu {
         };
 
         Ok(crate::clock::ClockDomainFreq {
-            domain: crate::clock::ClockDomainId::from_raw(domain_bit as i32)
+            domain: crate::clock::ClockDomainId::try_from(domain_bit as i32)
                 .unwrap_or(crate::clock::ClockDomainId::Gpc),
             freq_mhz: freq_hz / 1e6,
         })
@@ -1528,7 +1528,7 @@ impl PhysicalGpu {
         };
 
         Ok(crate::clock::ClockDomainFreqDetail {
-            domain: crate::clock::ClockDomainId::from_raw(domain_bit as i32)
+            domain: crate::clock::ClockDomainId::try_from(domain_bit as i32)
                 .unwrap_or(crate::clock::ClockDomainId::Gpc),
             freq_mhz: freq_hz / 1e6,
             protocol,
@@ -1568,7 +1568,7 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsMeasureFreq, st)
             .map_err(crate::Error::from)?;
         Ok(crate::clock::ClockDomainFreqDirect {
-            domain: crate::clock::ClockDomainId::from_raw(domain_bit as i32)
+            domain: crate::clock::ClockDomainId::try_from(domain_bit as i32)
                 .unwrap_or(crate::clock::ClockDomainId::Gpc),
             freq_khz: m.freq_khz,
         })
@@ -1644,7 +1644,7 @@ impl PhysicalGpu {
                         0.0
                     };
                     crate::clock::ClockDomainFreq {
-                        domain: crate::clock::ClockDomainId::from_raw(bit as i32)
+                        domain: crate::clock::ClockDomainId::try_from(bit as i32)
                             .unwrap_or(crate::clock::ClockDomainId::Gpc),
                         freq_mhz: freq_hz / 1e6,
                     }
@@ -3209,13 +3209,13 @@ impl PhysicalGpu {
             unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
 
         // Raw mode codes (NV_GPU_CLOCK_LOCK_MODE is a c_int alias).
-        let mode_pstate = clock::private::ClockLockMode::PstateSelect.raw();
-        let mode_freq = clock::private::ClockLockMode::ManualFrequency.raw();
+        let mode_pstate = clock::private::ClockLockMode::PstateSelect.repr();
+        let mode_freq = clock::private::ClockLockMode::ManualFrequency.repr();
         // Helper: write entry[k] = {id, mode, value} (other fields stay 0).
         let mut set_entry = |k: usize, id: i32, mode: i32, value: u32| {
             if let Some(e) = data.entries.get_mut(k) {
-                e.id = id;
-                e.mode = mode;
+                e.id = id.into();
+                e.mode = mode.into();
                 e.value = value;
             }
         };
@@ -3672,7 +3672,7 @@ impl PhysicalGpu {
             .map(|i| {
                 let l = &raw.limits[i];
                 PstateClientLimit {
-                    pstate_id: l.pstateId as u32,
+                    pstate_id: l.pstateId.repr() as u32,
                     min_level: l.minLevel,
                     max_level: l.maxLevel,
                 }
@@ -3700,7 +3700,7 @@ impl PhysicalGpu {
         *raw.nvapi_version_mut() = NvVersion::with_struct::<NV_GPU_PSTATE_CLIENT_LIMITS>(1);
         raw.numLimits = limits.len() as u32;
         for (dst, src) in raw.limits.iter_mut().zip(limits) {
-            dst.pstateId = src.pstate_id as _;
+            dst.pstateId = (src.pstate_id as i32).into();
             dst.minLevel = src.min_level;
             dst.maxLevel = src.max_level;
         }
@@ -3924,7 +3924,7 @@ impl PhysicalGpu {
         trace!("gpu.thermal_settings({:?})", index);
 
         unsafe {
-            nvcall!(NvAPI_GPU_GetThermalSettings@get(self.0, index.unwrap_or(thermal::NVAPI_THERMAL_TARGET_ALL as _)) => raw)
+            nvcall!(NvAPI_GPU_GetThermalSettings@get(self.0, index.unwrap_or(thermal::NVAPI_THERMAL_TARGET_ALL.repr() as _)) => raw)
         }
     }
 
@@ -4679,9 +4679,9 @@ impl PhysicalGpu {
         ctrl.arbiters[0] = NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
             arbiter_index: curve_index,
             flags: if enable {
-                cooler::private::FanArbiterControlFlags::FAN_STOP.bits()
+                cooler::private::FanArbiterControlFlags::FAN_STOP.value()
             } else {
-                0
+                cooler::private::NV_FAN_ARBITER_CONTROL_FLAGS::default()
             },
         };
         unsafe { nvcall!(NvAPI_GPU_ClientFanArbitersSetControl(self.0, &ctrl)) }
@@ -4898,7 +4898,7 @@ impl PhysicalGpu {
         let index = match index {
             Some(index) => index,
             None if <cooler::private::NV_GPU_GETCOOLER_SETTINGS as sys::nvapi::StructVersion>::NVAPI_VERSION.version() < 4 =>
-                cooler::private::NVAPI_COOLER_TARGET_ALL as _,
+                cooler::private::NVAPI_COOLER_TARGET_ALL.repr() as _,
             None => 0,
         };
         unsafe { nvcall!(NvAPI_GPU_GetCoolerSettings@get(self.0, index) => raw) }
@@ -4967,7 +4967,7 @@ impl PhysicalGpu {
         unsafe {
             nvcall!(NvAPI_GPU_SetCoolerLevels(
                 self.0,
-                index.unwrap_or(cooler::private::NVAPI_COOLER_TARGET_ALL as _),
+                index.unwrap_or(cooler::private::NVAPI_COOLER_TARGET_ALL.repr() as _),
                 &data
             ))
         }
@@ -5005,7 +5005,7 @@ impl PhysicalGpu {
             }) => unsafe {
                 nvcall!(NvAPI_GPU_SetCoolerLevels(
                     self.0,
-                    cooler::private::NVAPI_COOLER_TARGET_ALL as _,
+                    cooler::private::NVAPI_COOLER_TARGET_ALL.repr() as _,
                     &backup
                 ))
             },
@@ -5172,7 +5172,7 @@ impl PhysicalGpu {
 
         unsafe {
             nvcall!(NvAPI_GPU_GetPerfDecreaseInfo@get(self.0))
-                .map(PerformanceDecreaseReason::from_bits_truncate)
+                .map(|v| PerformanceDecreaseReason::from_bits_truncate(v.value))
         }
     }
 
@@ -5218,7 +5218,7 @@ impl PhysicalGpu {
                 self.0,
                 ptr::null_mut(),
                 &mut count,
-                flags.bits()
+                flags.bits().into()
             ))
             .map(|()| count)
         }?;
@@ -5228,7 +5228,7 @@ impl PhysicalGpu {
         let mut data = vec![display::NV_GPU_DISPLAYIDS::default(); count as usize];
 
         unsafe {
-            nvcall!(NvAPI_GPU_GetConnectedDisplayIds(self.0, data.as_mut_ptr(), &mut count, flags.bits()) => err)
+            nvcall!(NvAPI_GPU_GetConnectedDisplayIds(self.0, data.as_mut_ptr(), &mut count, flags.bits().into()) => err)
                 .and_then(|()| data.into_iter().map(|v| v.convert_raw().map_err(From::from)).collect())
         }
     }
@@ -5405,7 +5405,7 @@ impl PciIdentifiers {
     }
 
     pub fn vendor(&self) -> Result<Vendor, sys::ArgumentRangeError> {
-        Vendor::from_raw(self.vendor_id() as _)
+        Vendor::try_from(self.vendor_id() as i32)
     }
 }
 
@@ -5572,7 +5572,7 @@ impl RawConversion for display::NV_GPU_DISPLAYIDS {
         Ok(DisplayId {
             connector: MonitorConnectorType::from_raw(self.connectorType)?,
             display_id: self.displayId,
-            flags: DisplayIdsFlags::from_bits_truncate(self.flags),
+            flags: DisplayIdsFlags::from_bits_truncate(self.flags.value),
         })
     }
 }
@@ -5608,8 +5608,8 @@ pub enum Architecture {
 impl Default for Architecture {
     fn default() -> Self {
         Architecture::Unknown {
-            id: 0,
-            implementation: 0,
+            id: Default::default(),
+            implementation: Default::default(),
         }
     }
 }
@@ -5633,12 +5633,13 @@ impl Architecture {
         id: sys::gpu::NV_GPU_ARCHITECTURE_ID,
         implementation: sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID,
     ) -> Result<Self, sys::ArgumentRangeError> {
+        let implementation = implementation.repr();
         Ok(match id {
             sys::gpu::NV_GPU_ARCHITECTURE_T2X => Architecture::T2X(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_T3X => Architecture::T3X(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_NV40 => Architecture::NV40(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_NV50 => Architecture::NV50(implementation.try_into()?),
-            sys::gpu::NV_GPU_ARCHITECTURE_G78 => Architecture::G78(implementation),
+            sys::gpu::NV_GPU_ARCHITECTURE_G78 => Architecture::G78(sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(implementation)),
             sys::gpu::NV_GPU_ARCHITECTURE_G80 => Architecture::G80(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_G90 => Architecture::G90(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GT200 => Architecture::GT200(implementation.try_into()?),
@@ -5646,11 +5647,11 @@ impl Architecture {
             sys::gpu::NV_GPU_ARCHITECTURE_GK100 => Architecture::GK100(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GK110 => Architecture::GK110(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GK200 => Architecture::GK200(implementation.try_into()?),
-            sys::gpu::NV_GPU_ARCHITECTURE_GM000 => Architecture::GM000(implementation),
+            sys::gpu::NV_GPU_ARCHITECTURE_GM000 => Architecture::GM000(sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(implementation)),
             sys::gpu::NV_GPU_ARCHITECTURE_GM200 => Architecture::GM200(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GP100 => Architecture::GP100(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GV100 => Architecture::GV100(implementation.try_into()?),
-            sys::gpu::NV_GPU_ARCHITECTURE_GV110 => Architecture::GV110(implementation),
+            sys::gpu::NV_GPU_ARCHITECTURE_GV110 => Architecture::GV110(sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(implementation)),
             sys::gpu::NV_GPU_ARCHITECTURE_TU100 => Architecture::TU100(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GA100 => Architecture::GA100(implementation.try_into()?),
             _ => return Err(Default::default()),
@@ -5688,25 +5689,25 @@ impl Architecture {
 
     pub fn raw_implementation(&self) -> sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID {
         match *self {
-            Architecture::T2X(i) => i.into(),
-            Architecture::T3X(i) => i.into(),
-            Architecture::NV40(i) => i.into(),
-            Architecture::NV50(i) => i.into(),
+            Architecture::T2X(i) => i.repr().into(),
+            Architecture::T3X(i) => i.repr().into(),
+            Architecture::NV40(i) => i.repr().into(),
+            Architecture::NV50(i) => i.repr().into(),
             Architecture::G78(i) => i,
-            Architecture::G80(i) => i.into(),
-            Architecture::G90(i) => i.into(),
-            Architecture::GT200(i) => i.into(),
-            Architecture::GF100(i) => i.into(),
-            Architecture::GK100(i) => i.into(),
-            Architecture::GK110(i) => i.into(),
-            Architecture::GK200(i) => i.into(),
+            Architecture::G80(i) => i.repr().into(),
+            Architecture::G90(i) => i.repr().into(),
+            Architecture::GT200(i) => i.repr().into(),
+            Architecture::GF100(i) => i.repr().into(),
+            Architecture::GK100(i) => i.repr().into(),
+            Architecture::GK110(i) => i.repr().into(),
+            Architecture::GK200(i) => i.repr().into(),
             Architecture::GM000(i) => i,
-            Architecture::GM200(i) => i.into(),
-            Architecture::GP100(i) => i.into(),
-            Architecture::GV100(i) => i.into(),
+            Architecture::GM200(i) => i.repr().into(),
+            Architecture::GP100(i) => i.repr().into(),
+            Architecture::GV100(i) => i.repr().into(),
             Architecture::GV110(i) => i,
-            Architecture::TU100(i) => i.into(),
-            Architecture::GA100(i) => i.into(),
+            Architecture::TU100(i) => i.repr().into(),
+            Architecture::GA100(i) => i.repr().into(),
             Architecture::Unknown { implementation, .. } => implementation,
         }
     }

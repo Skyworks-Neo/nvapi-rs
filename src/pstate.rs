@@ -215,7 +215,7 @@ impl RawConversion for pstate::NV_GPU_DYNAMIC_PSTATES_INFO_EX {
             Ok(BTreeMap::new())
         } else {
             UtilizationDomain::values()
-                .map(|domain| (domain, &self.utilization[domain.raw() as usize]))
+                .map(|domain| (domain, &self.utilization[domain.repr() as usize]))
                 .filter(|&(_, util)| util.bIsPresent.get())
                 .map(|(id, util)| Percentage::from_raw(util.percentage).map(|p| (id, p)))
                 .collect()
