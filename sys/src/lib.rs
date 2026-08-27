@@ -53,7 +53,7 @@ use std::error::Error as StdError;
 use std::{fmt, result};
 
 pub mod api {
-    pub use self::private::*;
+    pub use self::undocumented::*;
     pub use crate::driverapi::*;
     #[cfg(windows)]
     pub use crate::dx::*;
@@ -73,15 +73,15 @@ pub mod api {
     pub use crate::sysgeneral::*;
     pub use crate::vidio::*;
 
-    pub mod private {
-        pub use crate::driverapi::private::*;
-        pub use crate::gpu::clock::private::*;
-        pub use crate::gpu::cooler::private::*;
-        pub use crate::gpu::power::private::*;
-        pub use crate::gpu::private::*;
-        pub use crate::gpu::pstate::private::*;
-        pub use crate::gpu::thermal::private::*;
-        pub use crate::i2c::private::*;
+    pub mod undocumented {
+        pub use crate::driverapi::undocumented::*;
+        pub use crate::gpu::clock::undocumented::*;
+        pub use crate::gpu::cooler::undocumented::*;
+        pub use crate::gpu::power::undocumented::*;
+        pub use crate::gpu::undocumented::*;
+        pub use crate::gpu::pstate::undocumented::*;
+        pub use crate::gpu::thermal::undocumented::*;
+        pub use crate::i2c::undocumented::*;
     }
 }
 

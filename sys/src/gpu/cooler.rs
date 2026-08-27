@@ -8,7 +8,7 @@ nvapi! {
 }
 
 /// Undocumented API
-pub mod private {
+pub mod undocumented {
     use crate::prelude_::*;
 
     pub const NVAPI_MIN_COOLER_LEVEL: usize = 0;
@@ -657,7 +657,7 @@ pub mod private {
             pub padding: Padding<[u8; 3]>,
             /// three monotonic (temp, rpm) points, each 12 bytes
             pub points: Array<[NV_GPU_CLIENT_FAN_POLICIES_POINT_V1; 3]>,
-            pub tail: Padding<[u8; 12]>,
+            pub tail: Array<[u8; 12]>,
         }
     }
 
@@ -674,7 +674,7 @@ pub mod private {
         pub version: u32,
         /// curve count (byte; driver rejects > 4)
         pub count: u8,
-        pub header: Padding<[u8; 15]>,
+        pub header: Array<[u8; 15]>,
         /// up to 4 curve slots, each 52 bytes
         pub curves: Array<[NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1; 4]>,
     }

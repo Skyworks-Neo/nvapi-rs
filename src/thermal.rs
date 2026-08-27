@@ -18,8 +18,8 @@ where
     entries.iter().map(RawConversion::convert_raw).collect()
 }
 
-pub use sys::gpu::cooler::private::{FanArbiterInfoFlags, FanCoolerId};
-pub use sys::gpu::thermal::private::ThermalPolicyId;
+pub use sys::gpu::cooler::undocumented::{FanArbiterInfoFlags, FanCoolerId};
+pub use sys::gpu::thermal::undocumented::ThermalPolicyId;
 pub use sys::gpu::thermal::{ThermalController, ThermalTarget};
 
 #[derive(Debug, Copy, Clone)]
@@ -71,7 +71,7 @@ pub struct ThermalInfo {
     pub default_flags: u32,
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_ENTRY_V2 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_ENTRY_V2 {
     type Target = ThermalInfo;
     type Error = sys::ArgumentRangeError;
 
@@ -91,7 +91,7 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_ENT
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_INFO_V3 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICY_INFO_V3 {
     type Target = ThermalInfo;
     type Error = sys::ArgumentRangeError;
 
@@ -115,7 +115,7 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_INFO_V3 {
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V2 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V2 {
     type Target = Vec<ThermalInfo>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -123,7 +123,7 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V2 
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V3 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V3 {
     type Target = Vec<ThermalInfo>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -141,8 +141,8 @@ pub struct ThermalLimit {
 }
 
 impl ThermalLimit {
-    pub fn to_raw(&self) -> thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 {
-        let mut entry = thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 {
+    pub fn to_raw(&self) -> thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 {
+        let mut entry = thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 {
             policy_id: self.policy.into(),
             temp_limit_C: self.value.0 as _,
             remove_tdp_limit: self.remove_tdp_limit.into(),
@@ -182,7 +182,7 @@ impl PffStatus {
         self.points().collect()
     }
 
-    pub fn to_raw(&self) -> (thermal::private::NV_GPU_CLIENT_PFF_CURVE_V1, [u32; 3]) {
+    pub fn to_raw(&self) -> (thermal::undocumented::NV_GPU_CLIENT_PFF_CURVE_V1, [u32; 3]) {
         let mut values = [0u32; 3];
         for (dest, src) in values.iter_mut().zip(&self.values) {
             *dest = src.0 as _;
@@ -191,7 +191,7 @@ impl PffStatus {
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_ENTRY_V2 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_ENTRY_V2 {
     type Target = ThermalLimit;
     type Error = sys::ArgumentRangeError;
 
@@ -206,7 +206,7 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_E
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 {
     type Target = ThermalLimit;
     type Error = sys::ArgumentRangeError;
 
@@ -231,7 +231,7 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3 
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V2 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V2 {
     type Target = Vec<ThermalLimit>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -239,7 +239,7 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V3 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V3 {
     type Target = Vec<ThermalLimit>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -260,7 +260,7 @@ pub struct PffCurve {
     pub points: Vec<PffPoint>,
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_PFF_CURVE_POINT_V1 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_PFF_CURVE_POINT_V1 {
     type Target = PffPoint;
     type Error = Infallible;
 
@@ -274,8 +274,8 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_PFF_CURVE_POINT_V1 {
 }
 
 impl PffPoint {
-    pub fn to_raw(&self) -> thermal::private::NV_GPU_CLIENT_PFF_CURVE_POINT_V1 {
-        thermal::private::NV_GPU_CLIENT_PFF_CURVE_POINT_V1 {
+    pub fn to_raw(&self) -> thermal::undocumented::NV_GPU_CLIENT_PFF_CURVE_POINT_V1 {
+        thermal::undocumented::NV_GPU_CLIENT_PFF_CURVE_POINT_V1 {
             enabled: true.into(),
             temp: self.x.0 as _,
             uiT_Y: self.y.0,
@@ -284,7 +284,7 @@ impl PffPoint {
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_CLIENT_PFF_CURVE_V1 {
+impl RawConversion for thermal::undocumented::NV_GPU_CLIENT_PFF_CURVE_V1 {
     type Target = PffCurve;
     type Error = Infallible;
 
@@ -301,8 +301,8 @@ impl RawConversion for thermal::private::NV_GPU_CLIENT_PFF_CURVE_V1 {
 }
 
 impl PffCurve {
-    pub fn to_raw(&self) -> thermal::private::NV_GPU_CLIENT_PFF_CURVE_V1 {
-        let mut curve = thermal::private::NV_GPU_CLIENT_PFF_CURVE_V1::default();
+    pub fn to_raw(&self) -> thermal::undocumented::NV_GPU_CLIENT_PFF_CURVE_V1 {
+        let mut curve = thermal::undocumented::NV_GPU_CLIENT_PFF_CURVE_V1::default();
         for (dest, src) in curve.points.iter_mut().zip(&self.points) {
             *dest = src.to_raw();
         }
@@ -336,7 +336,7 @@ impl fmt::Display for PffCurve {
     }
 }
 
-pub use sys::gpu::cooler::private::{
+pub use sys::gpu::cooler::undocumented::{
     CoolerControl, CoolerController, CoolerPolicy, CoolerTarget, CoolerType,
 };
 
@@ -391,8 +391,8 @@ impl CoolerSettings {
     pub fn to_raw(
         &self,
         cooler_id: FanCoolerId,
-    ) -> cooler::private::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
-        let mut raw = cooler::private::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
+    ) -> cooler::undocumented::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
+        let mut raw = cooler::undocumented::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
             cooler_id: cooler_id.into(),
             level: self.level.unwrap_or_default().0,
             ..Default::default()
@@ -411,7 +411,7 @@ impl CoolerSettings {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTING_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_GETCOOLER_SETTING_V1 {
     type Target = Cooler;
     type Error = sys::ArgumentRangeError;
 
@@ -436,7 +436,7 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTING_V1 {
                     max: Percentage::from_raw(self.currentMaxLevel)?,
                 },
                 current_level: Percentage::from_raw(self.currentLevel)?,
-                active: cooler::private::CoolerActivityLevel::try_from(self.active)?.get(),
+                active: cooler::undocumented::CoolerActivityLevel::try_from(self.active)?.get(),
                 current_tach: None,
             },
             control: CoolerSettings {
@@ -448,7 +448,7 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTING_V1 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTING_V3 {
+impl RawConversion for cooler::undocumented::NV_GPU_GETCOOLER_SETTING_V3 {
     type Target = Cooler;
     type Error = sys::ArgumentRangeError;
 
@@ -466,7 +466,7 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTING_V3 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTING_V4 {
+impl RawConversion for cooler::undocumented::NV_GPU_GETCOOLER_SETTING_V4 {
     type Target = Cooler;
     type Error = sys::ArgumentRangeError;
 
@@ -478,7 +478,7 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTING_V4 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTINGS_V4 {
+impl RawConversion for cooler::undocumented::NV_GPU_GETCOOLER_SETTINGS_V4 {
     type Target = Vec<Cooler>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -486,7 +486,7 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTINGS_V4 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTINGS_V3 {
+impl RawConversion for cooler::undocumented::NV_GPU_GETCOOLER_SETTINGS_V3 {
     type Target = Vec<Cooler>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -494,7 +494,7 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTINGS_V3 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTINGS_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_GETCOOLER_SETTINGS_V1 {
     type Target = Vec<Cooler>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -502,7 +502,7 @@ impl RawConversion for cooler::private::NV_GPU_GETCOOLER_SETTINGS_V1 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLER_INFO_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_COOLER_INFO_V1 {
     type Target = (FanCoolerId, CoolerInfo);
     type Error = sys::ArgumentRangeError;
 
@@ -529,7 +529,7 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLER_INFO_V1 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLERS_INFO_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_COOLERS_INFO_V1 {
     type Target = BTreeMap<FanCoolerId, CoolerInfo>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -537,7 +537,7 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLERS_INFO_V1 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLER_STATUS_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_COOLER_STATUS_V1 {
     type Target = (FanCoolerId, CoolerStatus);
     type Error = sys::ArgumentRangeError;
 
@@ -558,14 +558,14 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLER_STATUS_V1 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLERS_STATUS_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_COOLERS_STATUS_V1 {
     type Target = BTreeMap<FanCoolerId, CoolerStatus>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         convert_entries(self.coolers(), self)
     }
 }
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLERS_CONTROL_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_COOLERS_CONTROL_V1 {
     type Target = BTreeMap<FanCoolerId, CoolerSettings>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -573,7 +573,7 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLERS_CONTROL_V1 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
     type Target = (FanCoolerId, CoolerSettings);
     type Error = sys::ArgumentRangeError;
 
@@ -595,7 +595,7 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_SETCOOLER_LEVEL_COOLER {
+impl RawConversion for cooler::undocumented::NV_GPU_SETCOOLER_LEVEL_COOLER {
     type Target = CoolerSettings;
     type Error = sys::ArgumentRangeError;
 
@@ -608,7 +608,7 @@ impl RawConversion for cooler::private::NV_GPU_SETCOOLER_LEVEL_COOLER {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_SETCOOLER_LEVEL {
+impl RawConversion for cooler::undocumented::NV_GPU_SETCOOLER_LEVEL {
     type Target = Vec<CoolerSettings>;
     type Error = sys::ArgumentRangeError;
 
@@ -625,7 +625,7 @@ pub struct CoolerPolicyLevel {
     pub default_level: u32,
 }
 
-impl RawConversion for cooler::private::NV_GPU_COOLER_POLICY_LEVEL {
+impl RawConversion for cooler::undocumented::NV_GPU_COOLER_POLICY_LEVEL {
     type Target = CoolerPolicyLevel;
     type Error = sys::ArgumentRangeError;
 
@@ -645,7 +645,7 @@ pub struct CoolerPolicyTable {
     pub levels: Vec<CoolerPolicyLevel>,
 }
 
-impl RawConversion for cooler::private::NV_GPU_COOLER_POLICY_TABLE {
+impl RawConversion for cooler::undocumented::NV_GPU_COOLER_POLICY_TABLE {
     type Target = CoolerPolicyTable;
     type Error = sys::ArgumentRangeError;
 
@@ -668,7 +668,7 @@ pub struct FanArbiterInfo {
     pub flags: FanArbiterInfoFlags,
 }
 
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_INFO_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_ARBITER_INFO_V1 {
     type Target = (u32, FanArbiterInfo);
     type Error = sys::ArgumentRangeError;
 
@@ -683,21 +683,21 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_INFO_V1 {
     }
 }
 
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_INFO_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_ARBITERS_INFO_V1 {
     type Target = BTreeMap<u32, FanArbiterInfo>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         convert_entries(self.arbiters(), self)
     }
 }
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_STATUS_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_ARBITERS_STATUS_V1 {
     type Target = BTreeMap<u32, FanArbiterStatus>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         convert_entries(self.arbiters(), self)
     }
 }
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1 {
     type Target = BTreeMap<u32, FanArbiterControl>;
     type Error = sys::ArgumentRangeError;
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
@@ -711,7 +711,7 @@ pub struct FanArbiterStatus {
     pub fan_stopped: bool,
 }
 
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_STATUS_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_ARBITER_STATUS_V1 {
     type Target = (u32, FanArbiterStatus);
     type Error = sys::ArgumentRangeError;
 
@@ -732,7 +732,7 @@ pub struct FanArbiterControl {
     pub stop_fan: bool,
 }
 
-impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
+impl RawConversion for cooler::undocumented::NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
     type Target = (u32, FanArbiterControl);
     type Error = sys::ArgumentRangeError;
 
@@ -743,7 +743,7 @@ impl RawConversion for cooler::private::NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
             FanArbiterControl {
                 stop_fan: self
                     .flags()
-                    .contains(cooler::private::FanArbiterControlFlags::FAN_STOP),
+                    .contains(cooler::undocumented::FanArbiterControlFlags::FAN_STOP),
             },
         ))
     }
@@ -785,8 +785,8 @@ pub struct ChannelInfo {
     pub therm_dev_prov_idx: u8,
 }
 
-impl From<&thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1> for ChannelInfo {
-    fn from(c: &thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1) -> Self {
+impl From<&thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1> for ChannelInfo {
+    fn from(c: &thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_INFO_V1) -> Self {
         ChannelInfo {
             ch_type: c.ch_type,
             ch_class: c.ch_class,
@@ -822,7 +822,7 @@ pub struct ThermalChannelInfo {
     /// `NV_GPU_THERMAL_THERM_CHANNEL_TYPE`:
     /// `[GPU_AVG, GPU_MAX(hotspot), BOARD, MEMORY(vram), PWR_SUPPLY]`.
     /// `None` where the type is unavailable or the channel bit is not set.
-    pub primary: [Option<u8>; thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX],
+    pub primary: [Option<u8>; thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX],
     /// Per-channel metadata, indexed by channel number (0..32); `None` where
     /// the channel bit is not set in `channel_mask`.
     pub channels: Vec<Option<ChannelInfo>>,
@@ -831,12 +831,12 @@ pub struct ThermalChannelInfo {
 impl ThermalChannelInfo {
     /// Hot spot (GPU_MAX) primary channel index, if available.
     pub fn hotspot_index(&self) -> Option<u8> {
-        self.primary[thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_MAX.repr() as usize]
+        self.primary[thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_MAX.repr() as usize]
     }
 
     /// VRAM (MEMORY) primary channel index, if available.
     pub fn memory_index(&self) -> Option<u8> {
-        self.primary[thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY.repr() as usize]
+        self.primary[thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY.repr() as usize]
     }
 
     /// Metadata for a given channel index, if that channel is populated.
@@ -855,14 +855,14 @@ impl ThermalChannelInfo {
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO {
+impl RawConversion for thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_INFO {
     type Target = ThermalChannelInfo;
     type Error = sys::ArgumentRangeError;
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
         // Mirror the raw struct's mask-aware primary_index() into the typed array.
-        let mut primary = [None; thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX];
+        let mut primary = [None; thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MAX];
         for (ty, slot) in primary.iter_mut().enumerate() {
             if let Some(idx) = self.primary_index(ty) {
                 *slot = Some(idx as u8);
@@ -912,7 +912,7 @@ impl ThermalChannelStatus {
     }
 }
 
-impl RawConversion for thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS {
+impl RawConversion for thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_STATUS {
     type Target = ThermalChannelStatus;
     type Error = sys::ArgumentRangeError;
 
@@ -923,7 +923,7 @@ impl RawConversion for thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS {
             .iter()
             .enumerate()
             .filter_map(|(i, &v)| {
-                thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2::decode(v)
+                thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2::decode(v)
                     .map(|t| (i, t))
             })
             .collect();

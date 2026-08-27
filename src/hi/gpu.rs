@@ -1592,7 +1592,7 @@ impl Gpu {
     /// Whisper Mode 2.0 acoustic mode (Quieter/Quiet/Balanced).
     pub fn set_wm2_mode(
         &self,
-        mode: crate::sys::gpu::power::private::Wm2AcousticMode,
+        mode: crate::sys::gpu::power::undocumented::Wm2AcousticMode,
     ) -> crate::Result<()> {
         self.gpu.set_wm2_mode(mode).map_err(Into::into)
     }

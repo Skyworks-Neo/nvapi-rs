@@ -14,7 +14,7 @@
 //! - [`PowerMonitor`] — the full decoded descriptor table (channel identity +
 //!   scaling), research-grade; channel-0 carries a live status at +0x44.
 
-use crate::sys::gpu::power::private::{
+use crate::sys::gpu::power::undocumented::{
     NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, NV_GPU_POWER_MONITOR_GET_INFO_V3_3240,
     NV_GPU_POWER_MONITOR_GET_INFO_V4,
 };
@@ -777,7 +777,7 @@ pub fn rail_matches_label(rail: u32, label: &str) -> bool {
 /// values (not in the enum, e.g. Ada-private 218) return a rendered
 /// `"UNNAMED_<n>"` string via the owned-return variant below.
 pub fn power_rail_name(rail: u32) -> &'static str {
-    use crate::sys::gpu::power::private::PowerRail;
+    use crate::sys::gpu::power::undocumented::PowerRail;
     // Owned variants of the known enum values map to their Display name. We
     // can't return a borrow of PowerRail's Display (it's formatted, not
     // &'static), so use a static match derived from the enum's known values.
@@ -839,7 +839,7 @@ pub fn power_rail_name(rail: u32) -> &'static str {
 
 /// Owned rail label for unknown values: `"UNNAMED_<n>"` when not in the enum.
 pub fn power_rail_name_owned(rail: u32) -> String {
-    use crate::sys::gpu::power::private::PowerRail;
+    use crate::sys::gpu::power::undocumented::PowerRail;
     if PowerRail::try_from(rail as i32).is_ok() {
         power_rail_name(rail).to_string()
     } else {

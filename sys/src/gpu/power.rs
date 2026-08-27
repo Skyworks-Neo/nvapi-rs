@@ -1,5 +1,5 @@
 /// Undocumented API
-pub mod private {
+pub mod undocumented {
     use crate::prelude_::*;
 
     nvstruct! {
@@ -678,7 +678,7 @@ pub mod private {
             pub seed: u32,
             pub mode_mask: u16,
             pub max_mode_idx: u16,
-            pub rest: Padding<[u32; 1344]>,
+            pub rest: Array<[u32; 1344]>,
         }
     }
 
@@ -696,7 +696,7 @@ pub mod private {
             pub seed: u32,
             pub active_mode_idx: u16,
             pub padding: Padding<[u8; 2]>,
-            pub rest: Padding<[u32; 1024]>,
+            pub rest: Array<[u32; 1024]>,
         }
     }
 
@@ -892,7 +892,7 @@ pub mod private {
             pub version: NvVersion,
             pub mask: u32,
             /// Opaque header/descriptor + entry table (raw; GET-filled).
-            pub payload: Padding<[u8; 10016 - 8]>,
+            pub payload: Array<[u8; 10016 - 8]>,
         }
     }
 
@@ -970,13 +970,13 @@ pub mod private {
             pub policy_index_byte: u8,
             pub rsvd0: Padding<[u8; 3]>,
             /// dword 6..11 (opaque).
-            pub hdr3: Padding<[u32; 6]>,
+            pub hdr3: Array<[u32; 6]>,
             /// dword 12 (the ref tool reads it into a "hide TGP" sibling field).
             pub hide_tgp_flag_dword: u32,
             /// Per-policy entry table (10604 B each); raw, parsed by accessors.
             /// Header before this = 52 bytes (dwords 0..12 + the index byte).
             /// Total struct = 347124 B (matches the ref tool's v7[86784] + memset).
-            pub entries: Padding<[u8; 347124 - 52]>,
+            pub entries: Array<[u8; 347124 - 52]>,
         }
     }
 
@@ -1356,7 +1356,7 @@ pub mod private {
             pub count: u32,
             pub unknown: u32,
             pub value_uV: u32,
-            pub buf1: Padding<[u32; 30]>,
+            pub buf1: Array<[u32; 30]>,
         }
     }
 
@@ -1519,7 +1519,7 @@ pub mod private {
             pub curr_corr_offset_ma: i32,
             pub rsvd: Padding<[u8; 8]>,
             /// RTSS `data` union (16 bytes) — type-dispatched, raw.
-            pub data: Padding<[u8; 16]>,
+            pub data: Array<[u8; 16]>,
         }
     }
 
@@ -1531,7 +1531,7 @@ pub mod private {
             pub rel_type: u32,
             pub ch_idx: u8,
             pub rsvd0: Padding<[u8; 3]>,
-            pub data: Padding<[u8; 32]>,
+            pub data: Array<[u8; 32]>,
         }
     }
 
@@ -1703,11 +1703,11 @@ pub mod private {
                     pub total_gpu_power_channel_mask: u32,
                     pub total_gpu_channel_idx: u8,
                     /// Header padding to byte offset 0x34 (first descriptor).
-                    pub header_rsvd: Padding<[u8; 0x34 - 0x1D]>,
+                    pub header_rsvd: Array<[u8; 0x34 - 0x1D]>,
                     /// Variable-length, sparsely-packed per-channel descriptors.
                     /// Parsed by signature scan (channel_type 1..=8 + plausible
                     /// PowerRail); record length varies with channel_type.
-                    pub descriptors: Padding<[u8; $magic_size - 0x34]>,
+                    pub descriptors: Array<[u8; $magic_size - 0x34]>,
                 }
             }
 

@@ -22,7 +22,7 @@ unsafe impl Send for PhysicalGpu {}
 
 pub use sys::gpu::clock::ClockFrequencyType;
 pub use sys::gpu::display::{ConnectedIdsFlags, DisplayIdsFlags, MonitorConnectorType};
-pub use sys::gpu::private::{Foundry, RamMaker, RamType, VendorId as Vendor};
+pub use sys::gpu::undocumented::{Foundry, RamMaker, RamType, VendorId as Vendor};
 pub use sys::gpu::{
     ArchitectureId, BusType, ChipRevision, GpuType, PerformanceDecreaseReason, SystemType,
     WorkstationFeatureMask,
@@ -54,7 +54,7 @@ static OC_SCANNER_LAST: OcScannerLastUpdate = OcScannerLastUpdate {
 /// returns the +0x64 dword.
 unsafe extern "system" fn oc_scanner_status_trampoline(
     _ctx: *mut std::os::raw::c_void,
-    p_status: *const clock::private::NV_GPU_OC_SCANNER_STATUS,
+    p_status: *const clock::undocumented::NV_GPU_OC_SCANNER_STATUS,
 ) -> u32 {
     use std::sync::atomic::Ordering;
     let Some(st) = p_status.as_ref() else {
@@ -88,7 +88,7 @@ pub struct VoltRailEntry {
     /// unsupported) / status = 1 (live voltage)
     pub entry_type: u32,
     /// six payload u32; semantics depend on `entry_type`. For **status** type 1
-    /// (see [`VoltRails::p0_bounds`] and `sys::gpu::power::private::status_values`):
+    /// (see [`VoltRails::p0_bounds`] and `sys::gpu::power::undocumented::status_values`):
     /// `[current, target_wall, vbios_wall, vrm_max_wall, effective_wall, p0_min_hold]` µV —
     /// observed RTX 4060 Laptop rail0: `[940000, 1005000, 0, 1200000, 1005000, 625000]`
     /// (current 0.94 V, target wall 1.005 V, no vBIOS wall, ctrl max 1.200 V,
@@ -141,7 +141,7 @@ pub struct VoltRails {
 
 /// P0 core-domain voltage bounds derived from a type-1 status entry
 /// (semantics confirmed on RTX 4060 Laptop / 610.74 and desktop 20/30-series —
-/// see `sys::gpu::power::private::status_values` for the per-index table).
+/// see `sys::gpu::power::undocumented::status_values` for the per-index table).
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[allow(nonstandard_style)] // uV suffix matches the sys-layer field naming
@@ -170,7 +170,7 @@ impl VoltRails {
     /// (`0 < min_hold <= current <= effective_wall`), so a differently-laid-out
     /// driver degrades to `None` instead of returning garbage.
     pub fn p0_bounds(&self) -> Option<P0VoltageBounds> {
-        use power::private::status_values;
+        use power::undocumented::status_values;
         let entry = self
             .status
             .iter()
@@ -203,7 +203,7 @@ impl VoltRails {
     /// below vrm_max_wall. Returns `None` if the values don't parse.
     #[allow(non_snake_case)]
     pub fn offset_ceiling_uV(&self, rail_bit: u32) -> Option<i32> {
-        use power::private::status_values;
+        use power::undocumented::status_values;
         let status = self
             .status
             .iter()
@@ -654,8 +654,8 @@ impl PhysicalGpu {
     /// frequency per present public domain (Graphics/Memory/Processor).
     pub fn effective_clocks(&self) -> crate::NvapiResult<crate::clock::EffectiveClocks> {
         trace!("gpu.effective_clocks()");
-        let mut data = clock::private::NV_GPU_CLOCK_INFO_V2 {
-            version: NvVersion::new(size_of::<clock::private::NV_GPU_CLOCK_INFO_V2>(), 2),
+        let mut data = clock::undocumented::NV_GPU_CLOCK_INFO_V2 {
+            version: NvVersion::new(size_of::<clock::undocumented::NV_GPU_CLOCK_INFO_V2>(), 2),
             ..Default::default()
         };
         // Same function ID as the V1 GetAllClocks; pass the V2 buffer via a
@@ -677,8 +677,8 @@ impl PhysicalGpu {
     /// returned.
     pub fn all_clocks(&self) -> crate::NvapiResult<crate::clock::AllClocks> {
         trace!("gpu.all_clocks()");
-        let mut data = clock::private::NV_GPU_CLOCK_INFO_V2 {
-            version: NvVersion::new(size_of::<clock::private::NV_GPU_CLOCK_INFO_V2>(), 2),
+        let mut data = clock::undocumented::NV_GPU_CLOCK_INFO_V2 {
+            version: NvVersion::new(size_of::<clock::undocumented::NV_GPU_CLOCK_INFO_V2>(), 2),
             ..Default::default()
         };
         let status =
@@ -695,7 +695,7 @@ impl PhysicalGpu {
     pub fn base_boost_clocks(&self, mode: BaseBoostMode) -> crate::NvapiResult<(u32, u32)> {
         trace!("gpu.base_boost_clocks({mode:?})");
         let mut data =
-            unsafe { std::mem::zeroed::<clock::private::NV_GPU_CLOCK_INFO_V3_COMPACT>() };
+            unsafe { std::mem::zeroed::<clock::undocumented::NV_GPU_CLOCK_INFO_V3_COMPACT>() };
         data.version = NvVersion::new(0x108, 3);
         data.mode = mode as u32;
         let status = unsafe {
@@ -739,9 +739,9 @@ impl PhysicalGpu {
                 }
             }};
         }
-        let info = try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4, 4)
-            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V3_3240, 3))
-            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 1))
+        let info = try_getinfo!(power::undocumented::NV_GPU_POWER_MONITOR_GET_INFO_V4, 4)
+            .or_else(|| try_getinfo!(power::undocumented::NV_GPU_POWER_MONITOR_GET_INFO_V3_3240, 3))
+            .or_else(|| try_getinfo!(power::undocumented::NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 1))
             .ok_or(crate::NvapiError::new(
                 sys::Api::NvAPI_GPU_PowerMonitorGetInfo,
                 sys::Status::NotSupported,
@@ -793,9 +793,9 @@ impl PhysicalGpu {
                 }
             }};
         }
-        let info = try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V4, 4)
-            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V3_3240, 3))
-            .or_else(|| try_getinfo!(power::private::NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 1))
+        let info = try_getinfo!(power::undocumented::NV_GPU_POWER_MONITOR_GET_INFO_V4, 4)
+            .or_else(|| try_getinfo!(power::undocumented::NV_GPU_POWER_MONITOR_GET_INFO_V3_3240, 3))
+            .or_else(|| try_getinfo!(power::undocumented::NV_GPU_POWER_MONITOR_GET_INFO_V1_2728, 1))
             .ok_or(crate::NvapiError::new(
                 sys::Api::NvAPI_GPU_PowerMonitorGetInfo,
                 sys::Status::NotSupported,
@@ -1004,7 +1004,7 @@ impl PhysicalGpu {
     /// Private and deprecated, use `dynamic_pstates_info()` instead.
     pub fn usages(
         &self,
-    ) -> crate::Result<<clock::private::NV_USAGES_INFO as RawConversion>::Target> {
+    ) -> crate::Result<<clock::undocumented::NV_USAGES_INFO as RawConversion>::Target> {
         trace!("gpu.usages()");
 
         unsafe { nvcall!(NvAPI_GPU_GetUsages@get(self.0) => raw) }
@@ -1013,7 +1013,7 @@ impl PhysicalGpu {
     pub fn vfp_mask(
         &self,
     ) -> crate::Result<
-        <clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO as RawConversion>::Target,
+        <clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO as RawConversion>::Target,
     > {
         trace!("gpu.vfp_mask()");
 
@@ -1030,9 +1030,9 @@ impl PhysicalGpu {
     pub(crate) fn vfp_table_raw(
         &self,
         info: &VfpInfo,
-    ) -> crate::Result<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL> {
+    ) -> crate::Result<clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL> {
         trace!("gpu.vfp_table({:?})", info);
-        let data = clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
+        let data = clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
             mask: info.mask.mask,
             ..Default::default()
         };
@@ -1046,7 +1046,7 @@ impl PhysicalGpu {
         // BOTH (ver−0x12420)&0xFFFEFFFF==0 → ver1 and ver2; AmpereOC and
         // HYDRA both send ver1. Same layout, only the version stamp differs.
         let mut v1 = unsafe {
-            std::mem::zeroed::<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL>()
+            std::mem::zeroed::<clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL>()
         };
         use crate::sys::nvapi::VersionedStructField;
         *v1.nvapi_version_mut() = NvVersion::with_version(1 << 16 | 9248);
@@ -1087,7 +1087,7 @@ impl PhysicalGpu {
     pub fn vfp_ranges(
         &self,
     ) -> crate::Result<
-        <clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO as RawConversion>::Target,
+        <clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO as RawConversion>::Target,
     > {
         trace!("gpu.vfp_ranges()");
 
@@ -1097,9 +1097,9 @@ impl PhysicalGpu {
     pub fn vfp_locks<I: IntoIterator<Item = crate::clock::PerfLimitId>>(
         &self,
         limits: I,
-    ) -> crate::Result<<clock::private::NV_GPU_PERF_CLIENT_LIMITS as RawConversion>::Target> {
+    ) -> crate::Result<<clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS as RawConversion>::Target> {
         trace!("gpu.vfp_locks()");
-        let mut status = clock::private::NV_GPU_PERF_CLIENT_LIMITS::default();
+        let mut status = clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS::default();
         for (limit, entry) in limits.into_iter().zip(&mut status.entries) {
             entry.id = limit.into();
             status.count += 1;
@@ -1113,9 +1113,9 @@ impl PhysicalGpu {
         values: I,
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_vfp_locks()");
-        use clock::private::ClockLockMode;
+        use clock::undocumented::ClockLockMode;
 
-        let mut data = clock::private::NV_GPU_PERF_CLIENT_LIMITS::default();
+        let mut data = clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS::default();
         for (lock, entry) in values.into_iter().zip(&mut data.entries) {
             trace!("gpu.set_vfp_lock({:?})", lock);
             data.count += 1;
@@ -1139,7 +1139,7 @@ impl PhysicalGpu {
 
     pub fn vfp_curve(&self, info: &VfpInfo) -> crate::Result<crate::clock::VfpCurve> {
         trace!("gpu.vfp_curve({:?})", info);
-        let data = power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS {
+        let data = power::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS {
             mask: info.mask.mask,
             ..Default::default()
         };
@@ -1154,9 +1154,9 @@ impl PhysicalGpu {
 
             use crate::sys::nvapi::VersionedStructField;
             let mut data_v1 =
-                std::mem::zeroed::<power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>();
+                std::mem::zeroed::<power::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1>();
             *data_v1.nvapi_version_mut() = NvVersion::with_struct::<
-                power::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1,
+                power::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1,
             >(2);
             data_v1.mask = info.mask.mask;
             let status = sys::api::NvAPI_GPU_ClockClientClkVfPointsGetStatus(
@@ -1171,7 +1171,7 @@ impl PhysicalGpu {
 
     pub fn core_voltage(
         &self,
-    ) -> crate::Result<<power::private::NV_GPU_CLIENT_VOLT_RAILS_STATUS as RawConversion>::Target>
+    ) -> crate::Result<<power::undocumented::NV_GPU_CLIENT_VOLT_RAILS_STATUS as RawConversion>::Target>
     {
         trace!("gpu.core_voltage()");
 
@@ -1180,7 +1180,7 @@ impl PhysicalGpu {
 
     pub fn core_voltage_boost(
         &self,
-    ) -> crate::Result<<power::private::NV_GPU_CLIENT_VOLT_RAILS_CONTROL as RawConversion>::Target>
+    ) -> crate::Result<<power::undocumented::NV_GPU_CLIENT_VOLT_RAILS_CONTROL as RawConversion>::Target>
     {
         trace!("gpu.core_voltage_boost()");
 
@@ -1189,7 +1189,7 @@ impl PhysicalGpu {
 
     pub fn set_core_voltage_boost(&self, value: Percentage) -> crate::NvapiResult<()> {
         trace!("gpu.set_core_voltage_boost({:?})", value);
-        let data = power::private::NV_GPU_CLIENT_VOLT_RAILS_CONTROL {
+        let data = power::undocumented::NV_GPU_CLIENT_VOLT_RAILS_CONTROL {
             percent: value.0,
             ..Default::default()
         };
@@ -1208,7 +1208,7 @@ impl PhysicalGpu {
             NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsGetInfo,
             NvAPI_GPU_VoltVoltRailsGetStatus,
         };
-        use power::private::{
+        use power::undocumented::{
             NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO, NV_GPU_VOLT_RAILS_STATUS_V1,
         };
 
@@ -1272,7 +1272,7 @@ impl PhysicalGpu {
             NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsGetInfo,
             NvAPI_GPU_VoltVoltRailsSetControl,
         };
-        use power::private::{NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO, ctrl_entry};
+        use power::undocumented::{NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO, ctrl_entry};
 
         let mut info = NV_GPU_VOLT_RAILS_INFO::default();
         let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
@@ -1342,7 +1342,7 @@ impl PhysicalGpu {
     pub fn clk_domains_control(&self) -> crate::Result<crate::clock::ClockDomainControl> {
         trace!("gpu.clk_domains_control()");
         use crate::sys::api::NvAPI_GPU_ClockClkDomainsGetControl;
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL, NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2,
         };
 
@@ -1424,7 +1424,7 @@ impl PhysicalGpu {
     pub fn clk_domain_freq(&self, domain_bit: u32) -> crate::Result<crate::clock::ClockDomainFreq> {
         trace!("gpu.clk_domain_freq({domain_bit})");
         use crate::sys::api::NvAPI_GPU_ClockCounterMeasureAvgFreq;
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE, NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE2,
         };
 
@@ -1486,7 +1486,7 @@ impl PhysicalGpu {
     ) -> crate::Result<crate::clock::ClockDomainFreqDetail> {
         trace!("gpu.clk_domain_freq_detail({domain_bit})");
         use crate::sys::api::NvAPI_GPU_ClockCounterMeasureAvgFreq;
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE, NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE2,
         };
 
@@ -1556,7 +1556,7 @@ impl PhysicalGpu {
     ) -> crate::Result<crate::clock::ClockDomainFreqDirect> {
         trace!("gpu.clk_domain_freq_direct({domain_bit})");
         use crate::sys::api::NvAPI_GPU_ClockClkDomainsMeasureFreq;
-        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT;
+        use clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT;
 
         // magic 0x0001000C = (1<<16)|0xC — version 1, 12-byte struct
         let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT {
@@ -1587,14 +1587,14 @@ impl PhysicalGpu {
     ) -> crate::Result<Vec<crate::clock::ClockDomainFreq>> {
         trace!("gpu.clk_domain_freqs_batch({domains:?})");
         use crate::sys::api::NvAPI_GPU_ClockCounterMeasureAvgFreq;
-        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3;
+        use clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE3;
 
         if domains.is_empty() {
             return Ok(Vec::new());
         }
         let n = domains
             .len()
-            .min(clock::private::clk_measure_v3::MAX_ENTRIES);
+            .min(clock::undocumented::clk_measure_v3::MAX_ENTRIES);
 
         fn sample_batch(
             gpu: sys::handles::NvPhysicalGpuHandle,
@@ -1697,7 +1697,7 @@ impl PhysicalGpu {
         use crate::sys::api::{
             NvAPI_GPU_ClockClkDomainsGetControl, NvAPI_GPU_ClockClkDomainsSetControl,
         };
-        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2;
+        use clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2;
 
         // GET_CONTROL is MASK-SEEDED: the caller writes the controllable mask
         // at +8 to tell the driver which per-domain records to fill. Discover
@@ -1833,7 +1833,7 @@ impl PhysicalGpu {
         use crate::sys::api::{
             NvAPI_GPU_ClockClkVfPointsGetInfo, NvAPI_GPU_ClockClkVfPointsGetStatus,
         };
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE,
         };
@@ -1873,7 +1873,7 @@ impl PhysicalGpu {
         // collapse the two 64-dword bank masks into 8 u64s
         let mut masks = [0u64; 8];
         for bank in 0..2usize {
-            for idx in 0..clock::private::clk_vfp_info::POINTS {
+            for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
                 if info.point_present(bank, idx) == Some(true) {
                     masks[bank * 4 + idx / 64] |= 1u64 << (idx % 64);
                 }
@@ -1882,7 +1882,7 @@ impl PhysicalGpu {
 
         let mut points = Vec::new();
         for bank in 0..2usize {
-            for idx in 0..clock::private::clk_vfp_info::POINTS {
+            for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
                 if info.point_present(bank, idx) != Some(true) {
                     continue;
                 }
@@ -2013,7 +2013,7 @@ impl PhysicalGpu {
         use crate::sys::api::{
             NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
         };
-        use clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE;
+        use clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE;
 
         // Same stack-overflow hazard as clk_vf_points_private: the control
         // block alone is 4.3 MB — allocate zeroed, never Box::new(default()).
@@ -2030,9 +2030,9 @@ impl PhysicalGpu {
             .map_err(crate::Error::from)?;
 
         let mut ctrl = unsafe {
-            let b = Box::<clock::private::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
+            let b = Box::<clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             let mut b = b.assume_init();
-            b.version = NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+            b.version = NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
             b
         };
         ctrl.seed_masks_from_info(&info);
@@ -2044,7 +2044,7 @@ impl PhysicalGpu {
 
         let mut points = Vec::new();
         for bank in 0..2usize {
-            for idx in 0..clock::private::clk_vfp_info::POINTS {
+            for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
                 if info.point_present(bank, idx) != Some(true) {
                     continue;
                 }
@@ -2092,12 +2092,12 @@ impl PhysicalGpu {
             NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
             NvAPI_GPU_ClockClkVfPointsSetControl,
         };
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
         };
 
-        if bank > 1 || idx >= clock::private::clk_vfp_control::POINTS {
+        if bank > 1 || idx >= clock::undocumented::clk_vfp_control::POINTS {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
 
@@ -2122,7 +2122,7 @@ impl PhysicalGpu {
             b.assume_init()
         };
         snapshot.version =
-            sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+            sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
@@ -2158,7 +2158,7 @@ impl PhysicalGpu {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             b.assume_init()
         };
-        verify.version = sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+        verify.version = sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
@@ -2220,7 +2220,7 @@ impl PhysicalGpu {
         use crate::sys::api::{
             NvAPI_GPU_ClockClkVfPointsGetInfo, NvAPI_GPU_ClockClkVfPointsGetStatus,
         };
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE,
         };
@@ -2235,7 +2235,7 @@ impl PhysicalGpu {
         }
 
         const BANK: usize = 0;
-        let idx_hi = idx_hi.min(clock::private::clk_vfp_info::POINTS - 1);
+        let idx_hi = idx_hi.min(clock::undocumented::clk_vfp_info::POINTS - 1);
         let pt_step = pt_step.max(1);
         let d_step = d_step.clamp(10, 500);
         let dmax = dmax.clamp(200, 1000);
@@ -2388,12 +2388,12 @@ impl PhysicalGpu {
             NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
             NvAPI_GPU_ClockClkVfPointsSetControl,
         };
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
         };
 
-        if bank > 1 || start > end || end >= clock::private::clk_vfp_control::POINTS {
+        if bank > 1 || start > end || end >= clock::undocumented::clk_vfp_control::POINTS {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
 
@@ -2416,7 +2416,7 @@ impl PhysicalGpu {
             b.assume_init()
         };
         snapshot.version =
-            sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+            sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
@@ -2450,7 +2450,7 @@ impl PhysicalGpu {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             b.assume_init()
         };
-        verify.version = sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+        verify.version = sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
@@ -2490,12 +2490,12 @@ impl PhysicalGpu {
             NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
             NvAPI_GPU_ClockClkVfPointsSetControl,
         };
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
         };
 
-        if bank > 1 || start > end || end >= clock::private::clk_vfp_control::POINTS {
+        if bank > 1 || start > end || end >= clock::undocumented::clk_vfp_control::POINTS {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
         if deltas.len() != end - start + 1 {
@@ -2519,7 +2519,7 @@ impl PhysicalGpu {
             b.assume_init()
         };
         snapshot.version =
-            sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+            sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
@@ -2551,7 +2551,7 @@ impl PhysicalGpu {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             b.assume_init()
         };
-        verify.version = sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+        verify.version = sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
@@ -2593,7 +2593,7 @@ impl PhysicalGpu {
             NvAPI_GPU_ClockClkVfPointsGetControl, NvAPI_GPU_ClockClkVfPointsGetInfo,
             NvAPI_GPU_ClockClkVfPointsSetControl,
         };
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
             NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE,
         };
@@ -2621,7 +2621,7 @@ impl PhysicalGpu {
             b.assume_init()
         };
         snapshot.version =
-            sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+            sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         snapshot.seed_masks_from_info(&info);
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
@@ -2641,7 +2641,7 @@ impl PhysicalGpu {
         let user_type = if bank == 0 { 8 } else { 6 };
         let mut written = 0usize;
         let mut first_patched: Option<usize> = None;
-        for idx in 0..clock::private::clk_vfp_control::POINTS {
+        for idx in 0..clock::undocumented::clk_vfp_control::POINTS {
             if !info.point_present(bank, idx).unwrap_or(false) {
                 continue;
             }
@@ -2676,7 +2676,7 @@ impl PhysicalGpu {
                 b.assume_init()
             };
             verify.version =
-                sys::api::NvVersion::with_version(clock::private::clk_vfp_control::MAGIC);
+                sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
             verify.seed_masks_from_info(&info);
             let st = unsafe {
                 NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
@@ -2712,7 +2712,7 @@ impl PhysicalGpu {
     pub fn vfe_equ_info(&self) -> crate::Result<crate::clock::VfeEquInfo> {
         trace!("gpu.vfe_equ_info()");
         use crate::sys::api::NvAPI_GPU_PerfVfeEquGetInfo;
-        use clock::private::{NV_PERF_VFE_EQU_INFO, vfe_equ_info};
+        use clock::undocumented::{NV_PERF_VFE_EQU_INFO, vfe_equ_info};
 
         let mut buf = vec![0u8; vfe_equ_info::SIZE];
         buf[0..4].copy_from_slice(&vfe_equ_info::MAGIC.to_le_bytes());
@@ -2746,7 +2746,7 @@ impl PhysicalGpu {
     pub fn vfe_equ_control(&self) -> crate::Result<crate::clock::VfeEquControl> {
         trace!("gpu.vfe_equ_control()");
         use crate::sys::api::NvAPI_GPU_PerfVfeEquGetControl;
-        use clock::private::{NV_PERF_VFE_EQU_CONTROL, vfe_equ_control, vfe_equ_info};
+        use clock::undocumented::{NV_PERF_VFE_EQU_CONTROL, vfe_equ_control, vfe_equ_info};
 
         let info = self.vfe_equ_info().ok();
         let mut buf = vec![0u8; vfe_equ_control::SIZE_MAX];
@@ -2822,7 +2822,7 @@ impl PhysicalGpu {
     pub fn set_vfe_equ_control_raw(&self, block: &[u8]) -> crate::Result<()> {
         trace!("gpu.set_vfe_equ_control_raw(len={})", block.len());
         use crate::sys::api::NvAPI_GPU_PerfVfeEquSetControl;
-        if block.len() < 4 || block.len() > clock::private::vfe_equ_control::SIZE_MAX {
+        if block.len() < 4 || block.len() > clock::undocumented::vfe_equ_control::SIZE_MAX {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
         let st = unsafe { NvAPI_GPU_PerfVfeEquSetControl(self.0, block.as_ptr().cast()) };
@@ -2837,7 +2837,7 @@ impl PhysicalGpu {
     pub fn vfe_var_info(&self) -> crate::Result<crate::clock::VfeVarInfo> {
         trace!("gpu.vfe_var_info()");
         use crate::sys::api::NvAPI_GPU_PerfVfeVarGetInfo;
-        use clock::private::{NV_PERF_VFE_VAR_INFO, vfe_var_info};
+        use clock::undocumented::{NV_PERF_VFE_VAR_INFO, vfe_var_info};
 
         let mut buf = vec![0u8; vfe_var_info::SIZE];
         buf[0..4].copy_from_slice(&vfe_var_info::MAGIC.to_le_bytes());
@@ -2868,7 +2868,7 @@ impl PhysicalGpu {
     pub fn vfe_var_control(&self) -> crate::Result<crate::clock::VfeVarControl> {
         trace!("gpu.vfe_var_control()");
         use crate::sys::api::NvAPI_GPU_PerfVfeVarGetControl;
-        use clock::private::{NV_PERF_VFE_VAR_CONTROL, vfe_var_control};
+        use clock::undocumented::{NV_PERF_VFE_VAR_CONTROL, vfe_var_control};
 
         let mut buf = vec![0u8; vfe_var_control::SIZE];
         buf[0..4].copy_from_slice(&vfe_var_control::MAGIC.to_le_bytes());
@@ -2901,7 +2901,7 @@ impl PhysicalGpu {
     pub fn set_vfe_var_control_raw(&self, block: &[u8]) -> crate::Result<()> {
         trace!("gpu.set_vfe_var_control_raw(len={})", block.len());
         use crate::sys::api::NvAPI_GPU_PerfVfeVarSetControl;
-        if block.len() < 4 || block.len() > clock::private::vfe_var_control::SIZE {
+        if block.len() < 4 || block.len() > clock::undocumented::vfe_var_control::SIZE {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
         let st = unsafe { NvAPI_GPU_PerfVfeVarSetControl(self.0, block.as_ptr().cast()) };
@@ -2914,10 +2914,10 @@ impl PhysicalGpu {
     pub fn power_usage<C: IntoIterator<Item = crate::clock::PowerTopologyChannelId>>(
         &self,
         channels: C,
-    ) -> crate::Result<<power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS as RawConversion>::Target>
+    ) -> crate::Result<<power::undocumented::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS as RawConversion>::Target>
     {
         trace!("gpu.power_usage()");
-        let mut status = power::private::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS::default();
+        let mut status = power::undocumented::NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS::default();
         for (channel, entry) in channels.into_iter().zip(&mut status.entries) {
             entry.channel = channel.into();
             status.count += 1;
@@ -2934,7 +2934,7 @@ impl PhysicalGpu {
 
     pub fn power_limit_info(
         &self,
-    ) -> crate::Result<<power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO as RawConversion>::Target>
+    ) -> crate::Result<<power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO as RawConversion>::Target>
     {
         trace!("gpu.power_limit_info()");
 
@@ -2943,7 +2943,7 @@ impl PhysicalGpu {
 
     pub fn power_limit(
         &self,
-    ) -> crate::Result<<power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS as RawConversion>::Target>
+    ) -> crate::Result<<power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_STATUS as RawConversion>::Target>
     {
         trace!("gpu.power_limit()");
 
@@ -2955,7 +2955,7 @@ impl PhysicalGpu {
         values: I,
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_power_limit()");
-        let mut data = power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS::default();
+        let mut data = power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_STATUS::default();
         //data.valid = 1;
         for (entry, v) in data.entries.iter_mut().zip(values) {
             trace!("gpu.set_power_limit({:?})", v);
@@ -3010,12 +3010,12 @@ impl PhysicalGpu {
         let mut buf: Vec<u8> =
             vec![
                 0u8;
-                std::mem::size_of::<power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE>()
+                std::mem::size_of::<power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE>()
             ];
         // stamp the version magic the driver expects (StructVersion for ver 1)
-        let ver = <power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let ver = <power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
         buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
-        let info: &power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE =
+        let info: &power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE =
             unsafe { &*(buf.as_ptr() as *const _) };
         let status = unsafe {
             sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(
@@ -3053,11 +3053,11 @@ impl PhysicalGpu {
         let mut buf: Vec<u8> =
             vec![
                 0u8;
-                std::mem::size_of::<power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE>()
+                std::mem::size_of::<power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE>()
             ];
-        let ver = <power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let ver = <power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
         buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
-        let info: &power::private::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE =
+        let info: &power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE =
             unsafe { &*(buf.as_ptr() as *const _) };
         let status = unsafe {
             sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(
@@ -3129,10 +3129,10 @@ impl PhysicalGpu {
         trace!("gpu.pstate_levels_domain({})", domain);
         // 275KB — heap-backed to be stack-safe, same pattern as tgp_watt_range.
         let mut buf: Vec<u8> =
-            vec![0u8; std::mem::size_of::<clock::private::NV_GPU_PERF_PSTATES_INFO_PRIVATE>()];
-        let ver = <clock::private::NV_GPU_PERF_PSTATES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
+            vec![0u8; std::mem::size_of::<clock::undocumented::NV_GPU_PERF_PSTATES_INFO_PRIVATE>()];
+        let ver = <clock::undocumented::NV_GPU_PERF_PSTATES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
         buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
-        let info: &clock::private::NV_GPU_PERF_PSTATES_INFO_PRIVATE =
+        let info: &clock::undocumented::NV_GPU_PERF_PSTATES_INFO_PRIVATE =
             unsafe { &*(buf.as_ptr() as *const _) };
         let status = unsafe {
             sys::api::NvAPI_GPU_PerfPstatesGetInfoPrivate(self.0, buf.as_mut_ptr() as *mut _)
@@ -3168,9 +3168,9 @@ impl PhysicalGpu {
         // reports size 136 (v1); write it raw since it doesn't match the
         // 164-byte buffer the ref tool allocates.
         let mut buf: Vec<u8> =
-            vec![0u8; std::mem::size_of::<clock::private::NV_GPU_CLIENT_PSTATE_LIMIT_STATUS>()];
+            vec![0u8; std::mem::size_of::<clock::undocumented::NV_GPU_CLIENT_PSTATE_LIMIT_STATUS>()];
         buf[..4].copy_from_slice(&0x10088u32.to_ne_bytes());
-        let status: &clock::private::NV_GPU_CLIENT_PSTATE_LIMIT_STATUS =
+        let status: &clock::undocumented::NV_GPU_CLIENT_PSTATE_LIMIT_STATUS =
             unsafe { &*(buf.as_ptr() as *const _) };
         let res = unsafe {
             sys::api::NvAPI_GPU_ClientPStateLimitStatus(self.0, buf.as_mut_ptr() as *mut _)
@@ -3203,15 +3203,15 @@ impl PhysicalGpu {
 
         // 780-byte PerfClientLimits V2 buffer. Heap-backed.
         let mut buf: Vec<u8> =
-            vec![0u8; std::mem::size_of::<clock::private::NV_GPU_PERF_CLIENT_LIMITS>()];
+            vec![0u8; std::mem::size_of::<clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS>()];
         // version magic 0x2030C (v2 | 780).
         buf[..4].copy_from_slice(&0x2030Cu32.to_ne_bytes());
-        let data: &mut clock::private::NV_GPU_PERF_CLIENT_LIMITS =
+        let data: &mut clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS =
             unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
 
         // Raw mode codes (NV_GPU_CLOCK_LOCK_MODE is a c_int alias).
-        let mode_pstate = clock::private::ClockLockMode::PstateSelect.repr();
-        let mode_freq = clock::private::ClockLockMode::ManualFrequency.repr();
+        let mode_pstate = clock::undocumented::ClockLockMode::PstateSelect.repr();
+        let mode_freq = clock::undocumented::ClockLockMode::ManualFrequency.repr();
         // Helper: write entry[k] = {id, mode, value} (other fields stay 0).
         let mut set_entry = |k: usize, id: i32, mode: i32, value: u32| {
             if let Some(e) = data.entries.get_mut(k) {
@@ -3355,7 +3355,7 @@ impl PhysicalGpu {
     pub fn rated_tdp_readback(&self) -> crate::NvapiResult<(u32, u8, [u32; 10])> {
         trace!("gpu.rated_tdp_readback()");
         use crate::sys::nvapi::VersionedStructField;
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_RATED_TDP_CONTROL, NV_GPU_RATED_TDP_INFO, NV_GPU_RATED_TDP_STATUS,
         };
         let mut control = unsafe { std::mem::zeroed::<NV_GPU_RATED_TDP_CONTROL>() };
@@ -3403,18 +3403,18 @@ impl PhysicalGpu {
         buf[..4].copy_from_slice(&0x10044u32.to_ne_bytes());
         let (id, st) = if start {
             (sys::Api::NvAPI_GPU_ClientStartOcScanner, unsafe {
-                sys::api::private::NvAPI_GPU_ClientStartOcScanner(
+                sys::api::undocumented::NvAPI_GPU_ClientStartOcScanner(
                     self.0,
                     buf.as_mut_ptr() as *mut _,
                 )
             })
         } else if stop {
             (sys::Api::NvAPI_GPU_ClientStopOcScanner, unsafe {
-                sys::api::private::NvAPI_GPU_ClientStopOcScanner(self.0, buf.as_mut_ptr() as *mut _)
+                sys::api::undocumented::NvAPI_GPU_ClientStopOcScanner(self.0, buf.as_mut_ptr() as *mut _)
             })
         } else if revert {
             (sys::Api::NvAPI_GPU_ClientRevertOc, unsafe {
-                sys::api::private::NvAPI_GPU_ClientRevertOc(self.0, buf.as_mut_ptr() as *mut _)
+                sys::api::undocumented::NvAPI_GPU_ClientRevertOc(self.0, buf.as_mut_ptr() as *mut _)
             })
         } else {
             return Err(crate::NvapiError::new(
@@ -3457,7 +3457,7 @@ impl PhysicalGpu {
         let mut buf = [0u8; 68];
         buf[..4].copy_from_slice(&0x10044u32.to_ne_bytes());
         let st = unsafe {
-            sys::api::private::NvAPI_GPU_ClientGetLastOcScannerResults(
+            sys::api::undocumented::NvAPI_GPU_ClientGetLastOcScannerResults(
                 self.0,
                 buf.as_mut_ptr() as *mut _,
             )
@@ -3474,7 +3474,7 @@ impl PhysicalGpu {
         let mut buf = [0u8; 68];
         buf[..4].copy_from_slice(&0x10044u32.to_ne_bytes());
         let st = unsafe {
-            sys::api::private::NvAPI_GPU_GetLastIncompleteOcScannerResults(
+            sys::api::undocumented::NvAPI_GPU_GetLastIncompleteOcScannerResults(
                 self.0,
                 buf.as_mut_ptr() as *mut _,
             )
@@ -3488,13 +3488,13 @@ impl PhysicalGpu {
     pub fn oem_oc_scanner_set_background(&self, enable: bool) -> crate::NvapiResult<()> {
         trace!("gpu.oem_oc_scanner_set_background({enable})");
         use crate::sys::nvapi::VersionedStructField;
-        use clock::private::NV_GPU_OC_BACKGROUND_SCANNER_CONTROL;
+        use clock::undocumented::NV_GPU_OC_BACKGROUND_SCANNER_CONTROL;
         let mut control = unsafe { std::mem::zeroed::<NV_GPU_OC_BACKGROUND_SCANNER_CONTROL>() };
         *control.nvapi_version_mut() = NvVersion::with_version(0x10048);
         control.enable = enable as u8;
         control.feature_guid = [0x0B, 0x0A, 0x0E, 0x08, 0xE8, 0x72, 0x9D, 0xD9, 0xF3];
         let st = unsafe {
-            sys::api::private::NvAPI_GPU_ClientEnableBackgroundOcScanner(self.0, &mut control)
+            sys::api::undocumented::NvAPI_GPU_ClientEnableBackgroundOcScanner(self.0, &mut control)
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClientEnableBackgroundOcScanner, st)
     }
@@ -3506,14 +3506,14 @@ impl PhysicalGpu {
     /// via `oem_oc_scanner_last_update()`.
     pub fn oem_oc_scanner_subscribe(&self) -> crate::NvapiResult<()> {
         trace!("gpu.oem_oc_scanner_subscribe()");
-        use clock::private::{
+        use clock::undocumented::{
             NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX, NV_OC_SCANNER_STATUS_CALLBACK,
         };
         let mut parm: NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX = unsafe { std::mem::zeroed() };
         parm.version = NvVersion::with_struct::<NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX>(1);
         parm.callback = Some(oc_scanner_status_trampoline as NV_OC_SCANNER_STATUS_CALLBACK);
         let st = unsafe {
-            sys::api::private::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(
+            sys::api::undocumented::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(
                 self.0,
                 ptr::from_mut(&mut parm).cast(),
             )
@@ -3536,7 +3536,7 @@ impl PhysicalGpu {
     /// validity@+0x50, callback@+0x78).
     fn oem_oc_scanner_register_v1(
         &self,
-        callback: Option<clock::private::NV_OC_SCANNER_STATUS_CALLBACK>,
+        callback: Option<clock::undocumented::NV_OC_SCANNER_STATUS_CALLBACK>,
     ) -> crate::NvapiResult<()> {
         let mut buf = [0u8; 152];
         buf[..4].copy_from_slice(&0x10098u32.to_ne_bytes());
@@ -3544,7 +3544,7 @@ impl PhysicalGpu {
             buf[0x78..0x80].copy_from_slice(&(cb as usize).to_ne_bytes());
         }
         let st = unsafe {
-            sys::api::private::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(
+            sys::api::undocumented::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(
                 self.0,
                 buf.as_mut_ptr().cast(),
             )
@@ -3559,12 +3559,12 @@ impl PhysicalGpu {
     /// with a NULL callback (VelocityX Unsubscribe protocol).
     pub fn oem_oc_scanner_unsubscribe(&self) -> crate::NvapiResult<()> {
         trace!("gpu.oem_oc_scanner_unsubscribe()");
-        use clock::private::NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX;
+        use clock::undocumented::NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX;
         let mut parm: NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX = unsafe { std::mem::zeroed() };
         parm.version = NvVersion::with_struct::<NV_GPU_OC_SCANNER_STATUS_UPDATE_PARM_V1EX>(1);
         parm.callback = None;
         let st = unsafe {
-            sys::api::private::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(
+            sys::api::undocumented::NvAPI_GPU_ClientRegisterForOcScannerStatusUpdates(
                 self.0,
                 ptr::from_mut(&mut parm).cast(),
             )
@@ -3598,10 +3598,10 @@ impl PhysicalGpu {
     /// (state 1=enable, 0=disable). Mobile-only.
     pub fn set_bb2_active(&self, enable: bool) -> crate::NvapiResult<()> {
         trace!("gpu.set_bb2_active(enable={})", enable);
-        use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
+        use power::undocumented::NV_SYS_CLIENT_JPAC_CONTROL;
         let mut ctrl = NV_SYS_CLIENT_JPAC_CONTROL::bb2_active(enable);
         let st = unsafe {
-            sys::api::private::NvAPI_SYS_ClientJpacSetControl(ptr::from_mut(&mut ctrl).cast())
+            sys::api::undocumented::NvAPI_SYS_ClientJpacSetControl(ptr::from_mut(&mut ctrl).cast())
         };
         crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl, st)
     }
@@ -3610,22 +3610,22 @@ impl PhysicalGpu {
     /// (state 1=enable, 0=disable). Mobile-only.
     pub fn set_wm2_active(&self, enable: bool) -> crate::NvapiResult<()> {
         trace!("gpu.set_wm2_active(enable={})", enable);
-        use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
+        use power::undocumented::NV_SYS_CLIENT_JPAC_CONTROL;
         let mut ctrl = NV_SYS_CLIENT_JPAC_CONTROL::wm2_active(enable);
         let st = unsafe {
-            sys::api::private::NvAPI_SYS_ClientJpacSetControl(ptr::from_mut(&mut ctrl).cast())
+            sys::api::undocumented::NvAPI_SYS_ClientJpacSetControl(ptr::from_mut(&mut ctrl).cast())
         };
         crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl, st)
     }
 
     /// Whisper Mode 2.0 acoustic mode (NDA 0xD2561B69, private).
     ///  (0=Quieter, 1=Quiet, 2=Balanced).
-    pub fn set_wm2_mode(&self, mode: power::private::Wm2AcousticMode) -> crate::NvapiResult<()> {
+    pub fn set_wm2_mode(&self, mode: power::undocumented::Wm2AcousticMode) -> crate::NvapiResult<()> {
         trace!("gpu.set_wm2_mode(mode={:?})", mode);
-        use power::private::NV_SYS_CLIENT_JPAC_CONTROL;
+        use power::undocumented::NV_SYS_CLIENT_JPAC_CONTROL;
         let mut ctrl = NV_SYS_CLIENT_JPAC_CONTROL::wm2_mode(mode);
         let st = unsafe {
-            sys::api::private::NvAPI_SYS_ClientJpacSetControl(ptr::from_mut(&mut ctrl).cast())
+            sys::api::undocumented::NvAPI_SYS_ClientJpacSetControl(ptr::from_mut(&mut ctrl).cast())
         };
         crate::status_result(sys::Api::NvAPI_SYS_ClientJpacSetControl, st)
     }
@@ -3651,7 +3651,7 @@ impl PhysicalGpu {
             "gpu.set_force_pstate(pstate={}, set_type={})",
             pstate, set_type
         );
-        let st = unsafe { sys::api::private::NvAPI_GPU_SetForcePstate(self.0, pstate, set_type) };
+        let st = unsafe { sys::api::undocumented::NvAPI_GPU_SetForcePstate(self.0, pstate, set_type) };
         crate::status_result(sys::Api::NvAPI_GPU_SetForcePstate, st)
     }
 
@@ -3661,11 +3661,11 @@ impl PhysicalGpu {
     pub fn pstate_client_limits(&self) -> crate::NvapiResult<Vec<PstateClientLimit>> {
         trace!("gpu.pstate_client_limits()");
         use crate::sys::nvapi::VersionedStructField;
-        use pstate::private::NV_GPU_PSTATE_CLIENT_LIMITS;
+        use pstate::undocumented::NV_GPU_PSTATE_CLIENT_LIMITS;
         let mut raw = unsafe { std::mem::zeroed::<NV_GPU_PSTATE_CLIENT_LIMITS>() };
         *raw.nvapi_version_mut() = NvVersion::with_struct::<NV_GPU_PSTATE_CLIENT_LIMITS>(1);
         let st = unsafe {
-            sys::api::private::NvAPI_GPU_GetPstateClientLimits(self.0, ptr::from_mut(&mut raw))
+            sys::api::undocumented::NvAPI_GPU_GetPstateClientLimits(self.0, ptr::from_mut(&mut raw))
         };
         crate::status_result(sys::Api::NvAPI_GPU_GetPstateClientLimits, st)?;
         let n = (raw.numLimits as usize).min(pstate::NVAPI_MAX_GPU_PSTATE20_PSTATES);
@@ -3690,7 +3690,7 @@ impl PhysicalGpu {
     pub fn set_pstate_client_limits(&self, limits: &[PstateClientLimit]) -> crate::NvapiResult<()> {
         trace!("gpu.set_pstate_client_limits(len={})", limits.len());
         use crate::sys::nvapi::VersionedStructField;
-        use pstate::private::NV_GPU_PSTATE_CLIENT_LIMITS;
+        use pstate::undocumented::NV_GPU_PSTATE_CLIENT_LIMITS;
         if limits.len() > pstate::NVAPI_MAX_GPU_PSTATE20_PSTATES {
             return Err(crate::NvapiError::new(
                 sys::Api::NvAPI_GPU_SetPstateClientLimits,
@@ -3706,7 +3706,7 @@ impl PhysicalGpu {
             dst.maxLevel = src.max_level;
         }
         let st = unsafe {
-            sys::api::private::NvAPI_GPU_SetPstateClientLimits(self.0, ptr::from_ref(&raw))
+            sys::api::undocumented::NvAPI_GPU_SetPstateClientLimits(self.0, ptr::from_ref(&raw))
         };
         crate::status_result(sys::Api::NvAPI_GPU_SetPstateClientLimits, st)
     }
@@ -3763,9 +3763,9 @@ impl PhysicalGpu {
     pub fn gc6_control(&self, cmd: u32) -> crate::NvapiResult<u32> {
         trace!("gpu.gc6_control(cmd={})", cmd);
         use crate::sys::nvapi::VersionedStructField;
-        let mut data = unsafe { std::mem::zeroed::<power::private::NV_GPU_GC6_CONTROL_V1>() };
+        let mut data = unsafe { std::mem::zeroed::<power::undocumented::NV_GPU_GC6_CONTROL_V1>() };
         *data.nvapi_version_mut() =
-            NvVersion::with_struct::<power::private::NV_GPU_GC6_CONTROL_V1>(1);
+            NvVersion::with_struct::<power::undocumented::NV_GPU_GC6_CONTROL_V1>(1);
         data.cmd = cmd;
         let status =
             unsafe { sys::api::NvAPI_GPU_GC6Control(self.0, ptr::from_mut(&mut data).cast()) };
@@ -3780,19 +3780,19 @@ impl PhysicalGpu {
     /// implemented there. Treat an `Err` here as "query unsupported", not a
     /// wake failure; use [`force_gc6_exit`] + a follow-up op to confirm wakes.
     pub fn gc6_query_state(&self) -> crate::NvapiResult<u32> {
-        self.gc6_control(power::private::NV_GPU_GC6_CONTROL_CMD_QUERY)
+        self.gc6_control(power::undocumented::NV_GPU_GC6_CONTROL_CMD_QUERY)
     }
 
     /// Force the dGPU into GC6 / idle (GC6Control cmd=1) — the sleep path.
     pub fn gc6_force_sleep(&self) -> crate::NvapiResult<u32> {
-        self.gc6_control(power::private::NV_GPU_GC6_CONTROL_CMD_SLEEP)
+        self.gc6_control(power::undocumented::NV_GPU_GC6_CONTROL_CMD_SLEEP)
     }
 
     /// Force the dGPU out of GC6 via the GC6Control cmd=2 path (NDA 0xD387D414).
     /// Returns the post-wake state. Prefer [`PhysicalGpu::force_gc6_exit`] for a
     /// simpler one-shot wake unless you need the struct-based result.
     pub fn gc6_force_wake(&self) -> crate::NvapiResult<u32> {
-        self.gc6_control(power::private::NV_GPU_GC6_CONTROL_CMD_WAKE)
+        self.gc6_control(power::undocumented::NV_GPU_GC6_CONTROL_CMD_WAKE)
     }
 
     /// Force the dGPU out of GC6 / GCOFF — the one-shot wake (NDA 0x55590CB2).
@@ -3850,8 +3850,8 @@ impl PhysicalGpu {
         let _ = self.tgp_watt_range()?;
         // 10KB — heap-backed to be stack-safe.
         let mut buf: Vec<u8> =
-            vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
-        let ver = <power::private::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+            vec![0u8; std::mem::size_of::<power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
+        let ver = <power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
         buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
         unsafe {
             let status =
@@ -3863,7 +3863,7 @@ impl PhysicalGpu {
         } else {
             watts.saturating_mul(1000)
         };
-        let data: &mut power::private::NV_GPU_CLIENT_TGP_WATT_STATUS =
+        let data: &mut power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS =
             unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
         data.set_power_mw(policy_index, milliwatts);
         unsafe {
@@ -3897,8 +3897,8 @@ impl PhysicalGpu {
         }
         let default_mw = self.tgp_watt_range()?.and_then(|r| r.default_mw);
         let mut buf: Vec<u8> =
-            vec![0u8; std::mem::size_of::<power::private::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
-        let ver = <power::private::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+            vec![0u8; std::mem::size_of::<power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
+        let ver = <power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
         buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
         unsafe {
             let status =
@@ -3906,7 +3906,7 @@ impl PhysicalGpu {
             crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)?;
         }
         if let Some(mw) = default_mw {
-            let data: &mut power::private::NV_GPU_CLIENT_TGP_WATT_STATUS =
+            let data: &mut power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS =
                 unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
             data.set_power_mw(policy_index, mw);
         }
@@ -3940,12 +3940,12 @@ impl PhysicalGpu {
     /// e.g. 1080Ti channel_mask=0x03, priChIdx GPU_AVG=0/GPU_MAX=1.)
     pub fn thermal_channel_info(
         &self,
-    ) -> crate::Result<<thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO as RawConversion>::Target>
+    ) -> crate::Result<<thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_INFO as RawConversion>::Target>
     {
         trace!("gpu.thermal_channel_info()");
-        let data = thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2 {
+        let data = thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2 {
             version: NvVersion::new(
-                size_of::<thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2>(),
+                size_of::<thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_INFO_PARAMS_V2>(),
                 2,
             ),
             ..Default::default()
@@ -3963,12 +3963,12 @@ impl PhysicalGpu {
         &self,
         channel_mask: u32,
     ) -> crate::Result<
-        <thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS as RawConversion>::Target,
+        <thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_STATUS as RawConversion>::Target,
     > {
         trace!("gpu.thermal_channel_status(0x{:x})", channel_mask);
-        let mut data = thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2 {
+        let mut data = thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2 {
             version: NvVersion::new(
-                size_of::<thermal::private::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2>(),
+                size_of::<thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_STATUS_PARAMS_V2>(),
                 2,
             ),
             ..Default::default()
@@ -3981,7 +3981,7 @@ impl PhysicalGpu {
     pub fn thermal_limit_info(
         &self,
     ) -> crate::Result<
-        <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_INFO as RawConversion>::Target,
+        <thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_INFO as RawConversion>::Target,
     > {
         trace!("gpu.thermal_limit_info()");
 
@@ -3991,7 +3991,7 @@ impl PhysicalGpu {
     pub fn thermal_limit(
         &self,
     ) -> crate::Result<
-        <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS as RawConversion>::Target,
+        <thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS as RawConversion>::Target,
     > {
         trace!("gpu.thermal_limit()");
 
@@ -4003,7 +4003,7 @@ impl PhysicalGpu {
         value: I,
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_thermal_limit()");
-        let mut data = thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS::default();
+        let mut data = thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS::default();
         for (entry, v) in data.entries.iter_mut().zip(value) {
             trace!("gpu.set_thermal_limit({:?})", v);
             *entry = v.to_raw();
@@ -4025,8 +4025,8 @@ impl PhysicalGpu {
     /// are other thermal policies, idx 3/5/6/7 are invalid (return Error).
     pub fn target_temperature(&self, policy_index: usize) -> crate::Result<Option<f32>> {
         trace!("gpu.target_temperature({})", policy_index);
-        let mut data = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
-        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let mut data = thermal::undocumented::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
+        let ver = <thermal::undocumented::NV_GPU_CLIENT_THERMAL_TARGET_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
         data.version = ver;
         data.mask = 1u32 << policy_index;
         unsafe {
@@ -4046,7 +4046,7 @@ impl PhysicalGpu {
     /// idx 2; it reads 87C and matches nvidia-smi's "GPU Target Temperature").
     pub fn target_temperature_policies(&self) -> crate::Result<Vec<(usize, f32)>> {
         trace!("gpu.target_temperature_policies()");
-        let max = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_ENTRIES_MAX;
+        let max = thermal::undocumented::NV_GPU_CLIENT_THERMAL_TARGET_ENTRIES_MAX;
         let mut out = Vec::new();
         for idx in 0..max {
             // A single-bit mask is mandatory; 1<<idx for idx >= 32 would wrap,
@@ -4068,8 +4068,8 @@ impl PhysicalGpu {
     /// GPUHandle::queryTargetTemperature (sub_14002C410).
     pub fn target_temp_policy_index(&self) -> crate::Result<Option<usize>> {
         trace!("gpu.target_temp_policy_index()");
-        let mut info = thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
-        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let mut info = thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
+        let ver = <thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
         info.version = ver;
         unsafe {
             let status = sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
@@ -4089,8 +4089,8 @@ impl PhysicalGpu {
         policy_index: usize,
     ) -> crate::Result<Option<(f32, f32, f32)>> {
         trace!("gpu.target_temperature_info({})", policy_index);
-        let mut info = thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
-        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let mut info = thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
+        let ver = <thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
         info.version = ver;
         unsafe {
             let status = sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
@@ -4112,8 +4112,8 @@ impl PhysicalGpu {
     ) -> crate::Result<Vec<TargetTempPolicyEntry>> {
         trace!("gpu.target_temperature_policies_with_info()");
         // One GetInfo call covers all slots' ranges.
-        let mut info = thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
-        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let mut info = thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO::default();
+        let ver = <thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
         info.version = ver;
         let info_ok = unsafe {
             let status = sys::api::NvAPI_GPU_ClientThermalPoliciesPrivateGetInfo(self.0, &mut info);
@@ -4123,7 +4123,7 @@ impl PhysicalGpu {
             )
             .is_ok()
         };
-        let max = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_ENTRIES_MAX;
+        let max = thermal::undocumented::NV_GPU_CLIENT_THERMAL_TARGET_ENTRIES_MAX;
         let mut out = Vec::new();
         for idx in 0..max {
             let current = match self.target_temperature(idx) {
@@ -4153,10 +4153,10 @@ impl PhysicalGpu {
     pub fn target_temperature_raw(
         &self,
         mask: u32,
-    ) -> crate::Result<thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS> {
+    ) -> crate::Result<thermal::undocumented::NV_GPU_CLIENT_THERMAL_TARGET_STATUS> {
         trace!("gpu.target_temperature_raw(mask=0x{:X})", mask);
-        let mut data = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
-        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let mut data = thermal::undocumented::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
+        let ver = <thermal::undocumented::NV_GPU_CLIENT_THERMAL_TARGET_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
         data.version = ver;
         data.mask = mask;
         unsafe {
@@ -4196,8 +4196,8 @@ impl PhysicalGpu {
         );
         // GET-prime: fill the buffer with current policy state (opaque fields
         // must be preserved across the RMW — do NOT zero after this).
-        let mut data = thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
-        let ver = <thermal::private::NV_GPU_CLIENT_THERMAL_TARGET_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let mut data = thermal::undocumented::NV_GPU_CLIENT_THERMAL_TARGET_STATUS::default();
+        let ver = <thermal::undocumented::NV_GPU_CLIENT_THERMAL_TARGET_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
         data.version = ver;
         data.mask = 1u32 << policy_index;
         unsafe {
@@ -4304,7 +4304,7 @@ impl PhysicalGpu {
     pub fn pmgr_voltage_arbiter(&self) -> crate::NvapiResult<[u32; 11]> {
         trace!("gpu.pmgr_voltage_arbiter()");
         use crate::sys::nvapi::VersionedStructField;
-        use power::private::NV_PMGR_VOLTAGE_ARBITER_VALUES;
+        use power::undocumented::NV_PMGR_VOLTAGE_ARBITER_VALUES;
         let mut values = unsafe { std::mem::zeroed::<NV_PMGR_VOLTAGE_ARBITER_VALUES>() };
         *values.nvapi_version_mut() = NvVersion::with_version(0x20030);
         let st =
@@ -4319,7 +4319,7 @@ impl PhysicalGpu {
     pub fn set_pmgr_voltage_arbiter(&self, values: &[u32; 11]) -> crate::NvapiResult<()> {
         trace!("gpu.set_pmgr_voltage_arbiter({:?})", &values[..3]);
         use crate::sys::nvapi::VersionedStructField;
-        use power::private::NV_PMGR_VOLTAGE_ARBITER_VALUES;
+        use power::undocumented::NV_PMGR_VOLTAGE_ARBITER_VALUES;
         let mut buf = unsafe { std::mem::zeroed::<NV_PMGR_VOLTAGE_ARBITER_VALUES>() };
         *buf.nvapi_version_mut() = NvVersion::with_version(0x20030);
         buf.values = *values;
@@ -4335,10 +4335,10 @@ impl PhysicalGpu {
     pub fn power_modes_capability(&self) -> crate::NvapiResult<(u16, u16)> {
         trace!("gpu.power_modes_capability()");
         let mut info =
-            unsafe { std::mem::zeroed::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>() };
+            unsafe { std::mem::zeroed::<power::undocumented::NV_GPU_CLIENT_POWER_MODES_INFO>() };
         use crate::sys::nvapi::VersionedStructField;
         *info.nvapi_version_mut() =
-            NvVersion::with_struct::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>(1);
+            NvVersion::with_struct::<power::undocumented::NV_GPU_CLIENT_POWER_MODES_INFO>(1);
         let st = unsafe { sys::api::NvAPI_GPU_ClientPowerModesGetInfo(self.0, &mut info) };
         crate::status_result(sys::Api::NvAPI_GPU_ClientPowerModesGetInfo, st)?;
         Ok((info.mode_mask, info.max_mode_idx))
@@ -4371,16 +4371,16 @@ impl PhysicalGpu {
     /// returned it.
     fn power_modes_primed_control(
         &self,
-    ) -> crate::NvapiResult<power::private::NV_GPU_CLIENT_POWER_MODES_CONTROL> {
+    ) -> crate::NvapiResult<power::undocumented::NV_GPU_CLIENT_POWER_MODES_CONTROL> {
         let mut info =
-            unsafe { std::mem::zeroed::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>() };
+            unsafe { std::mem::zeroed::<power::undocumented::NV_GPU_CLIENT_POWER_MODES_INFO>() };
         let mut control =
-            unsafe { std::mem::zeroed::<power::private::NV_GPU_CLIENT_POWER_MODES_CONTROL>() };
+            unsafe { std::mem::zeroed::<power::undocumented::NV_GPU_CLIENT_POWER_MODES_CONTROL>() };
         use crate::sys::nvapi::VersionedStructField;
         *info.nvapi_version_mut() =
-            NvVersion::with_struct::<power::private::NV_GPU_CLIENT_POWER_MODES_INFO>(1);
+            NvVersion::with_struct::<power::undocumented::NV_GPU_CLIENT_POWER_MODES_INFO>(1);
         *control.nvapi_version_mut() =
-            NvVersion::with_struct::<power::private::NV_GPU_CLIENT_POWER_MODES_CONTROL>(1);
+            NvVersion::with_struct::<power::undocumented::NV_GPU_CLIENT_POWER_MODES_CONTROL>(1);
         let st = unsafe { sys::api::NvAPI_GPU_ClientPowerModesGetInfo(self.0, &mut info) };
         crate::status_result(sys::Api::NvAPI_GPU_ClientPowerModesGetInfo, st)?;
         control.seed = info.seed;
@@ -4520,12 +4520,12 @@ impl PhysicalGpu {
     /// beyond the version dword is opaque — returned raw for decoding.
     pub fn fan_policy_info(
         &self,
-    ) -> crate::NvapiResult<cooler::private::NV_GPU_CLIENT_FAN_POLICIES_INFO> {
+    ) -> crate::NvapiResult<cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_INFO> {
         trace!("gpu.fan_policy_info()");
 
         let raw = unsafe {
             nvcall!(NvAPI_GPU_ClientFanPoliciesGetInfo@get{
-                cooler::private::NV_GPU_CLIENT_FAN_POLICIES_INFO::new()
+                cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_INFO::new()
             }(self.0))?
         };
 
@@ -4546,7 +4546,7 @@ impl PhysicalGpu {
 
         let raw = unsafe {
             nvcall!(NvAPI_GPU_ClientFanPoliciesGetControl@get{
-                cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new()
+                cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new()
             }(self.0))?
         };
 
@@ -4591,7 +4591,7 @@ impl PhysicalGpu {
 
         let mut raw = unsafe {
             nvcall!(NvAPI_GPU_ClientFanPoliciesGetControl@get{
-                cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new()
+                cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new()
             }(self.0))?
         };
         if curve.index >= 4 {
@@ -4630,7 +4630,7 @@ impl PhysicalGpu {
                 sys::Status::InvalidArgument,
             ));
         }
-        use cooler::private::{
+        use cooler::undocumented::{
             NV_GPU_FAN_POLICY_CONTROL_MAGIC, NV_GPU_FAN_POLICY_CONTROL_SIZE,
             NV_GPU_FAN_POLICY_OFF_FLAGS, NV_GPU_FAN_POLICY_OFF_RESET_MASK,
         };
@@ -4667,7 +4667,7 @@ impl PhysicalGpu {
     /// FAN_STOP enable}.
     pub fn set_fan_stop(&self, curve_index: u32, enable: bool) -> crate::NvapiResult<()> {
         trace!("gpu.set_fan_stop({}, {})", curve_index, enable);
-        use cooler::private::{
+        use cooler::undocumented::{
             NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1, NV_GPU_CLIENT_FAN_ARBITERS_CONTROL,
             NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1,
         };
@@ -4680,9 +4680,9 @@ impl PhysicalGpu {
         ctrl.arbiters[0] = NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1 {
             arbiter_index: curve_index,
             flags: if enable {
-                cooler::private::FanArbiterControlFlags::FAN_STOP.value()
+                cooler::undocumented::FanArbiterControlFlags::FAN_STOP.value()
             } else {
-                cooler::private::NV_FAN_ARBITER_CONTROL_FLAGS::default()
+                cooler::undocumented::NV_FAN_ARBITER_CONTROL_FLAGS::default()
             },
         };
         unsafe { nvcall!(NvAPI_GPU_ClientFanArbitersSetControl(self.0, &ctrl)) }
@@ -4695,7 +4695,7 @@ impl PhysicalGpu {
     /// public `GetCoolerSettings` (which only returns level/defaultPolicy).
     pub fn cooler_info_private(&self) -> crate::NvapiResult<Vec<PrivateCoolerInfo>> {
         trace!("gpu.cooler_info_private()");
-        use cooler::private::{
+        use cooler::undocumented::{
             NV_GPU_FAN_COOLER_CONTROL_MAGIC, NV_GPU_FAN_COOLER_CONTROL_SIZE,
             NV_GPU_FAN_COOLER_ENTRY_STRIDE, NV_GPU_FAN_COOLER_INFO_MAGIC,
             NV_GPU_FAN_COOLER_INFO_SIZE, NV_GPU_FAN_COOLER_OFF_MAX_RPM,
@@ -4784,7 +4784,7 @@ impl PhysicalGpu {
                 ));
             }
         }
-        use cooler::private::{
+        use cooler::undocumented::{
             NV_GPU_FAN_COOLER_CONTROL_MAGIC, NV_GPU_FAN_COOLER_CONTROL_SIZE,
             NV_GPU_FAN_COOLER_ENTRY_STRIDE, NV_GPU_FAN_COOLER_ENTRY0_BASE,
             NV_GPU_FAN_COOLER_INFO_MAGIC, NV_GPU_FAN_COOLER_INFO_SIZE,
@@ -4898,8 +4898,8 @@ impl PhysicalGpu {
 
         let index = match index {
             Some(index) => index,
-            None if <cooler::private::NV_GPU_GETCOOLER_SETTINGS as sys::nvapi::StructVersion>::NVAPI_VERSION.version() < 4 =>
-                cooler::private::NVAPI_COOLER_TARGET_ALL.repr() as _,
+            None if <cooler::undocumented::NV_GPU_GETCOOLER_SETTINGS as sys::nvapi::StructVersion>::NVAPI_VERSION.version() < 4 =>
+                cooler::undocumented::NVAPI_COOLER_TARGET_ALL.repr() as _,
             None => 0,
         };
         unsafe { nvcall!(NvAPI_GPU_GetCoolerSettings@get(self.0, index) => raw) }
@@ -4958,7 +4958,7 @@ impl PhysicalGpu {
         values: I,
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_cooler_levels({:?})", index);
-        let mut data = cooler::private::NV_GPU_SETCOOLER_LEVEL::default();
+        let mut data = cooler::undocumented::NV_GPU_SETCOOLER_LEVEL::default();
         for (entry, level) in data.cooler.iter_mut().zip(values) {
             trace!("gpu.set_cooler_level({:?})", level);
             entry.currentLevel = level.level.unwrap_or_default().0;
@@ -4968,7 +4968,7 @@ impl PhysicalGpu {
         unsafe {
             nvcall!(NvAPI_GPU_SetCoolerLevels(
                 self.0,
-                index.unwrap_or(cooler::private::NVAPI_COOLER_TARGET_ALL.repr() as _),
+                index.unwrap_or(cooler::undocumented::NVAPI_COOLER_TARGET_ALL.repr() as _),
                 &data
             ))
         }
@@ -4981,8 +4981,8 @@ impl PhysicalGpu {
         values: I,
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_cooler()");
-        let mut backup = cooler::private::NV_GPU_SETCOOLER_LEVEL::default();
-        let mut data = cooler::private::NV_GPU_CLIENT_FAN_COOLERS_CONTROL::default();
+        let mut backup = cooler::undocumented::NV_GPU_SETCOOLER_LEVEL::default();
+        let mut data = cooler::undocumented::NV_GPU_CLIENT_FAN_COOLERS_CONTROL::default();
 
         for (entry, (backup_entry, (id, settings))) in data
             .coolers
@@ -5006,7 +5006,7 @@ impl PhysicalGpu {
             }) => unsafe {
                 nvcall!(NvAPI_GPU_SetCoolerLevels(
                     self.0,
-                    cooler::private::NVAPI_COOLER_TARGET_ALL.repr() as _,
+                    cooler::undocumented::NVAPI_COOLER_TARGET_ALL.repr() as _,
                     &backup
                 ))
             },
@@ -5034,9 +5034,9 @@ impl PhysicalGpu {
         &self,
         index: u32,
         policy: crate::thermal::CoolerPolicy,
-    ) -> crate::Result<<cooler::private::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target> {
+    ) -> crate::Result<<cooler::undocumented::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target> {
         trace!("gpu.cooler_policy_table({:?})", index);
-        let mut data = cooler::private::NV_GPU_COOLER_POLICY_TABLE {
+        let mut data = cooler::undocumented::NV_GPU_COOLER_POLICY_TABLE {
             policy: policy.value(),
             ..Default::default()
         };
@@ -5057,10 +5057,10 @@ impl PhysicalGpu {
     pub fn set_cooler_policy_table(
         &self,
         index: u32,
-        value: &<cooler::private::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target,
+        value: &<cooler::undocumented::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target,
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_cooler_policy_table({:?}, {:?})", index, value);
-        let data = cooler::private::NV_GPU_COOLER_POLICY_TABLE {
+        let data = cooler::undocumented::NV_GPU_COOLER_POLICY_TABLE {
             policy: value.policy.value(),
             ..Default::default()
         };
@@ -5099,7 +5099,7 @@ impl PhysicalGpu {
 
     pub fn fan_arbiter_info(
         &self,
-    ) -> crate::Result<<cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_INFO_V1 as RawConversion>::Target>
+    ) -> crate::Result<<cooler::undocumented::NV_GPU_CLIENT_FAN_ARBITERS_INFO_V1 as RawConversion>::Target>
     {
         trace!("gpu.fan_arbiter_info()");
 
@@ -5109,7 +5109,7 @@ impl PhysicalGpu {
     pub fn fan_arbiter_status(
         &self,
     ) -> crate::Result<
-        <cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_STATUS_V1 as RawConversion>::Target,
+        <cooler::undocumented::NV_GPU_CLIENT_FAN_ARBITERS_STATUS_V1 as RawConversion>::Target,
     > {
         trace!("gpu.fan_arbiter_status()");
 
@@ -5119,7 +5119,7 @@ impl PhysicalGpu {
     pub fn fan_arbiter_control(
         &self,
     ) -> crate::Result<
-        <cooler::private::NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1 as RawConversion>::Target,
+        <cooler::undocumented::NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1 as RawConversion>::Target,
     > {
         trace!("gpu.fan_arbiter_control()");
 
@@ -5128,7 +5128,7 @@ impl PhysicalGpu {
 
     pub fn perf_info(
         &self,
-    ) -> crate::Result<<power::private::NV_GPU_PERF_POLICIES_INFO_PARAMS as RawConversion>::Target>
+    ) -> crate::Result<<power::undocumented::NV_GPU_PERF_POLICIES_INFO_PARAMS as RawConversion>::Target>
     {
         trace!("gpu.perf_info()");
 
@@ -5137,7 +5137,7 @@ impl PhysicalGpu {
 
     pub fn perf_status(
         &self,
-    ) -> crate::Result<<power::private::NV_GPU_PERF_POLICIES_STATUS_PARAMS as RawConversion>::Target>
+    ) -> crate::Result<<power::undocumented::NV_GPU_PERF_POLICIES_STATUS_PARAMS as RawConversion>::Target>
     {
         trace!("gpu.perf_status()");
 
@@ -5146,7 +5146,7 @@ impl PhysicalGpu {
 
     pub fn voltage_domains_status(
         &self,
-    ) -> crate::Result<<power::private::NV_VOLT_STATUS as RawConversion>::Target> {
+    ) -> crate::Result<<power::undocumented::NV_VOLT_STATUS as RawConversion>::Target> {
         trace!("gpu.voltage_domains_status()");
 
         unsafe { nvcall!(NvAPI_GPU_GetVoltageDomainsStatus@get(self.0) => raw) }
@@ -5154,7 +5154,7 @@ impl PhysicalGpu {
 
     pub fn voltage_step(
         &self,
-    ) -> crate::Result<<power::private::NV_VOLT_STATUS as RawConversion>::Target> {
+    ) -> crate::Result<<power::undocumented::NV_VOLT_STATUS as RawConversion>::Target> {
         trace!("gpu.voltage_step()");
 
         unsafe { nvcall!(NvAPI_GPU_GetVoltageStep@get(self.0) => raw) }
@@ -5162,7 +5162,7 @@ impl PhysicalGpu {
 
     pub fn voltage_table(
         &self,
-    ) -> crate::Result<<power::private::NV_VOLT_TABLE as RawConversion>::Target> {
+    ) -> crate::Result<<power::undocumented::NV_VOLT_TABLE as RawConversion>::Target> {
         trace!("gpu.voltage_table()");
 
         unsafe { nvcall!(NvAPI_GPU_GetVoltages@get(self.0) => raw) }
@@ -6295,10 +6295,10 @@ mod fan_curve_tests {
     #[test]
     fn fan_curve_table_layout() {
         assert_eq!(
-            cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1::MAGIC,
+            cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1::MAGIC,
             0x200DC
         );
-        let mut raw = cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new();
+        let mut raw = cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new();
         raw.version = 0x200DC;
         raw.count = 1;
         let slot = &mut raw.curves[0];
@@ -6316,20 +6316,20 @@ mod fan_curve_tests {
         // + 3 point {temp_q8, reserved, rpm_q16} + 12 tail — so point0.temp
         // lands at struct byte 20 + 4 = 24 and point0.rpm at 20 + 12 = 32.
         assert_eq!(
-            std::mem::size_of::<cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1>(),
+            std::mem::size_of::<cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_V1>(),
             4 + 1 + 15 + 4 * 52
         );
         assert_eq!(
-            std::mem::size_of::<cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1>(),
+            std::mem::size_of::<cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1>(),
             52
         );
         assert_eq!(
-            std::mem::offset_of!(cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1, points),
+            std::mem::offset_of!(cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1, points),
             4
         );
         assert_eq!(
             std::mem::offset_of!(
-                cooler::private::NV_GPU_CLIENT_FAN_POLICIES_POINT_V1,
+                cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_POINT_V1,
                 rpm_q16
             ),
             8
@@ -6340,7 +6340,7 @@ mod fan_curve_tests {
     /// ((x + 128) >> 8 for temp, (x*100 + 32768) / 65536 for RPM).
     #[test]
     fn fan_curve_encode_roundtrip() {
-        let mut raw = cooler::private::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new();
+        let mut raw = cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new();
         raw.count = 1;
         let slot = &mut raw.curves[0];
         slot.points[0].temp_q8 = 42 << 8;

@@ -733,7 +733,7 @@ impl Default for ChipRevision {
 }
 
 /// Undocumented API
-pub mod private {
+pub mod undocumented {
     use crate::prelude_::*;
 
     pub const NVAPI_MAX_PROCESSES: usize = 128;

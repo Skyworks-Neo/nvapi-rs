@@ -124,7 +124,7 @@ nvstruct! {
         /// Memory frequency minimum kHz (observed 101250).
         pub memFreqMin: u32,
         /// Undecoded tail (2705 dwords; mostly-zero memory-domain fields).
-        pub pad: Padding<[u32; 2705]>,
+        pub pad: Array<[u32; 2705]>,
     }
 }
 
@@ -148,7 +148,7 @@ nvapi! {
 }
 
 /// Undocumented API
-pub mod private {
+pub mod undocumented {
     use crate::prelude_::*;
 
     // undocumented constants
@@ -620,7 +620,7 @@ pub mod private {
         /// are opaque — the host zeroes the buffer and stamps the magic.
         pub struct NV_GPU_OC_SCANNER_CONTROL_V1 {
             pub version: NvVersion,
-            pub pad: Padding<[u8; 64]>,
+            pub pad: Array<[u8; 64]>,
         }
     }
 
@@ -690,7 +690,7 @@ pub mod private {
             pub pad2: Padding<[u8; 4]>,
             /// +0x6C: per-point V/F payload on eventType-1 notifications
             /// (~9KB), opaque here.
-            pub payload: Padding<[u8; 0x2400]>,
+            pub payload: Array<[u8; 0x2400]>,
         }
     }
 
@@ -722,7 +722,7 @@ pub mod private {
             pub pad0: Padding<[u8; 0x4C]>,
             /// +0x50: status callback (NULL = unregister).
             pub callback: Option<NV_OC_SCANNER_STATUS_CALLBACK>,
-            pub tail: Padding<[u8; 216 - 0x58]>,
+            pub tail: Array<[u8; 216 - 0x58]>,
         }
     }
 
@@ -829,7 +829,7 @@ pub mod private {
         pub struct NV_GPU_PERF_PSTATES_INFO_PRIVATE_V4 {
             pub version: NvVersion,
             /// dwords 1..34 (opaque header). Bytes 4..0x88.
-            pub hdr: Padding<[u32; 33]>,
+            pub hdr: Array<[u32; 33]>,
             /// Byte 0x88 (dword 34) = bitmask of present pstates (bit i ⇔ P{i}).
             pub pstate_mask: u32,
             /// Byte 0x8C (dword 35) low byte = table version (logged by the ref tool).
@@ -839,7 +839,7 @@ pub mod private {
             /// Total struct = 275152 B (the ref tool's memset clears 0x432CC bytes from
             /// v19[1], i.e. struct = 4 + 0x432CC = 0x432D0 = 275152; the version
             /// magic with_struct(4) yields exactly 0x432D0).
-            pub payload: Padding<[u8; 275152 - 144]>,
+            pub payload: Array<[u8; 275152 - 144]>,
         }
     }
 
@@ -970,7 +970,7 @@ pub mod private {
             pub count: u32,
             /// Entry table: count × {type:u8, pstate:u8}, type==0x1A = locked.
             /// 164-byte buffer total (driver magic reports 136; tail is pad).
-            pub entries: Padding<[u8; 164 - 8]>,
+            pub entries: Array<[u8; 164 - 8]>,
         }
     }
 

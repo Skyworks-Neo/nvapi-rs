@@ -119,7 +119,7 @@ nvapi! {
 }
 
 /// Undocumented API
-pub mod private {
+pub mod undocumented {
     use crate::prelude_::*;
 
     pub const NVAPI_MAX_THERMAL_INFO_ENTRIES: usize = 4;
@@ -394,7 +394,7 @@ pub mod private {
             pub offset_hw: i32,
             pub rsvd0: Padding<[u8; 28]>,
             /// RTSS union { device[2] | rsvd[16] } — raw 16 bytes.
-            pub data: Padding<[u8; 16]>,
+            pub data: Array<[u8; 16]>,
         }
     }
 
@@ -581,7 +581,7 @@ pub mod private {
             /// Bitmask selecting which policy entry to read/write (1 << index).
             pub mask: u32,
             /// Opaque policy table (raw; GET-filled, preserve on RMW).
-            pub payload: Padding<[u8; 984 - 8]>,
+            pub payload: Array<[u8; 984 - 8]>,
         }
     }
 
@@ -668,7 +668,7 @@ pub mod private {
         /// the ref tool's queryTargetTemperature are decoded by the accessors below.
         pub struct NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_V3 {
             pub version: NvVersion,
-            pub payload: Padding<[u8; NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_SIZE - 4]>,
+            pub payload: Array<[u8; NV_GPU_CLIENT_THERMAL_POLICIES_PRIVATE_INFO_SIZE - 4]>,
         }
     }
 

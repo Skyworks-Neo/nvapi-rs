@@ -102,7 +102,7 @@ nvapi! {
 }
 
 /// Undocumented API
-pub mod private {
+pub mod undocumented {
     use crate::prelude_::*;
 
     nvapi! {

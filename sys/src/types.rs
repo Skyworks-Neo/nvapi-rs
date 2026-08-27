@@ -200,6 +200,11 @@ pub struct Padding<T> {
     pub data: T,
 }
 
+/// Alias of [`Padding<T>`] for fields that carry a driver array/payload
+/// (names like `payload`/`entries`/`rest`/`data`), as opposed to true
+/// inter-field alignment padding. Same type — the alias documents intent.
+pub type Array<T> = Padding<T>;
+
 impl<T> Deref for Padding<T> {
     type Target = T;
 
