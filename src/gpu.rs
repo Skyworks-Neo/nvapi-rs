@@ -643,7 +643,7 @@ impl PhysicalGpu {
     ) -> crate::NvapiResult<ClockFrequencies> {
         trace!("gpu.clock_frequencies({:?})", clock_type);
         let mut clocks = clock::NV_GPU_CLOCK_FREQUENCIES::default();
-        clocks.set_clock_type(clock_type.raw());
+        clocks.set_clock_type(clock_type.value());
 
         unsafe { nvcall!(NvAPI_GPU_GetAllClockFrequencies@get{clocks}(self.0) => raw) }
     }
@@ -954,9 +954,9 @@ impl PhysicalGpu {
             let pstates = map.len();
             let map = map.entry(pstate).or_insert((pstates, 0));
             let entry = &mut info.pstates[map.0];
-            entry.pstateId = pstate.raw();
+            entry.pstateId = pstate.value();
             let entry = &mut entry.clocks[map.1];
-            entry.domainId = clock.raw();
+            entry.domainId = clock.value();
             entry.freqDelta_kHz.value = delta.0;
             map.1 += 1;
         }
@@ -1121,12 +1121,12 @@ impl PhysicalGpu {
             entry.id = lock.limit.into();
             let (mode, value) = match lock.lock_value {
                 Some(crate::clock::ClockLockValue::Frequency(v)) => {
-                    (ClockLockMode::ManualFrequency.raw(), v.0)
+                    (ClockLockMode::ManualFrequency.value(), v.0)
                 }
                 Some(crate::clock::ClockLockValue::Voltage(v)) => {
-                    (ClockLockMode::ManualVoltage.raw(), v.0)
+                    (ClockLockMode::ManualVoltage.value(), v.0)
                 }
-                None => (ClockLockMode::None.raw(), 0),
+                None => (ClockLockMode::None.value(), 0),
             };
             entry.mode = mode;
             entry.value = value;
@@ -4961,7 +4961,7 @@ impl PhysicalGpu {
         for (entry, level) in data.cooler.iter_mut().zip(values) {
             trace!("gpu.set_cooler_level({:?})", level);
             entry.currentLevel = level.level.unwrap_or_default().0;
-            entry.currentPolicy = level.policy.raw();
+            entry.currentPolicy = level.policy.value();
         }
 
         unsafe {
@@ -4993,7 +4993,7 @@ impl PhysicalGpu {
             data.count += 1;
 
             backup_entry.currentLevel = settings.level.unwrap_or_default().0;
-            backup_entry.currentPolicy = settings.policy.raw();
+            backup_entry.currentPolicy = settings.policy.value();
         }
 
         let res = unsafe { nvcall!(NvAPI_GPU_ClientFanCoolersSetControl(self.0, &data)) };
@@ -5036,7 +5036,7 @@ impl PhysicalGpu {
     ) -> crate::Result<<cooler::private::NV_GPU_COOLER_POLICY_TABLE as RawConversion>::Target> {
         trace!("gpu.cooler_policy_table({:?})", index);
         let mut data = cooler::private::NV_GPU_COOLER_POLICY_TABLE {
-            policy: policy.raw(),
+            policy: policy.value(),
             ..Default::default()
         };
 
@@ -5060,7 +5060,7 @@ impl PhysicalGpu {
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_cooler_policy_table({:?}, {:?})", index, value);
         let data = cooler::private::NV_GPU_COOLER_POLICY_TABLE {
-            policy: value.policy.raw(),
+            policy: value.policy.value(),
             ..Default::default()
         };
         // TODO: data.policyCoolerLevel
@@ -5091,7 +5091,7 @@ impl PhysicalGpu {
                 self.0,
                 ptr,
                 index.len() as u32,
-                policy.raw()
+                policy.value()
             ))
         }
     }
@@ -5296,7 +5296,7 @@ impl PhysicalGpu {
             pbData: bytes.as_mut_ptr() as usize,
             cbSize: bytes.len() as _,
             i2cSpeed: i2c::NVAPI_I2C_SPEED_DEPRECATED,
-            i2cSpeedKhz: speed.raw(),
+            i2cSpeedKhz: speed.value(),
             portId: port.unwrap_or_default(),
             bIsPortIdSet: if port.is_some() {
                 sys::NV_TRUE as _
@@ -5343,7 +5343,7 @@ impl PhysicalGpu {
             pbData: bytes.as_ptr() as usize,
             cbSize: bytes.len() as _,
             i2cSpeed: i2c::NVAPI_I2C_SPEED_DEPRECATED,
-            i2cSpeedKhz: speed.raw(),
+            i2cSpeedKhz: speed.value(),
             portId: port.unwrap_or_default(),
             bIsPortIdSet: if port.is_some() {
                 sys::NV_TRUE as _
@@ -5570,7 +5570,7 @@ impl RawConversion for display::NV_GPU_DISPLAYIDS {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         Ok(DisplayId {
-            connector: MonitorConnectorType::from_raw(self.connectorType)?,
+            connector: MonitorConnectorType::try_from(self.connectorType)?,
             display_id: self.displayId,
             flags: DisplayIdsFlags::from_bits_truncate(self.flags.value),
         })

@@ -1,6 +1,7 @@
 use crate::clock::ClockDomain;
 use crate::sys;
 use crate::sys::gpu::pstate;
+use crate::sys::value::NvValueData;
 use crate::types::{
     Delta, Kilohertz, KilohertzDelta, Microvolts, MicrovoltsDelta, Percentage, Range, RawConversion,
 };
@@ -91,7 +92,7 @@ impl PStateSettings {
             settings, num_clocks, num_base_voltages
         );
         Ok(PStateSettings {
-            id: PState::from_raw(settings.pstateId)?,
+            id: PState::try_from(settings.pstateId)?,
             editable: settings.bIsEditable.get(),
             clocks: settings.clocks[..num_clocks]
                 .iter()
@@ -134,7 +135,7 @@ impl RawConversion for pstate::NV_GPU_PERF_PSTATE20_BASE_VOLTAGE_ENTRY_V1 {
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
         Ok(BaseVoltage {
-            voltage_domain: VoltageDomain::from_raw(self.domainId)?,
+            voltage_domain: VoltageDomain::try_from(self.domainId)?,
             editable: self.bIsEditable.get(),
             voltage: Microvolts(self.volt_uV),
             voltage_delta: {
@@ -160,25 +161,25 @@ impl RawConversion for pstate::NV_GPU_PSTATE20_CLOCK_ENTRY_V1 {
         Ok(
             match self
                 .data
-                .get(pstate::PstateClockType::from_raw(self.typeId)?)
+                .get(pstate::PstateClockType::try_from(self.typeId)?)
             {
                 pstate::NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Single(single) => {
                     ClockEntry::Single {
-                        domain: ClockDomain::from_raw(self.domainId)?,
+                        domain: ClockDomain::try_from(self.domainId)?,
                         editable: self.bIsEditable.get(),
                         frequency_delta: self.freqDelta_kHz.convert_raw()?,
                         frequency: Kilohertz(single.freq_kHz),
                     }
                 }
                 pstate::NV_GPU_PSTATE20_CLOCK_ENTRY_DATA_VALUE::Range(range) => ClockEntry::Range {
-                    domain: ClockDomain::from_raw(self.domainId)?,
+                    domain: ClockDomain::try_from(self.domainId)?,
                     editable: self.bIsEditable.get(),
                     frequency_delta: self.freqDelta_kHz.convert_raw()?,
                     frequency_range: Range {
                         min: Kilohertz(range.minFreq_kHz),
                         max: Kilohertz(range.maxFreq_kHz),
                     },
-                    voltage_domain: VoltageDomain::from_raw(range.domainId)?,
+                    voltage_domain: VoltageDomain::try_from(range.domainId)?,
                     voltage_range: Range {
                         min: Microvolts(range.minVoltage_uV),
                         max: Microvolts(range.maxVoltage_uV),
@@ -231,7 +232,7 @@ impl RawConversion for pstate::NV_GPU_PERF_PSTATES_INFO_V1_CLOCK {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         Ok(ClockEntry::Single {
-            domain: ClockDomain::from_raw(self.domainId)?,
+            domain: ClockDomain::try_from(self.domainId)?,
             editable: (self.flags & 1) != 0,
             frequency_delta: Delta::default(),
             frequency: Kilohertz(self.freq),
@@ -246,7 +247,7 @@ impl PStateSettings {
         num_voltages: usize,
     ) -> Result<Self, sys::ArgumentRangeError> {
         Ok(PStateSettings {
-            id: PState::from_raw(settings.pstateId)?,
+            id: PState::try_from(settings.pstateId)?,
             editable: (settings.flags & 4) != 0,
             clocks: settings.clocks[..num_clocks]
                 .iter()
@@ -256,7 +257,7 @@ impl PStateSettings {
                 .iter()
                 .map(|v| -> Result<BaseVoltage, sys::ArgumentRangeError> {
                     Ok(BaseVoltage {
-                        voltage_domain: VoltageDomain::from_raw(v.domainId)?,
+                        voltage_domain: VoltageDomain::try_from(v.domainId)?,
                         editable: false,
                         voltage: Microvolts(v.mvolt * 1000),
                         voltage_delta: Delta::default(),

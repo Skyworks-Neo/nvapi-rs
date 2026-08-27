@@ -2,6 +2,7 @@ use crate::gpu::VfpInfo;
 use crate::sys;
 use crate::sys::gpu::{clock, power};
 use crate::sys::types::ClockMask;
+use crate::sys::value::NvValueData;
 use crate::types::{
     Kilohertz, Kilohertz2Delta, KilohertzDelta, Microvolts, Percentage, Percentage1000, Range,
     RawConversion,
@@ -266,7 +267,7 @@ impl RawConversion for clock::private::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_ENTR
                 unknown1: _,
                 padding: _,
             } => Ok(ClockRange {
-                domain: ClockDomain::from_raw(clockType)?,
+                domain: ClockDomain::try_from(clockType)?,
                 range: Range {
                     max: Kilohertz2Delta(rangeMax),
                     min: Kilohertz2Delta(rangeMin),
@@ -1691,7 +1692,7 @@ impl ClockLockValue {
     pub fn from_raw(
         raw: &clock::private::NV_GPU_PERF_CLIENT_LIMITS_ENTRY,
     ) -> Result<Option<Self>, sys::ArgumentRangeError> {
-        Ok(match clock::private::ClockLockMode::from_raw(raw.mode)? {
+        Ok(match clock::private::ClockLockMode::try_from(raw.mode)? {
             clock::private::ClockLockMode::None => None,
             clock::private::ClockLockMode::ManualVoltage => {
                 Some(ClockLockValue::Voltage(Microvolts(raw.value)))

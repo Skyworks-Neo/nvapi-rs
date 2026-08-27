@@ -78,7 +78,6 @@ impl NvEnumBody {
         let NvEnum = quote!(#NvEnum::<#ident>);
         let NvValueEnum = sys_path(["value", "NvValueEnum"]);
         let NvValueData = sys_path(["value", "NvValueData"]);
-        let ArgumentRangeError = sys_path(["ArgumentRangeError"]);
         let nv_value_symbol = call_ident(NvValueSymbol::NAME);
         quote! {
             #(#attrs)*
@@ -104,19 +103,6 @@ impl NvEnumBody {
 
                 pub const fn repr(self) -> #repr {
                     self as #repr
-                }
-
-                /// Legacy v0.2.x compatibility: returns the newtype alias (atomic with field types).
-                pub fn raw(&self) -> #value_ident {
-                    self.value()
-                }
-                /// Legacy v0.2.x compatibility: accepts the newtype alias.
-                pub fn from_raw(raw: #value_ident) -> ::core::result::Result<Self, #ArgumentRangeError> {
-                    Self::try_from(raw)
-                }
-                /// Legacy v0.2.x compatibility: iterate all known variants.
-                pub fn values() -> impl ::core::iter::Iterator<Item = Self> {
-                    <Self as #NvValueData>::values()
                 }
             }
 

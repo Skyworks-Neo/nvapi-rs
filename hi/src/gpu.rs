@@ -1,4 +1,5 @@
 use crate::{allowable_result, allowable_result_fallback};
+use nvapi::sys::value::NvValueData;
 use once_cell::sync::OnceCell;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
