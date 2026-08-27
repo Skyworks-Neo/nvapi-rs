@@ -161,7 +161,7 @@ pub mod private {
 
     impl NV_GPU_GETCOOLER_SETTINGS_V1 {
         pub fn coolers(&self) -> &[NV_GPU_GETCOOLER_SETTING_V1] {
-            &self.cooler[..self.count as usize]
+            counted(&*self.cooler, self.count as usize)
         }
     }
 
@@ -199,7 +199,7 @@ pub mod private {
 
     impl NV_GPU_GETCOOLER_SETTINGS_V3 {
         pub fn coolers(&self) -> &[NV_GPU_GETCOOLER_SETTING_V3] {
-            &self.cooler[..self.count as usize]
+            counted(&*self.cooler, self.count as usize)
         }
     }
 
@@ -221,7 +221,7 @@ pub mod private {
 
     impl NV_GPU_GETCOOLER_SETTINGS_V4 {
         pub fn coolers(&self) -> &[NV_GPU_GETCOOLER_SETTING_V4] {
-            &self.cooler[..self.count as usize]
+            counted(&*self.cooler, self.count as usize)
         }
     }
 
@@ -384,7 +384,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_FAN_ARBITERS_INFO_V1 {
         pub fn arbiters(&self) -> &[NV_GPU_CLIENT_FAN_ARBITER_INFO_V1] {
-            &self.arbiters[..self.count as usize]
+            counted(&*self.arbiters, self.count as usize)
         }
     }
 
@@ -420,7 +420,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_FAN_ARBITERS_STATUS_V1 {
         pub fn arbiters(&self) -> &[NV_GPU_CLIENT_FAN_ARBITER_STATUS_V1] {
-            &self.arbiters[..self.count as usize]
+            counted(&*self.arbiters, self.count as usize)
         }
     }
 
@@ -463,7 +463,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_FAN_ARBITERS_CONTROL_V1 {
         pub fn arbiters(&self) -> &[NV_GPU_CLIENT_FAN_ARBITER_CONTROL_V1] {
-            &self.arbiters[..self.count as usize]
+            counted(&*self.arbiters, self.count as usize)
         }
     }
 
@@ -523,7 +523,7 @@ pub mod private {
         }
 
         pub fn coolers(&self) -> &[NV_GPU_CLIENT_FAN_COOLER_INFO_V1] {
-            &self.coolers[..self.count as usize]
+            counted(&*self.coolers, self.count as usize)
         }
     }
 
@@ -557,7 +557,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_FAN_COOLERS_STATUS_V1 {
         pub fn coolers(&self) -> &[NV_GPU_CLIENT_FAN_COOLER_STATUS_V1] {
-            &self.coolers[..self.count as usize]
+            counted(&*self.coolers, self.count as usize)
         }
     }
 
@@ -609,7 +609,7 @@ pub mod private {
         }
 
         pub fn coolers(&self) -> &[NV_GPU_CLIENT_FAN_COOLER_CONTROL_V1] {
-            &self.coolers[..self.count as usize]
+            counted(&*self.coolers, self.count as usize)
         }
     }
 

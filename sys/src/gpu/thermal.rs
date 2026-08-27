@@ -159,7 +159,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V2 {
         pub fn entries(&self) -> &[NV_GPU_CLIENT_THERMAL_POLICIES_INFO_ENTRY_V2] {
-            &self.entries[..self.count as usize]
+            counted(&*self.entries, self.count as usize)
         }
     }
 
@@ -196,7 +196,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V3 {
         pub fn entries(&self) -> &[NV_GPU_CLIENT_THERMAL_POLICY_INFO_V3] {
-            &self.entries[..self.count as usize]
+            counted(&*self.entries, self.count as usize)
         }
 
         pub fn valid(&self) -> bool {
@@ -232,7 +232,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V2 {
         pub fn entries(&self) -> &[NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_ENTRY_V2] {
-            &self.entries[..self.count as usize]
+            counted(&*self.entries, self.count as usize)
         }
     }
 
@@ -280,7 +280,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V3 {
         pub fn entries(&self) -> &[NV_GPU_CLIENT_THERMAL_POLICY_STATUS_V3] {
-            &self.entries[..self.count as usize]
+            counted(&*self.entries, self.count as usize)
         }
     }
 

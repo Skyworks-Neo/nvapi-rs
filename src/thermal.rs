@@ -1,5 +1,6 @@
 use crate::sys;
 use crate::sys::gpu::{cooler, thermal};
+use crate::sys::types::counted;
 use crate::types::{Celsius, CelsiusShifted, Kilohertz, Percentage, Range, RawConversion, Rpm};
 use log::trace;
 #[cfg(feature = "serde")]
@@ -53,7 +54,7 @@ impl RawConversion for thermal::NV_GPU_THERMAL_SETTINGS {
 
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.sensor[..self.count as usize]
+        counted(&*self.sensor, self.count as usize)
             .iter()
             .map(RawConversion::convert_raw)
             .collect()

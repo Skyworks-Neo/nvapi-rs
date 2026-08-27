@@ -470,3 +470,21 @@ impl<'a> Iterator for ClockMaskIter<'a> {
         (0, Some(self.mask.len() * 32 - (self.offset % 32)))
     }
 }
+
+/// Clamp a driver-reported element count against the array it claims to index.
+///
+/// NVAPI variable-length structs pair a fixed-capacity array with a `u32`
+/// count the driver fills in. Slicing directly with `data[..count as usize]`
+/// panics if a (buggy or unexpected) driver response reports a count past
+/// capacity; this helper clamps instead, so a malformed response degrades to
+/// a short/empty view rather than taking down long-running monitoring loops.
+///
+/// This is the targeted replacement for the donor's `Truncated<T, C>` type
+/// (v0.2.x-refactor `sys/src/array.rs`): same clamp-instead-of-panic guarantee
+/// at a fraction of the API surface — no `ArrayLike` trait, no
+/// `RangeBounds`-generic count field, no changes to accessor return types.
+#[inline]
+pub fn counted<T>(data: &[T], count: impl Into<usize>) -> &[T] {
+    let len = count.into().min(data.len());
+    &data[..len]
+}

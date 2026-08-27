@@ -580,7 +580,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_POWER_POLICIES_INFO_V2 {
         pub fn entries(&self) -> &[NV_GPU_CLIENT_POWER_POLICIES_INFO_ENTRY_V2] {
-            &self.entries[..self.count as usize]
+            counted(&*self.entries, self.count as usize)
         }
     }
 
@@ -1220,7 +1220,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_POWER_TOPOLOGY_INFO_V1 {
         pub fn channels(&self) -> &[NV_GPU_CLIENT_POWER_TOPOLOGY_CHANNEL_ID] {
-            &self.channels[..self.count as usize]
+            counted(&*self.channels, self.count as usize)
         }
     }
 
@@ -1263,7 +1263,7 @@ pub mod private {
 
     impl NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_V1 {
         pub fn entries(&self) -> &[NV_GPU_CLIENT_POWER_TOPOLOGY_STATUS_ENTRY] {
-            &self.entries[..self.count as usize]
+            counted(&*self.entries, self.count as usize)
         }
     }
 
@@ -1391,7 +1391,7 @@ pub mod private {
 
     impl NV_VOLT_TABLE_V1 {
         pub fn entries(&self) -> &[NV_VOLT_TABLE_ENTRY] {
-            &self.entries[..self.count as usize]
+            counted(&*self.entries, self.count as usize)
         }
     }
 

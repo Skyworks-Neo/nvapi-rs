@@ -1,4 +1,5 @@
 use crate::PhysicalGpu;
+use crate::sys::types::counted;
 use crate::sys::{gsync, handles::NvGSyncDeviceHandle};
 use crate::types::RawConversion;
 use log::trace;
@@ -26,7 +27,7 @@ impl GSyncDevice {
                 status: crate::Status::NvidiaDeviceNotFound,
                 ..
             }) => Ok(Vec::new()),
-            Ok(len) => Ok(handles[..len as usize]
+            Ok(len) => Ok(counted(&handles, len as usize)
                 .iter()
                 .cloned()
                 .map(GSyncDevice::with_handle)

@@ -1,6 +1,7 @@
 use crate::clock::ClockDomain;
 use crate::sys;
 use crate::sys::gpu::pstate;
+use crate::sys::types::counted;
 use crate::sys::value::NvValueData;
 use crate::types::{
     Delta, Kilohertz, KilohertzDelta, Microvolts, MicrovoltsDelta, Percentage, Range, RawConversion,
@@ -114,13 +115,13 @@ impl RawConversion for pstate::NV_GPU_PERF_PSTATES20_INFO_V2 {
         trace!("convert_raw({:#?})", self);
         Ok(PStates {
             editable: self.bIsEditable.get(),
-            pstates: self.pstates[..self.numPstates as usize]
+            pstates: counted(&*self.pstates, self.numPstates as usize)
                 .iter()
                 .map(|ps| {
                     PStateSettings::from_raw(ps, self.numClocks as _, self.numBaseVoltages as _)
                 })
                 .collect::<Result<_, _>>()?,
-            overvolt: self.voltages[..self.numVoltages as usize]
+            overvolt: counted(&*self.voltages, self.numVoltages as usize)
                 .iter()
                 .map(RawConversion::convert_raw)
                 .collect::<Result<_, _>>()?,
@@ -275,7 +276,7 @@ impl RawConversion for pstate::NV_GPU_PERF_PSTATES_INFO_V2 {
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         Ok(PStates {
             editable: (self.flags & 4) != 0,
-            pstates: self.pstates[..self.numPstates as usize]
+            pstates: counted(&*self.pstates, self.numPstates as usize)
                 .iter()
                 .map(|ps| {
                     PStateSettings::from_legacy_raw(ps, self.numClocks as _, self.numVoltages as _)

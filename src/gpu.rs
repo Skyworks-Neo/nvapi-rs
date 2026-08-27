@@ -3,6 +3,7 @@ use crate::clock::{ClockDomain, ClockDomainInfo, VfpMask};
 use crate::pstate::{PState, PStates};
 use crate::sys::api::NvVersion;
 use crate::sys::gpu::{clock, cooler, display, ecc, power, pstate, thermal};
+use crate::sys::types::counted;
 use crate::sys::{self, driverapi, i2c};
 use crate::types::{
     Kibibytes, Kilohertz2Delta, KilohertzDelta, Percentage, Percentage1000, RawConversion,
@@ -267,7 +268,7 @@ impl PhysicalGpu {
                 status: Status::NvidiaDeviceNotFound,
                 ..
             }) => Vec::new(),
-            Ok(len) => handles[..len as usize]
+            Ok(len) => counted(&handles, len as usize)
                 .iter()
                 .cloned()
                 .map(PhysicalGpu)
@@ -305,7 +306,7 @@ impl PhysicalGpu {
                 status: Status::NotSupported,
                 ..
             }) => Ok(Vec::new()),
-            Ok(len) => Ok(handles[..len as usize]
+            Ok(len) => Ok(counted(&handles, len as usize)
                 .iter()
                 .cloned()
                 .map(PhysicalGpu)
@@ -911,7 +912,7 @@ impl PhysicalGpu {
             if crate::status_result(sys::Api::NvAPI_GPU_GetPstates20, status).is_ok() {
                 return Ok(PStates {
                     editable: raw.bIsEditable.get(),
-                    pstates: raw.pstates[..raw.numPstates as usize]
+                    pstates: counted(&*raw.pstates, raw.numPstates as usize)
                         .iter()
                         .map(|ps| {
                             crate::PStateSettings::from_raw(

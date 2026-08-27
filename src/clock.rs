@@ -2,6 +2,7 @@ use crate::gpu::VfpInfo;
 use crate::sys;
 use crate::sys::gpu::{clock, power};
 use crate::sys::types::ClockMask;
+use crate::sys::types::counted;
 use crate::sys::value::NvValueData;
 use crate::types::{
     Kilohertz, Kilohertz2Delta, KilohertzDelta, Microvolts, Percentage, Percentage1000, Range,
@@ -1653,7 +1654,7 @@ impl RawConversion for power::private::NV_GPU_CLIENT_POWER_POLICIES_STATUS {
     #[allow(non_snake_case)]
     fn convert_raw(&self) -> Result<Self::Target, Self::Error> {
         trace!("convert_raw({:#?})", self);
-        self.entries[..self.count as usize]
+        counted(&*self.entries, self.count as usize)
             .iter()
             .map(RawConversion::convert_raw)
             .collect()

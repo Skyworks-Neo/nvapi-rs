@@ -538,7 +538,7 @@ pub mod private {
 
     impl NV_GPU_PERF_CLIENT_LIMITS_V2 {
         pub fn entries(&self) -> &[NV_GPU_PERF_CLIENT_LIMITS_ENTRY] {
-            &self.entries[..self.count as usize]
+            counted(&*self.entries, self.count as usize)
         }
     }
 
