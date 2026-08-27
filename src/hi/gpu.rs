@@ -365,14 +365,13 @@ impl Gpu {
         if let (Some(info), Some(status)) = (therm_info.as_ref(), therm_status.as_ref()) {
             // Standard primary channels first, in type order (Core, then Hot
             // Spot, Board, Memory, Power Supply).
-            for ty in 0..type_target.len() {
+            for (ty, &target) in type_target.iter().enumerate() {
                 let Some(idx) = info.primary.get(ty).copied().flatten() else {
                     continue;
                 };
                 let Some(temp) = status.get(idx as usize) else {
                     continue;
                 };
-                let target = type_target[ty];
                 extra_sensors.push((
                     sensor_desc_for_channel(target, idx as u32, info.channel_info(idx as usize)),
                     temp,
@@ -1358,9 +1357,7 @@ impl Gpu {
     /// Read the target-temperature wall for one policy slot (private GET-prime
     /// 0xC4554575). `Ok(None)` if the driver doesn't expose that slot.
     pub fn target_temperature(&self, policy_index: usize) -> crate::Result<Option<f32>> {
-        self.gpu
-            .target_temperature(policy_index)
-            .map_err(Into::into)
+        self.gpu.target_temperature(policy_index)
     }
 
     /// Scan every target-temp policy slot and return `(policy_index, celsius)`
@@ -1369,7 +1366,7 @@ impl Gpu {
     /// on RTX 4060 Laptop — matches nvidia-smi's value and NVML's GpsCurr
     /// channel).
     pub fn target_temperature_policies(&self) -> crate::Result<Vec<(usize, f32)>> {
-        self.gpu.target_temperature_policies().map_err(Into::into)
+        self.gpu.target_temperature_policies()
     }
 
     /// Every target-temp policy slot with live current temp + VBIOS
@@ -1377,16 +1374,14 @@ impl Gpu {
     pub fn target_temperature_policies_with_info(
         &self,
     ) -> crate::Result<Vec<crate::TargetTempPolicyEntry>> {
-        self.gpu
-            .target_temperature_policies_with_info()
-            .map_err(Into::into)
+        self.gpu.target_temperature_policies_with_info()
     }
 
     /// Authoritative per-GPU target-temp policy index (private GetInfo
     /// 0x2F69F8E5): GPS index, else acoustics (desktop fallback), else None.
     /// Replaces hardcoding idx 2.
     pub fn target_temp_policy_index(&self) -> crate::Result<Option<usize>> {
-        self.gpu.target_temp_policy_index().map_err(Into::into)
+        self.gpu.target_temp_policy_index()
     }
 
     /// VBIOS min/default/max target temp (celsius) for one policy slot.
@@ -1394,9 +1389,7 @@ impl Gpu {
         &self,
         policy_index: usize,
     ) -> crate::Result<Option<(f32, f32, f32)>> {
-        self.gpu
-            .target_temperature_info(policy_index)
-            .map_err(Into::into)
+        self.gpu.target_temperature_info(policy_index)
     }
 
     /// Set the target-temperature wall for one policy slot (private RMW:
@@ -1413,19 +1406,16 @@ impl Gpu {
         &self,
         limits: I,
     ) -> crate::Result<()> {
-        self.gpu
-            .thermal_limit_info()
-            .map_err(Into::into)
-            .and_then(|info| {
-                self.gpu
-                    .set_thermal_limit(
-                        limits
-                            .into_iter()
-                            .zip(info.into_iter())
-                            .map(|(limit, info)| limit.to_limit(info.policy, info.pff.as_ref())),
-                    )
-                    .map_err(Into::into)
-            })
+        self.gpu.thermal_limit_info().and_then(|info| {
+            self.gpu
+                .set_thermal_limit(
+                    limits
+                        .into_iter()
+                        .zip(info)
+                        .map(|(limit, info)| limit.to_limit(info.policy, info.pff.as_ref())),
+                )
+                .map_err(Into::into)
+        })
     }
 
     /// Thermal-channel capability descriptor (undocumented
@@ -1433,15 +1423,13 @@ impl Gpu {
     /// descriptor or an error that should be tolerated by callers (some GPUs
     /// stub this call). See [`PhysicalGpu::thermal_channel_info`](crate::PhysicalGpu::thermal_channel_info).
     pub fn thermal_channel_info(&self) -> crate::Result<ThermalChannelInfo> {
-        self.gpu.thermal_channel_info().map_err(Into::into)
+        self.gpu.thermal_channel_info()
     }
 
     /// Live thermal-channel readings (the STATUS half). `channel_mask` should
     /// come from [`Self::thermal_channel_info`]. Best-effort.
     pub fn thermal_channel_status(&self, channel_mask: u32) -> crate::Result<ThermalChannelStatus> {
-        self.gpu
-            .thermal_channel_status(channel_mask)
-            .map_err(Into::into)
+        self.gpu.thermal_channel_status(channel_mask)
     }
 
     pub fn set_cooler_levels<I: IntoIterator<Item = (FanCoolerId, CoolerSettings)>>(
@@ -1464,13 +1452,11 @@ impl Gpu {
         mem_deltas: M,
     ) -> crate::Result<()> {
         let info = self.vfp_info()??;
-        self.gpu
-            .set_vfp_table(
-                info,
-                clock_deltas.map(|(i, d)| (i, d.into())),
-                mem_deltas.map(|(i, d)| (i, d.into())),
-            )
-            .map_err(Into::into)
+        self.gpu.set_vfp_table(
+            info,
+            clock_deltas.map(|(i, d)| (i, d.into())),
+            mem_deltas.map(|(i, d)| (i, d.into())),
+        )
     }
 
     pub fn set_vfp_lock_voltage(&self, voltage: Option<Microvolts>) -> crate::Result<()> {
@@ -1530,9 +1516,7 @@ impl Gpu {
         use std::iter;
 
         let info = self.vfp_info()??;
-        self.gpu
-            .set_vfp_table(info, iter::empty(), iter::empty())
-            .map_err(Into::into)
+        self.gpu.set_vfp_table(info, iter::empty(), iter::empty())
     }
 
     // Driver-side ("OEM"/NVIDIA) OC Scanner control — the family MSI's
@@ -1719,7 +1703,7 @@ impl SensorThrottle {
             value: self.value.into(),
             remove_tdp_limit: self.remove_tdp_limit,
             pff: self.curve.as_ref().map(|pff| PffStatus {
-                values: pff.points.iter().map(|p| p.y.into()).collect(),
+                values: pff.points.iter().map(|p| p.y).collect(),
                 curve: match info {
                     Some(curve) => curve.clone(),
                     None => pff.clone(),

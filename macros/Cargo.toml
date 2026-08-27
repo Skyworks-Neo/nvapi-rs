@@ -1,6 +1,8 @@
 [package]
 name = "nvapi-macros"
-version = "0.1.0" # keep in sync with html_root_url
+version = "0.1.0"
+publish = false
+rust-version = "1.92"
 authors = ["arcnmx"]
 edition = "2021"
 

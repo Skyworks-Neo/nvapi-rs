@@ -1,6 +1,8 @@
 [package]
 name = "nvapi-sys"
-version = "0.2.0"
+version = "0.3.0"
+publish = false
+rust-version = "1.92"
 authors = ["arcnmx"]
 edition = "2021"
 

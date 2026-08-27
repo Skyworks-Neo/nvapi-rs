@@ -1,5 +1,5 @@
 #![allow(non_camel_case_types, non_snake_case)]
-#![doc(html_root_url = "https://docs.rs/nvapi-sys/0.2.0")]
+#![doc(html_root_url = "https://docs.rs/nvapi-sys/0.3.0")]
 
 #[macro_use]
 mod macros;
@@ -78,9 +78,9 @@ pub mod api {
         pub use crate::gpu::clock::undocumented::*;
         pub use crate::gpu::cooler::undocumented::*;
         pub use crate::gpu::power::undocumented::*;
-        pub use crate::gpu::undocumented::*;
         pub use crate::gpu::pstate::undocumented::*;
         pub use crate::gpu::thermal::undocumented::*;
+        pub use crate::gpu::undocumented::*;
         pub use crate::i2c::undocumented::*;
     }
 }

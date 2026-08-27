@@ -136,8 +136,8 @@ impl NvEnumValue {
             });
             attrs.push(nv_value_symbol);
         }
-        let has_doc_alias = false;
-        if !has_doc_alias {
+        // always emit doc(alias) pointing at the C-symbol constant
+        {
             let symbol = self.symbol.to_string();
             attrs.push(call_attr(MetaList {
                 path: call_ident("doc").into(),
@@ -145,14 +145,8 @@ impl NvEnumValue {
                 tokens: quote!(alias = #symbol),
             }));
         }
-        let has_symbol = true;
-        let value = match has_symbol {
-            true => {
-                let symbol = &self.symbol;
-                parse_quote! { #symbol.repr() }
-            }
-            false => self.value,
-        };
+        let symbol = &self.symbol;
+        let value = parse_quote! { #symbol.repr() };
         Variant {
             attrs,
             ident: self.ident,

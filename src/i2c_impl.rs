@@ -138,7 +138,7 @@ impl<G: Borrow<PhysicalGpu>> i2c::Smbus for I2c<G> {
             .map_err(Into::into)
     }
 
-    fn smbus_process_call(&mut self, command: u8, value: u16) -> Result<u16, Self::Error> {
+    fn smbus_process_call(&mut self, _command: u8, _value: u16) -> Result<u16, Self::Error> {
         unimplemented!()
     }
 

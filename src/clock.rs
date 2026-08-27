@@ -1693,21 +1693,23 @@ impl ClockLockValue {
     pub fn from_raw(
         raw: &clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS_ENTRY,
     ) -> Result<Option<Self>, sys::ArgumentRangeError> {
-        Ok(match clock::undocumented::ClockLockMode::try_from(raw.mode)? {
-            clock::undocumented::ClockLockMode::None => None,
-            clock::undocumented::ClockLockMode::ManualVoltage => {
-                Some(ClockLockValue::Voltage(Microvolts(raw.value)))
-            }
-            clock::undocumented::ClockLockMode::ManualFrequency => {
-                Some(ClockLockValue::Frequency(Kilohertz(raw.value)))
-            }
-            // PstateSelect (mode 1) is a P-State pin, not a freq/voltage lock;
-            // it's not a VFP lock value, so report None (no lock to reset here).
-            clock::undocumented::ClockLockMode::PstateSelect => None,
-            // ClockLockMode is #[non_exhaustive]; any future mode isn't a
-            // freq/voltage VFP lock either, so treat it as "no lock to reset".
-            _ => None,
-        })
+        Ok(
+            match clock::undocumented::ClockLockMode::try_from(raw.mode)? {
+                clock::undocumented::ClockLockMode::None => None,
+                clock::undocumented::ClockLockMode::ManualVoltage => {
+                    Some(ClockLockValue::Voltage(Microvolts(raw.value)))
+                }
+                clock::undocumented::ClockLockMode::ManualFrequency => {
+                    Some(ClockLockValue::Frequency(Kilohertz(raw.value)))
+                }
+                // PstateSelect (mode 1) is a P-State pin, not a freq/voltage lock;
+                // it's not a VFP lock value, so report None (no lock to reset here).
+                clock::undocumented::ClockLockMode::PstateSelect => None,
+                // ClockLockMode is #[non_exhaustive]; any future mode isn't a
+                // freq/voltage VFP lock either, so treat it as "no lock to reset".
+                _ => None,
+            },
+        )
     }
 }
 
@@ -2012,8 +2014,8 @@ mod tests {
 #[cfg(test)]
 mod convert_raw_tests {
     use crate::clock::ClockDomain;
-    use crate::sys::gpu::power::undocumented::NV_VOLT_STATUS;
     use crate::sys::gpu::power::undocumented::NV_GPU_PERF_POLICIES_STATUS_PARAMS;
+    use crate::sys::gpu::power::undocumented::NV_VOLT_STATUS;
     use crate::sys::types::BoolU32;
     use crate::types::RawConversion;
     use crate::{Kilohertz, Microvolts};

@@ -831,12 +831,14 @@ pub struct ThermalChannelInfo {
 impl ThermalChannelInfo {
     /// Hot spot (GPU_MAX) primary channel index, if available.
     pub fn hotspot_index(&self) -> Option<u8> {
-        self.primary[thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_MAX.repr() as usize]
+        self.primary
+            [thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_GPU_MAX.repr() as usize]
     }
 
     /// VRAM (MEMORY) primary channel index, if available.
     pub fn memory_index(&self) -> Option<u8> {
-        self.primary[thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY.repr() as usize]
+        self.primary
+            [thermal::undocumented::NV_GPU_THERMAL_THERM_CHANNEL_TYPE_MEMORY.repr() as usize]
     }
 
     /// Metadata for a given channel index, if that channel is populated.

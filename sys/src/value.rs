@@ -453,7 +453,7 @@ mod serde_format_tests {
 #[cfg(test)]
 mod nvvalue_tests {
     use super::NvValue;
-    use crate::gpu::{SystemType, NV_SYSTEM_TYPE_LAPTOP};
+    use crate::gpu::{NV_SYSTEM_TYPE_LAPTOP, SystemType};
     use std::collections::HashSet;
 
     #[test]
