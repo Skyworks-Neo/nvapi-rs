@@ -60,14 +60,6 @@ dependencies = [
  "i2c",
  "log",
  "nvapi-sys",
- "serde",
-]
-
-[[package]]
-name = "nvapi-hi"
-version = "0.2.0"
-dependencies = [
- "nvapi",
  "once_cell",
  "serde",
 ]

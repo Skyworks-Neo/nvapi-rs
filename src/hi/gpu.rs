@@ -1,5 +1,5 @@
-use crate::{allowable_result, allowable_result_fallback};
-use nvapi::sys::value::NvValueData;
+use super::{allowable_result, allowable_result_fallback};
+use crate::sys::value::NvValueData;
 use once_cell::sync::OnceCell;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -15,12 +15,7 @@ fn collect_domain<T: Copy, U: From<T>>(
         .unwrap_or_default()
 }
 
-use nvapi::{
-    self, BaseVoltage, ClockEntry, ClockFrequencyType, ClockRange, ClockTable, PStates, PffStatus,
-    PowerInfoEntry, Sensor, ThermalInfo, ThermalLimit, ThermalPolicyId, VfpCurve, VfpEntry,
-    VfpInfo,
-};
-pub use nvapi::{
+pub use crate::{
     AllClocks, ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies,
     ClockLockEntry, ClockLockValue, ComputeCapabilities, ConnectedIdsFlags, CoolerControl,
     CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings, CoolerStatus, CoolerTarget,
@@ -33,6 +28,11 @@ pub use nvapi::{
     SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalTarget,
     UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain, VoltageStatus,
     VoltageTable,
+};
+use crate::{
+    BaseVoltage, ClockEntry, ClockFrequencyType, ClockRange, ClockTable, PStates, PffStatus,
+    PowerInfoEntry, Sensor, ThermalInfo, ThermalLimit, ThermalPolicyId, VfpCurve, VfpEntry,
+    VfpInfo,
 };
 
 pub struct Gpu {
@@ -96,7 +96,7 @@ impl GpuInfo {
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct EccInfo {
     pub enabled_by_default: bool,
-    pub info: nvapi::EccStatus,
+    pub info: crate::EccStatus,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -137,7 +137,7 @@ pub struct GpuStatus {
     /// Per-channel / per-rail power from PowerMonitor v4 GetInfo + v1 GetStatus
     /// (IDs 0xC12EB19E / 0xF40238EF). `None` where the GPU/driver doesn't
     /// expose PowerMonitor. **Pre-wrap / research: raw values, units
-    /// unconfirmed** — see `nvapi::power` for the validation status.
+    /// unconfirmed** — see `crate::power` for the validation status.
     pub power_monitor: Option<PowerMonitor>,
     /// Per-rail power readings (Board / Chip / MVDDC / PWR_SRC / …, whichever
     /// the GPU exposes), via PowerMonitor GetStatus v1|392 with per-bit
@@ -210,13 +210,13 @@ impl Gpu {
         self.gpu.handle().as_ptr() as _
     }
 
-    pub fn enumerate() -> nvapi::Result<Vec<Self>> {
+    pub fn enumerate() -> crate::Result<Vec<Self>> {
         PhysicalGpu::enumerate()
             .map_err(Into::into)
             .map(|v| v.into_iter().map(Gpu::new).collect())
     }
 
-    pub fn info(&self) -> nvapi::Result<GpuInfo> {
+    pub fn info(&self) -> crate::Result<GpuInfo> {
         let pstates = allowable_result(self.gpu.pstates())?;
         let (pstates, ov) = match pstates {
             Ok(PStates {
@@ -314,11 +314,11 @@ impl Gpu {
         })
     }
 
-    fn vfp_info(&self) -> nvapi::Result<nvapi::Result<&VfpInfo>> {
+    fn vfp_info(&self) -> crate::Result<crate::Result<&VfpInfo>> {
         allowable_result(self.vfp_info.get_or_try_init(|| self.gpu.vfp_info()))
     }
 
-    pub fn status(&self) -> nvapi::Result<GpuStatus> {
+    pub fn status(&self) -> crate::Result<GpuStatus> {
         let vfp_info = self.vfp_info()?;
 
         // Thermal sensors via the RTSS ThermChannel pair (unified layout):
@@ -513,7 +513,7 @@ impl Gpu {
         })
     }
 
-    pub fn settings(&self) -> nvapi::Result<GpuSettings> {
+    pub fn settings(&self) -> crate::Result<GpuSettings> {
         let vfp_info = self.vfp_info()?;
         let pstates = allowable_result(self.gpu.pstates())?;
         let (pstates, ov) = match pstates {
@@ -572,14 +572,14 @@ impl Gpu {
         })
     }
 
-    pub fn set_voltage_boost(&self, boost: Percentage) -> nvapi::Result<()> {
+    pub fn set_voltage_boost(&self, boost: Percentage) -> crate::Result<()> {
         self.gpu.set_core_voltage_boost(boost).map_err(Into::into)
     }
 
     pub fn set_power_limits<I: IntoIterator<Item = Percentage>>(
         &self,
         limits: I,
-    ) -> nvapi::Result<()> {
+    ) -> crate::Result<()> {
         // TODO: match against power_limit_info, use range.min/max from there if it matches (can get fraction of a percent!)
         self.gpu
             .set_power_limit(limits.into_iter().map(From::from))
@@ -589,39 +589,39 @@ impl Gpu {
     /// Set the PPAB / Dynamic-Boost controller enable state (notebook dGPU↔CPU
     /// power coordination). `active = true` = "PPAB Enable" on. NDA-private
     /// ID 0x1504FC3D; raw boolean setter.
-    pub fn set_dynamic_boost(&self, active: bool) -> nvapi::Result<()> {
+    pub fn set_dynamic_boost(&self, active: bool) -> crate::Result<()> {
         self.gpu.set_dynamic_boost(active).map_err(Into::into)
     }
 
     /// TGP-watts range (min/default/max mW) + active policy index (NDA
     /// 0x67F31384). `Ok(None)` where the driver doesn't expose it.
-    pub fn tgp_watt_range(&self) -> nvapi::Result<Option<nvapi::TgpWattRange>> {
+    pub fn tgp_watt_range(&self) -> crate::Result<Option<crate::TgpWattRange>> {
         self.gpu.tgp_watt_range().map_err(Into::into)
     }
 
     /// Set GPU TGP in watts (the watts-form TGP slider; read-modify-write over
     /// NDA 0x8B3E7343 GET + 0xBFF09E59 SET). Returns the mW actually written.
-    pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> nvapi::Result<u32> {
+    pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> crate::Result<u32> {
         self.gpu
             .set_tgp_watt(watts, policy_index)
             .map_err(Into::into)
     }
 
     /// Reset GPU TGP to rated/default (NDA triplet). Returns the default mW, if known.
-    pub fn reset_tgp_watt(&self, policy_index: usize) -> nvapi::Result<Option<u32>> {
+    pub fn reset_tgp_watt(&self, policy_index: usize) -> crate::Result<Option<u32>> {
         self.gpu.reset_tgp_watt(policy_index).map_err(Into::into)
     }
 
     /// D-Notifier current state + the D1..D5 power-cap table (NDA 0x67F31384,
     /// the same private ClientPowerPoliciesGetInfo used by `tgp_watt_range`).
     /// `Ok(None)` where the driver doesn't expose the private interface.
-    pub fn dnotify_info(&self) -> nvapi::Result<Option<nvapi::DNotifierInfo>> {
+    pub fn dnotify_info(&self) -> crate::Result<Option<crate::DNotifierInfo>> {
         self.gpu.dnotify_info().map_err(Into::into)
     }
 
     /// Set the D-Notifier (D0-notify) limit to a driver D-level code
     /// (-1=D1/Unlimited, 0..3=D2..D5). Raw two-arg setter (NDA 0x48E0847D).
-    pub fn set_dnotify_limit(&self, didx: i32) -> nvapi::Result<()> {
+    pub fn set_dnotify_limit(&self, didx: i32) -> crate::Result<()> {
         self.gpu.set_dnotify_limit(didx).map_err(Into::into)
     }
 
@@ -629,15 +629,15 @@ impl Gpu {
     /// path": rail mask + per-rail control-offset entries + live per-rail
     /// voltages, via 0x2C73AFDC/0xA3070DB0/0x5D0634EE). `Ok(None)` where the
     /// driver doesn't expose the private interface.
-    pub fn volt_rails(&self) -> nvapi::Result<Option<nvapi::VoltRails>> {
+    pub fn volt_rails(&self) -> crate::Result<Option<crate::VoltRails>> {
         match self.gpu.volt_rails() {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported
-                        | nvapi::Status::NoImplementation
-                        | nvapi::Status::ArgumentExceedMaxSize
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::ArgumentExceedMaxSize
                 ) =>
             {
                 Ok(None)
@@ -651,13 +651,13 @@ impl Gpu {
     /// where the driver doesn't expose the private family. Policy (type
     /// check, ±mV limits) is the caller's — see the core operation.
     #[allow(non_snake_case)] // uV suffix matches the sys-layer field naming
-    pub fn set_volt_rail_value(&self, rail_bit: u32, value_uV: i32) -> nvapi::Result<Option<i32>> {
+    pub fn set_volt_rail_value(&self, rail_bit: u32, value_uV: i32) -> crate::Result<Option<i32>> {
         match self.gpu.set_volt_rail_value(rail_bit, value_uV) {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -673,16 +673,16 @@ impl Gpu {
     /// Controllable clock-domain block from the private ClockClient
     /// GetControl (RM 0x2080901b, ID 0xF58938F5). `Ok(None)` where the driver
     /// doesn't expose the private interface. The article's XBAR domain is
-    /// bit 1 (`nvapi::ClockDomainId::Xbar`).
-    pub fn clk_domains_control(&self) -> nvapi::Result<Option<nvapi::ClockDomainControl>> {
+    /// bit 1 (`crate::ClockDomainId::Xbar`).
+    pub fn clk_domains_control(&self) -> crate::Result<Option<crate::ClockDomainControl>> {
         match self.gpu.clk_domains_control() {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported
-                        | nvapi::Status::NoImplementation
-                        | nvapi::Status::ArgumentExceedMaxSize
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::ArgumentExceedMaxSize
                 ) =>
             {
                 Ok(None)
@@ -698,13 +698,13 @@ impl Gpu {
     pub fn clk_domain_freq(
         &self,
         domain_bit: u32,
-    ) -> nvapi::Result<Option<nvapi::ClockDomainFreq>> {
+    ) -> crate::Result<Option<crate::ClockDomainFreq>> {
         match self.gpu.clk_domain_freq(domain_bit) {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -722,13 +722,13 @@ impl Gpu {
     pub fn clk_domain_freq_direct(
         &self,
         domain_bit: u32,
-    ) -> nvapi::Result<Option<nvapi::ClockDomainFreqDirect>> {
+    ) -> crate::Result<Option<crate::ClockDomainFreqDirect>> {
         match self.gpu.clk_domain_freq_direct(domain_bit) {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -743,13 +743,13 @@ impl Gpu {
     pub fn clk_domain_freq_detail(
         &self,
         domain_bit: u32,
-    ) -> nvapi::Result<Option<nvapi::ClockDomainFreqDetail>> {
+    ) -> crate::Result<Option<crate::ClockDomainFreqDetail>> {
         match self.gpu.clk_domain_freq_detail(domain_bit) {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -772,13 +772,13 @@ impl Gpu {
         idx: usize,
         freq_mode: bool,
         value: u32,
-    ) -> nvapi::Result<Option<u32>> {
+    ) -> crate::Result<Option<u32>> {
         match self.gpu.set_vfp_point_private(bank, idx, freq_mode, value) {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -797,13 +797,13 @@ impl Gpu {
         start: usize,
         end: usize,
         delta_mhz: i16,
-    ) -> nvapi::Result<Option<()>> {
+    ) -> crate::Result<Option<()>> {
         match self.gpu.set_vfp_range_private(bank, start, end, delta_mhz) {
             Ok(()) => Ok(Some(())),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -821,16 +821,16 @@ impl Gpu {
         start: usize,
         end: usize,
         deltas: &[i16],
-    ) -> nvapi::Result<Option<()>> {
+    ) -> crate::Result<Option<()>> {
         match self
             .gpu
             .set_vfp_range_per_point_private(bank, start, end, deltas)
         {
             Ok(()) => Ok(Some(())),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -846,18 +846,18 @@ impl Gpu {
     /// lock (see `set_pstate_lock`). The SET twin (`SetPowerMizerInfo`
     /// 0x50016C78) is deliberately NOT surfaced here — no user need
     /// identified for it.
-    pub fn power_mizer_mode(&self, power_source: u32) -> nvapi::Result<Option<u32>> {
+    pub fn power_mizer_mode(&self, power_source: u32) -> crate::Result<Option<u32>> {
         match self.gpu.power_mizer_info(power_source) {
             Ok(mode) => Ok(Some(mode)),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
@@ -872,18 +872,18 @@ impl Gpu {
     /// both bytes were 2 with PPAB on — the enforced PPAB policy does not
     /// live in this PCF table on mobile. Treat as a separate platform
     /// status surface. `Ok(None)` where unsupported.
-    pub fn dynamic_boost_enabled(&self) -> nvapi::Result<Option<bool>> {
+    pub fn dynamic_boost_enabled(&self) -> crate::Result<Option<bool>> {
         match self.gpu.dynamic_boost_status() {
             Ok(active) => Ok(Some(active)),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
@@ -891,18 +891,18 @@ impl Gpu {
     /// returns `(enable, temperature_celsius)`. Requires the driver's
     /// "Secured Overrides" `<Temp faking allowed>` — `Ok(None)` where
     /// unsupported.
-    pub fn temp_sim(&self) -> nvapi::Result<Option<(bool, i32)>> {
+    pub fn temp_sim(&self) -> crate::Result<Option<(bool, i32)>> {
         match self.gpu.temp_sim() {
             Ok(state) => Ok(Some(state)),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
@@ -910,52 +910,52 @@ impl Gpu {
     /// fallback). DANGEROUS research tool — fakes the GPU temperature the
     /// driver sees. Requires the same Secured-Overrides gate; `Ok(None)`
     /// where unsupported.
-    pub fn set_temp_sim(&self, temperature_celsius: i32) -> nvapi::Result<Option<()>> {
+    pub fn set_temp_sim(&self, temperature_celsius: i32) -> crate::Result<Option<()>> {
         match self.gpu.set_temp_sim(temperature_celsius) {
             Ok(()) => Ok(Some(())),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
     /// Temperature-simulation disable (restore the real sensor reading).
     /// `Ok(None)` where unsupported.
-    pub fn disable_temp_sim(&self) -> nvapi::Result<Option<()>> {
+    pub fn disable_temp_sim(&self) -> crate::Result<Option<()>> {
         match self.gpu.disable_temp_sim() {
             Ok(()) => Ok(Some(())),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
     /// Core-voltage control-object read (0xA91F88EB, escape 0x07000045) —
     /// the GET half of the [`set_core_voltage_control`] RMW pair.
-    pub fn core_voltage_control(&self) -> nvapi::Result<Option<u32>> {
+    pub fn core_voltage_control(&self) -> crate::Result<Option<u32>> {
         match self.gpu.core_voltage_control() {
             Ok(v) => Ok(Some(v)),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
@@ -963,105 +963,105 @@ impl Gpu {
     /// SET path DISTINCT from the VoltVoltRails µV-offset and
     /// ClientVoltRails percent families. Elevation-gated. `Ok(None)` where
     /// unsupported.
-    pub fn set_core_voltage_control(&self, value: u32) -> nvapi::Result<Option<()>> {
+    pub fn set_core_voltage_control(&self, value: u32) -> crate::Result<Option<()>> {
         match self.gpu.set_core_voltage_control(value) {
             Ok(()) => Ok(Some(())),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
     /// PMGR voltage-request arbiter GET (0x717648FD, escape 0x0700019F).
     /// Returns the 11 raw v2 arbiter dwords, or `Ok(None)` where
     /// unsupported.
-    pub fn pmgr_voltage_arbiter(&self) -> nvapi::Result<Option<[u32; 11]>> {
+    pub fn pmgr_voltage_arbiter(&self) -> crate::Result<Option<[u32; 11]>> {
         match self.gpu.pmgr_voltage_arbiter() {
             Ok(values) => Ok(Some(values)),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
     /// PMGR voltage-request arbiter SET (0x9C4BB8D0). Elevation-gated.
-    pub fn set_pmgr_voltage_arbiter(&self, values: &[u32; 11]) -> nvapi::Result<Option<()>> {
+    pub fn set_pmgr_voltage_arbiter(&self, values: &[u32; 11]) -> crate::Result<Option<()>> {
         match self.gpu.set_pmgr_voltage_arbiter(values) {
             Ok(()) => Ok(Some(())),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
     /// Rated-TDP readback trio (0xED2BEA09 / 0x87BD35EF / 0xFCBDF642).
     /// Returns `(control_mode, info_capabilities, status_raw[10])`, or
     /// `Ok(None)` where unsupported.
-    pub fn rated_tdp_readback(&self) -> nvapi::Result<Option<(u32, u8, [u32; 10])>> {
+    pub fn rated_tdp_readback(&self) -> crate::Result<Option<(u32, u8, [u32; 10])>> {
         match self.gpu.rated_tdp_readback() {
             Ok(v) => Ok(Some(v)),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
     /// Query the last INCOMPLETE OC-scanner run (0xBE371D0A). Companion to
     /// [`PhysicalGpu::oem_oc_scanner_status`]. `Ok(None)` where
     /// unsupported.
-    pub fn oem_oc_scanner_incomplete_results(&self) -> nvapi::Result<Option<()>> {
+    pub fn oem_oc_scanner_incomplete_results(&self) -> crate::Result<Option<()>> {
         match self.gpu.oem_oc_scanner_incomplete_results() {
             Ok(()) => Ok(Some(())),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
     /// Enable/disable the background OC scanner (0x06DC7CE8, 72B struct
     /// 0x10048 with the validated feature GUID).
-    pub fn oem_oc_scanner_set_background(&self, enable: bool) -> nvapi::Result<Option<()>> {
+    pub fn oem_oc_scanner_set_background(&self, enable: bool) -> crate::Result<Option<()>> {
         match self.gpu.oem_oc_scanner_set_background(enable) {
             Ok(()) => Ok(Some(())),
             Err(ref e)
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(nvapi::Error::Nvapi(e)),
+            Err(e) => Err(crate::Error::Nvapi(e)),
         }
     }
 
@@ -1081,13 +1081,13 @@ impl Gpu {
         &self,
         bank: usize,
         only_mode: Option<u32>,
-    ) -> nvapi::Result<Option<usize>> {
+    ) -> crate::Result<Option<usize>> {
         match self.gpu.reset_vfp_private(bank, only_mode) {
             Ok(n) => Ok(Some(n)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1099,13 +1099,13 @@ impl Gpu {
     /// PerfVfeEqu GET_INFO (0x8D49471C) — the RM voltage-frequency EQUATION
     /// directory (mask + per-entry type/name). The third V/F surface,
     /// distinct from public and private VfPoints. `Ok(None)` where absent.
-    pub fn vfe_equ_info(&self) -> nvapi::Result<Option<nvapi::VfeEquInfo>> {
+    pub fn vfe_equ_info(&self) -> crate::Result<Option<crate::VfeEquInfo>> {
         match self.gpu.vfe_equ_info() {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1117,13 +1117,13 @@ impl Gpu {
     /// PerfVfeEqu GET_CONTROL (0x4C75C9FE) — equation control block with
     /// GetInfo-seeded mask (driver echoes the readable set expanded).
     /// `Ok(None)` where absent.
-    pub fn vfe_equ_control(&self) -> nvapi::Result<Option<nvapi::VfeEquControl>> {
+    pub fn vfe_equ_control(&self) -> crate::Result<Option<crate::VfeEquControl>> {
         match self.gpu.vfe_equ_control() {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1134,13 +1134,13 @@ impl Gpu {
 
     /// PerfVfeVar GET_INFO (0xB9DA41D6) — the RM V/F VARIABLE directory.
     /// `Ok(None)` where absent.
-    pub fn vfe_var_info(&self) -> nvapi::Result<Option<nvapi::VfeVarInfo>> {
+    pub fn vfe_var_info(&self) -> crate::Result<Option<crate::VfeVarInfo>> {
         match self.gpu.vfe_var_info() {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1151,13 +1151,13 @@ impl Gpu {
 
     /// PerfVfeVar GET_CONTROL (0x5D387298) — variable control block
     /// (raw-decoded 160-byte records). `Ok(None)` where absent.
-    pub fn vfe_var_control(&self) -> nvapi::Result<Option<nvapi::VfeVarControl>> {
+    pub fn vfe_var_control(&self) -> crate::Result<Option<crate::VfeVarControl>> {
         match self.gpu.vfe_var_control() {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1173,13 +1173,13 @@ impl Gpu {
     pub fn clk_domain_freqs_batch(
         &self,
         domains: &[u32],
-    ) -> nvapi::Result<Option<Vec<nvapi::ClockDomainFreq>>> {
+    ) -> crate::Result<Option<Vec<crate::ClockDomainFreq>>> {
         match self.gpu.clk_domain_freqs_batch(domains) {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1203,16 +1203,16 @@ impl Gpu {
         offset_kHz: i32,
         slot: u32,
         temporary: bool,
-    ) -> nvapi::Result<Option<nvapi::ClkDomainControlEntry>> {
+    ) -> crate::Result<Option<crate::ClkDomainControlEntry>> {
         match self
             .gpu
             .set_clk_domain_offset(domain_bit, offset_kHz, slot, temporary)
         {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1225,13 +1225,13 @@ impl Gpu {
     /// (GetInfo 0x8895B510 → GetStatus 0x7FEE9032, RM 0x20809061/0x20809062).
     /// Units live-calibrated vs the public GPC VFP curve. `Ok(None)` where
     /// the driver doesn't expose the private interface.
-    pub fn clk_vf_points_private(&self) -> nvapi::Result<Option<nvapi::ClkVfPointsPrivate>> {
+    pub fn clk_vf_points_private(&self) -> crate::Result<Option<crate::ClkVfPointsPrivate>> {
         match self.gpu.clk_vf_points_private() {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1244,13 +1244,13 @@ impl Gpu {
     /// V/F-POINTS GetControl (0xDA025C3E) — the direct readback of what
     /// SetControl 0xFEC00D04 writes. All-zero at stock. `Ok(None)` where the
     /// driver doesn't expose the private interface.
-    pub fn clk_vf_control_private(&self) -> nvapi::Result<Option<nvapi::ClkVfControlPrivate>> {
+    pub fn clk_vf_control_private(&self) -> crate::Result<Option<crate::ClkVfControlPrivate>> {
         match self.gpu.clk_vf_control_private() {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1264,7 +1264,7 @@ impl Gpu {
     /// (one DOMAIN per call: GPC 0-127, XBAR 128-255, …; every `pt_step`-th
     /// present point gets a mode-1 delta ladder, exact staircase fit,
     /// per-point restore). Compare results against the universal prior
-    /// `nvapi::clk_vf_g_prior(def_mhz)`; cache per GPU + driver version.
+    /// `crate::clk_vf_g_prior(def_mhz)`; cache per GPU + driver version.
     /// `Ok(None)` where the driver doesn't expose the private interface.
     #[allow(clippy::too_many_arguments)]
     pub fn clk_vf_calibrate_private(
@@ -1274,16 +1274,16 @@ impl Gpu {
         pt_step: usize,
         d_step: i64,
         dmax: i64,
-    ) -> nvapi::Result<Option<Vec<nvapi::ClkVfCalPoint>>> {
+    ) -> crate::Result<Option<Vec<crate::ClkVfCalPoint>>> {
         match self
             .gpu
             .clk_vf_calibrate_private(idx_lo, idx_hi, pt_step, d_step, dmax)
         {
             Ok(v) => Ok(Some(v)),
-            Err(nvapi::Error::Nvapi(e))
+            Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    nvapi::Status::NotSupported | nvapi::Status::NoImplementation
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)
@@ -1299,65 +1299,65 @@ impl Gpu {
     pub fn pstate_levels_domain(
         &self,
         domain: usize,
-    ) -> nvapi::Result<Option<nvapi::PStateLevelsInfo>> {
+    ) -> crate::Result<Option<crate::PStateLevelsInfo>> {
         self.gpu.pstate_levels_domain(domain).map_err(Into::into)
     }
 
     /// P-State level table for the default (GPC/core) clock-domain.
-    pub fn pstate_levels(&self) -> nvapi::Result<Option<nvapi::PStateLevelsInfo>> {
+    pub fn pstate_levels(&self) -> crate::Result<Option<crate::PStateLevelsInfo>> {
         self.gpu.pstate_levels().map_err(Into::into)
     }
 
     /// The set of P-State numbers currently locked (NDA 0x9962C97C). Empty when
     /// nothing is locked. `Ok(None)` if the driver doesn't expose it.
-    pub fn pstate_lock_status(&self) -> nvapi::Result<Option<Vec<u8>>> {
+    pub fn pstate_lock_status(&self) -> crate::Result<Option<Vec<u8>>> {
         self.gpu.pstate_lock_status().map_err(Into::into)
     }
 
     /// Set the native NVAPI P-State lock (NDA 0x39442CFB, the the ref tool
-    /// `-pstate:<index>` SETTER). See [`nvapi::PStateNativeLock`].
-    pub fn set_pstate_native(&self, lock: nvapi::PStateNativeLock) -> nvapi::Result<()> {
+    /// `-pstate:<index>` SETTER). See [`crate::PStateNativeLock`].
+    pub fn set_pstate_native(&self, lock: crate::PStateNativeLock) -> crate::Result<()> {
         self.gpu.set_pstate_native(lock).map_err(Into::into)
     }
 
     /// Set the GPU frequency perf-cap (NDA 0x32CA4983, the ref tool
     /// `-gpuclk:<MHz>` SETTER). Clamps the perf max/min frequency to a cap
-    /// value — NOT an offset, NOT a P-state lock. See [`nvapi::PerfFreqCap`].
-    pub fn set_perf_freq_cap(&self, cap: nvapi::PerfFreqCap) -> nvapi::Result<()> {
+    /// value — NOT an offset, NOT a P-state lock. See [`crate::PerfFreqCap`].
+    pub fn set_perf_freq_cap(&self, cap: crate::PerfFreqCap) -> crate::Result<()> {
         self.gpu.set_perf_freq_cap(cap).map_err(Into::into)
     }
 
     /// Read back the active GPU frequency perf-caps (NDA 0xEFCEDD1F). Returns
-    /// one [`nvapi::PerfFreqCapEntry`] per active cap (max/min). Empty where
+    /// one [`crate::PerfFreqCapEntry`] per active cap (max/min). Empty where
     /// the driver doesn't expose the private interface.
-    pub fn perf_freq_caps(&self) -> nvapi::Result<Vec<nvapi::PerfFreqCapEntry>> {
+    pub fn perf_freq_caps(&self) -> crate::Result<Vec<crate::PerfFreqCapEntry>> {
         self.gpu.perf_freq_caps().map_err(Into::into)
     }
 
     /// Force the dGPU out of GC6 / GCOFF — the one-shot wake (NDA 0x55590CB2).
     /// Recommended first call before any overclock op on 610 mobile drivers
     /// where the dGPU aggressively enters GC6 and makes ops fail with -220.
-    pub fn force_gc6_exit(&self) -> nvapi::Result<()> {
+    pub fn force_gc6_exit(&self) -> crate::Result<()> {
         self.gpu.force_gc6_exit().map_err(Into::into)
     }
 
     /// Query the dGPU GC6 power state (NDA 0xD387D414, cmd=0). Returns the
     /// driver state: 3 = D0/active (awake), 2 = GC6/idle (powered down),
     /// 0 = OK/no report. Use after [`force_gc6_exit`] to confirm the wake.
-    pub fn gc6_query_state(&self) -> nvapi::Result<u32> {
+    pub fn gc6_query_state(&self) -> crate::Result<u32> {
         self.gpu.gc6_query_state().map_err(Into::into)
     }
 
     /// Force the dGPU awake via the GC6Control cmd=2 path (NDA 0xD387D414).
     /// Returns the post-wake state. Prefer [`Gpu::force_gc6_exit`] for a simpler
     /// wake; this is the struct-based superset (also supports query/sleep).
-    pub fn gc6_force_wake(&self) -> nvapi::Result<u32> {
+    pub fn gc6_force_wake(&self) -> crate::Result<u32> {
         self.gpu.gc6_force_wake().map_err(Into::into)
     }
 
     /// Read the target-temperature wall for one policy slot (private GET-prime
     /// 0xC4554575). `Ok(None)` if the driver doesn't expose that slot.
-    pub fn target_temperature(&self, policy_index: usize) -> nvapi::Result<Option<f32>> {
+    pub fn target_temperature(&self, policy_index: usize) -> crate::Result<Option<f32>> {
         self.gpu
             .target_temperature(policy_index)
             .map_err(Into::into)
@@ -1368,7 +1368,7 @@ impl Gpu {
     /// and per-GPU discovery of the "GPU Target Temperature" wall index (idx 2
     /// on RTX 4060 Laptop — matches nvidia-smi's value and NVML's GpsCurr
     /// channel).
-    pub fn target_temperature_policies(&self) -> nvapi::Result<Vec<(usize, f32)>> {
+    pub fn target_temperature_policies(&self) -> crate::Result<Vec<(usize, f32)>> {
         self.gpu.target_temperature_policies().map_err(Into::into)
     }
 
@@ -1376,7 +1376,7 @@ impl Gpu {
     /// min/default/max range. Drives `get-temp-thresholds --nvapi`.
     pub fn target_temperature_policies_with_info(
         &self,
-    ) -> nvapi::Result<Vec<nvapi::TargetTempPolicyEntry>> {
+    ) -> crate::Result<Vec<crate::TargetTempPolicyEntry>> {
         self.gpu
             .target_temperature_policies_with_info()
             .map_err(Into::into)
@@ -1385,7 +1385,7 @@ impl Gpu {
     /// Authoritative per-GPU target-temp policy index (private GetInfo
     /// 0x2F69F8E5): GPS index, else acoustics (desktop fallback), else None.
     /// Replaces hardcoding idx 2.
-    pub fn target_temp_policy_index(&self) -> nvapi::Result<Option<usize>> {
+    pub fn target_temp_policy_index(&self) -> crate::Result<Option<usize>> {
         self.gpu.target_temp_policy_index().map_err(Into::into)
     }
 
@@ -1393,7 +1393,7 @@ impl Gpu {
     pub fn target_temperature_info(
         &self,
         policy_index: usize,
-    ) -> nvapi::Result<Option<(f32, f32, f32)>> {
+    ) -> crate::Result<Option<(f32, f32, f32)>> {
         self.gpu
             .target_temperature_info(policy_index)
             .map_err(Into::into)
@@ -1403,7 +1403,7 @@ impl Gpu {
     /// GET-prime 0xC4554575 + SET 0xE097144F). Persists on mobile GPUs. Caller
     /// picks the slot — only idx 2 is confirmed writable (the wall) on RTX 4060
     /// Laptop; other indices may reject or no-op.
-    pub fn set_target_temperature(&self, celsius: f32, policy_index: usize) -> nvapi::Result<()> {
+    pub fn set_target_temperature(&self, celsius: f32, policy_index: usize) -> crate::Result<()> {
         self.gpu
             .set_target_temperature(celsius, policy_index)
             .map_err(Into::into)
@@ -1412,7 +1412,7 @@ impl Gpu {
     pub fn set_sensor_limits<I: IntoIterator<Item = SensorThrottle>>(
         &self,
         limits: I,
-    ) -> nvapi::Result<()> {
+    ) -> crate::Result<()> {
         self.gpu
             .thermal_limit_info()
             .map_err(Into::into)
@@ -1431,14 +1431,14 @@ impl Gpu {
     /// Thermal-channel capability descriptor (undocumented
     /// `NvAPI_GPU_ThermChannelGetInfo`). Best-effort; returns `Ok` with the
     /// descriptor or an error that should be tolerated by callers (some GPUs
-    /// stub this call). See [`PhysicalGpu::thermal_channel_info`](nvapi::PhysicalGpu::thermal_channel_info).
-    pub fn thermal_channel_info(&self) -> nvapi::Result<ThermalChannelInfo> {
+    /// stub this call). See [`PhysicalGpu::thermal_channel_info`](crate::PhysicalGpu::thermal_channel_info).
+    pub fn thermal_channel_info(&self) -> crate::Result<ThermalChannelInfo> {
         self.gpu.thermal_channel_info().map_err(Into::into)
     }
 
     /// Live thermal-channel readings (the STATUS half). `channel_mask` should
     /// come from [`Self::thermal_channel_info`]. Best-effort.
-    pub fn thermal_channel_status(&self, channel_mask: u32) -> nvapi::Result<ThermalChannelStatus> {
+    pub fn thermal_channel_status(&self, channel_mask: u32) -> crate::Result<ThermalChannelStatus> {
         self.gpu
             .thermal_channel_status(channel_mask)
             .map_err(Into::into)
@@ -1447,11 +1447,11 @@ impl Gpu {
     pub fn set_cooler_levels<I: IntoIterator<Item = (FanCoolerId, CoolerSettings)>>(
         &self,
         levels: I,
-    ) -> nvapi::Result<()> {
+    ) -> crate::Result<()> {
         self.gpu.set_cooler(levels).map_err(Into::into)
     }
 
-    pub fn reset_cooler_levels(&self) -> nvapi::Result<()> {
+    pub fn reset_cooler_levels(&self) -> crate::Result<()> {
         self.gpu.restore_cooler_settings(&[]).map_err(Into::into)
     }
 
@@ -1462,7 +1462,7 @@ impl Gpu {
         &self,
         clock_deltas: I,
         mem_deltas: M,
-    ) -> nvapi::Result<()> {
+    ) -> crate::Result<()> {
         let info = self.vfp_info()??;
         self.gpu
             .set_vfp_table(
@@ -1473,7 +1473,7 @@ impl Gpu {
             .map_err(Into::into)
     }
 
-    pub fn set_vfp_lock_voltage(&self, voltage: Option<Microvolts>) -> nvapi::Result<()> {
+    pub fn set_vfp_lock_voltage(&self, voltage: Option<Microvolts>) -> crate::Result<()> {
         self.gpu
             .set_vfp_locks([ClockLockEntry {
                 limit: PerfLimitId::Voltage,
@@ -1487,12 +1487,12 @@ impl Gpu {
         &self,
         domain: ClockDomain,
         frequency: Option<Kilohertz>,
-    ) -> nvapi::Result<()> {
+    ) -> crate::Result<()> {
         let gpu = match domain {
             ClockDomain::Graphics => true,
             ClockDomain::Memory => false,
             _ => {
-                return Err(nvapi::sys::ArgumentRangeError::new(domain.repr() as _).into());
+                return Err(crate::sys::ArgumentRangeError::new(domain.repr() as _).into());
             }
         };
         self.gpu
@@ -1517,7 +1517,7 @@ impl Gpu {
             .map_err(Into::into)
     }
 
-    pub fn reset_vfp_lock(&self) -> nvapi::Result<()> {
+    pub fn reset_vfp_lock(&self) -> crate::Result<()> {
         self.gpu
             .set_vfp_locks(self.gpu.vfp_locks(None)?.into_iter().map(|mut lock| {
                 lock.lock_value = None;
@@ -1526,7 +1526,7 @@ impl Gpu {
             .map_err(Into::into)
     }
 
-    pub fn reset_vfp(&self) -> nvapi::Result<()> {
+    pub fn reset_vfp(&self) -> crate::Result<()> {
         use std::iter;
 
         let info = self.vfp_info()??;
@@ -1539,15 +1539,15 @@ impl Gpu {
     // MSIOCScanner drives on drivers >= 455.00. The scan runs inside the
     // driver; these are thin start/stop/revert controls. See
     // `PhysicalGpu::oem_oc_scanner_start` for the RE provenance.
-    pub fn oem_oc_scanner_start(&self) -> nvapi::Result<()> {
+    pub fn oem_oc_scanner_start(&self) -> crate::Result<()> {
         self.gpu.oem_oc_scanner_start().map_err(Into::into)
     }
 
-    pub fn oem_oc_scanner_stop(&self) -> nvapi::Result<()> {
+    pub fn oem_oc_scanner_stop(&self) -> crate::Result<()> {
         self.gpu.oem_oc_scanner_stop().map_err(Into::into)
     }
 
-    pub fn oem_oc_scanner_revert(&self) -> nvapi::Result<()> {
+    pub fn oem_oc_scanner_revert(&self) -> crate::Result<()> {
         self.gpu.oem_oc_scanner_revert().map_err(Into::into)
     }
 
@@ -1555,45 +1555,45 @@ impl Gpu {
     /// result, or an error status (busy/scanning, not-supported, etc.).
     /// Per-point results are not available through this call — they arrive
     /// via the Register callback (not yet wired in the hi layer).
-    pub fn oem_oc_scanner_status(&self) -> nvapi::Result<()> {
+    pub fn oem_oc_scanner_status(&self) -> crate::Result<()> {
         self.gpu.oem_oc_scanner_status().map_err(Into::into)
     }
 
     /// Force the GPU into a given P-State. `set_type` 0/1/2 all force-lock
     /// (live-tested 4060L); none release. nvapioc uses 2. To unlock, use
     /// SetPstateClientLimits or EnableDynamicPstates instead.
-    pub fn set_force_pstate(&self, pstate: u32, set_type: u32) -> nvapi::Result<()> {
+    pub fn set_force_pstate(&self, pstate: u32, set_type: u32) -> crate::Result<()> {
         self.gpu
             .set_force_pstate(pstate, set_type)
             .map_err(Into::into)
     }
 
     /// Restart the display driver (legacy "apply OC" trigger).
-    pub fn restart_display_driver(&self) -> nvapi::Result<()> {
+    pub fn restart_display_driver(&self) -> crate::Result<()> {
         self.gpu.restart_display_driver().map_err(Into::into)
     }
 
     /// Enable/disable dynamic pstate switching. enable=0 is the release
     /// for a force-locked pstate (SetForcePstate has no unlock of its own).
-    pub fn enable_dynamic_pstates(&self, enable: u32) -> nvapi::Result<()> {
+    pub fn enable_dynamic_pstates(&self, enable: u32) -> crate::Result<()> {
         self.gpu.enable_dynamic_pstates(enable).map_err(Into::into)
     }
 
     /// Battery Boost 2.0 enable/disable. Mobile-only.
-    pub fn set_bb2_active(&self, enable: bool) -> nvapi::Result<()> {
+    pub fn set_bb2_active(&self, enable: bool) -> crate::Result<()> {
         self.gpu.set_bb2_active(enable).map_err(Into::into)
     }
 
     /// Whisper Mode 2.0 enable/disable. Mobile-only.
-    pub fn set_wm2_active(&self, enable: bool) -> nvapi::Result<()> {
+    pub fn set_wm2_active(&self, enable: bool) -> crate::Result<()> {
         self.gpu.set_wm2_active(enable).map_err(Into::into)
     }
 
     /// Whisper Mode 2.0 acoustic mode (Quieter/Quiet/Balanced).
     pub fn set_wm2_mode(
         &self,
-        mode: nvapi::sys::gpu::power::private::Wm2AcousticMode,
-    ) -> nvapi::Result<()> {
+        mode: crate::sys::gpu::power::private::Wm2AcousticMode,
+    ) -> crate::Result<()> {
         self.gpu.set_wm2_mode(mode).map_err(Into::into)
     }
 }
@@ -1842,7 +1842,7 @@ impl SensorDesc {
 fn sensor_desc_for_channel(
     target: ThermalTarget,
     channel: u32,
-    info: Option<&nvapi::ChannelInfo>,
+    info: Option<&crate::ChannelInfo>,
 ) -> SensorDesc {
     let mut desc = SensorDesc {
         controller: ThermalController::GpuInternal,

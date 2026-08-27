@@ -3,6 +3,11 @@
 
 pub use nvapi_sys as sys;
 
+/// High-level aggregate API (the former `nvapi-hi` crate): the `Gpu` wrapper,
+/// `GpuInfo`/`GpuStatus`/`GpuSettings` aggregates, and the
+/// `allowable_result*` error-tolerating helpers.
+pub mod hi;
+
 #[macro_use]
 mod macros;
 mod clock;

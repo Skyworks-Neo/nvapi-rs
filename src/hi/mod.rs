@@ -1,11 +1,7 @@
-#![doc(html_root_url = "https://docs.rs/nvapi-hi/0.2.0")]
-
-pub use nvapi;
-
 mod gpu;
 pub use gpu::*;
 
-pub use nvapi::{
+pub use crate::{
     ClkVfControlPointPrivate, ClkVfControlPrivate, ClkVfDomainClass, ClkVfDomainHint,
     ClkVfPointPrivate, ClkVfPointsPrivate, ClkVfSegmentKind, Error, NvapiError, Result, Status,
     chipset_info, driver_version, error_message, initialize, interface_version, sys, unload,
