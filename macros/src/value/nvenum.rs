@@ -1,10 +1,7 @@
 use {
     super::NvValueSymbol,
     crate::prelude::*,
-    syn::{
-        ExprCall, ExprField, ExprPath, Fields, MacroDelimiter, MetaList, Variant, Visibility,
-        braced, punctuated::Punctuated, token::Brace,
-    },
+    syn::{Fields, MacroDelimiter, MetaList, Variant, Visibility, braced, punctuated::Punctuated, token::Brace},
 };
 
 pub struct NvEnumBody {
@@ -160,24 +157,8 @@ impl NvEnumValue {
         let has_symbol = true;
         let value = match has_symbol {
             true => {
-                let symbol_expr = ExprPath {
-                    attrs: Default::default(),
-                    qself: None,
-                    path: self.symbol.into(),
-                };
-                let method = ExprField {
-                    attrs: Default::default(),
-                    base: Box::new(symbol_expr.into()),
-                    dot_token: Default::default(),
-                    member: call_ident("repr").into(),
-                };
-                ExprCall {
-                    attrs: Default::default(),
-                    func: Box::new(method.into()),
-                    paren_token: Default::default(),
-                    args: Punctuated::new(),
-                }
-                .into()
+                let symbol = &self.symbol;
+                parse_quote! { #symbol.repr() }
             }
             false => self.value,
         };
