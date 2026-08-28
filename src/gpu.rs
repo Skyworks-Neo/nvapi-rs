@@ -408,6 +408,45 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetVbiosVersionString@get(self.0) => into) }
     }
 
+    /// Reads the full VBIOS image via `NvAPI_GPU_GetVbiosImage` (0xFC13EE11).
+    /// Uses the V2 stamp (0x20010) with a 1 MiB buffer to capture the whole
+    /// image (typical VBIOS is 64–256 KiB). On legacy drivers (391.35) the
+    /// underlying RM escape 0x0700004F succeeds where the VFP-curve escape
+    /// 0x0700004A is kernel-unimplemented, so this is the viable path to the
+    /// V/F curve on old GPUs: read the image, then parse the BIT VoltageTable.
+    /// Returns the image bytes (actual length, not the full 1 MiB).
+    pub fn vbios_image(&self) -> crate::NvapiResult<Vec<u8>> {
+        trace!("gpu.vbios_image()");
+        use crate::sys::api::NvAPI_GPU_GetVbiosImage;
+        use crate::sys::nvapi::NvVersion;
+        use crate::sys::gpu::NV_GPU_VBIOS_IMAGE;
+
+        // 1 MiB buffer (V2 capacity). The handler truncates to actual size on
+        // output. Boxed because 1 MiB on the main thread stack risks overflow
+        // in debug builds (same hazard as the private VFP structs).
+        const BUF_CAP: usize = 1024000;
+        let mut buf = vec![0u8; BUF_CAP];
+        let mut image = NV_GPU_VBIOS_IMAGE {
+            // V2 stamp: handler compares the raw dword == 0x20010 (not the
+            // size|version<<16 formula), so stamp the literal.
+            version: NvVersion::with_version(0x20010),
+            size: BUF_CAP as u32,
+            pImage: buf.as_mut_ptr() as usize,
+        };
+        let st = unsafe { NvAPI_GPU_GetVbiosImage(self.0, &mut image) };
+        let () = crate::status_result(sys::Api::NvAPI_GPU_GetVbiosImage, st)
+            .map_err(crate::NvapiError::from)?;
+        let actual = image.size as usize;
+        if actual > BUF_CAP {
+            return Err(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_GetVbiosImage,
+                crate::Status::Error,
+            ));
+        }
+        buf.truncate(actual);
+        Ok(buf)
+    }
+
     pub fn driver_model(&self) -> crate::NvapiResult<DriverModel> {
         trace!("gpu.driver_model()");
         unsafe { nvcall!(NvAPI_GetDriverModel@get(self.0)).map(DriverModel::new) }
@@ -2144,7 +2183,6 @@ impl PhysicalGpu {
         )
         .map_err(crate::Error::from);
         if let Err(ref e) = ctrl_err {
-            eprintln!("DIAG ctrl_err status={:?}", e.nvapi_status());
             if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
                 ctrl.version =
                     NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC_LEGACY);
@@ -2152,7 +2190,6 @@ impl PhysicalGpu {
                 let st2 = unsafe {
                     NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *ctrl).cast())
                 };
-                eprintln!("DIAG ctrl retry st2={:#x}", st2 as i32);
                 crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st2)
                     .map_err(crate::Error::from)?;
             } else {
@@ -4801,6 +4838,25 @@ impl PhysicalGpu {
             .map(|c| c.into_iter().map(|(i, c)| (i, c.control)).collect())
     }
 
+    /// Translate `IncompatibleStructVersion` to `NotSupported` for NDA fan-policy
+    /// families whose legacy V1 stamps (R391) carry a fundamentally different
+    /// layout (policy-id/flag mapping) than the V2 curve-table layout nvoc
+    /// expects — no faithful downgrade is possible, so the call is genuinely
+    /// unsupported on those drivers.
+    fn map_legacy_struct_version<T>(
+        result: crate::NvapiResult<T>,
+    ) -> crate::NvapiResult<T> {
+        match result {
+            Ok(v) => Ok(v),
+            Err(ne)
+                if ne.status == crate::Status::IncompatibleStructVersion =>
+            {
+                Err(crate::NvapiError::new(ne.nvid, crate::Status::NotSupported))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Read the fan-policy capabilities block (`ClientFanPoliciesGetInfo` NDA
     /// 0x52B76D12, structure magic `0x2004C`, 76 bytes). Size/magic
     /// corroborated by EVGA Precision X1 (ManagedNvApi.dll). Field layout
@@ -4813,10 +4869,13 @@ impl PhysicalGpu {
         let raw = unsafe {
             nvcall!(NvAPI_GPU_ClientFanPoliciesGetInfo@get{
                 cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_INFO::new()
-            }(self.0))?
+            }(self.0))
         };
-
-        Ok(raw)
+        // Old drivers (e.g. R391/Fermi) only implement the legacy V1
+        // (stamp 0x1003C, 60B), which is a policy-id/flag mapping — a
+        // different layout, not a version of the V2 (0x2004C/76B) info.
+        // No faithful mapping exists; surface as NotSupported.
+        Self::map_legacy_struct_version(raw)
     }
 
     /// Read the GPU fan-curve table (`ClientFanPoliciesGetControl` NDA
@@ -4834,9 +4893,12 @@ impl PhysicalGpu {
         let raw = unsafe {
             nvcall!(NvAPI_GPU_ClientFanPoliciesGetControl@get{
                 cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new()
-            }(self.0))?
+            }(self.0))
         };
-
+        // Old drivers only implement V1 (0x10038/56B) — a policy-id/flag
+        // mapping, not a curve table. The V2 (0x200DC/220B) curve layout
+        // with temp/RPM points has no V1 equivalent; surface as NotSupported.
+        let raw = Self::map_legacy_struct_version(raw)?;
         let count = raw.count.min(4) as usize;
         let mut out = Vec::with_capacity(count);
         for k in 0..count {
@@ -4876,10 +4938,13 @@ impl PhysicalGpu {
             ));
         }
 
-        let mut raw = unsafe {
-            nvcall!(NvAPI_GPU_ClientFanPoliciesGetControl@get{
-                cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new()
-            }(self.0))?
+        let mut raw = {
+            let r = unsafe {
+                nvcall!(NvAPI_GPU_ClientFanPoliciesGetControl@get{
+                    cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL::new()
+                }(self.0))
+            };
+            Self::map_legacy_struct_version(r)?
         };
         if curve.index >= 4 {
             return Err(crate::NvapiError::new(
@@ -4923,12 +4988,15 @@ impl PhysicalGpu {
         };
         let mut buf = vec![0u8; NV_GPU_FAN_POLICY_CONTROL_SIZE];
         buf[..4].copy_from_slice(&NV_GPU_FAN_POLICY_CONTROL_MAGIC.to_ne_bytes());
-        unsafe {
+        let get_res = unsafe {
             nvcall!(NvAPI_GPU_FanPolicyGetControl(
                 self.0,
                 buf.as_mut_ptr() as *mut _
-            ))?;
-        }
+            ))
+        };
+        // Same legacy-struct incompatibility as the curve table — the 0x214AC
+        // reset block has no V1 equivalent on R391/Fermi.
+        Self::map_legacy_struct_version(get_res)?;
         // Reset bitmask at +0x04 (ref tool 2 assigns, not ORs) + apply flag
         // bit0 at +0x08 (ref tool 2 sets it unconditionally on the reset path).
         let mask = 1u32 << curve_index;
