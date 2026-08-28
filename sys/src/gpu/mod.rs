@@ -451,7 +451,13 @@ nvenum! {
         NV_GPU_ARCHITECTURE_GV110 / GV110 = 0x00000150,
         NV_GPU_ARCHITECTURE_TU100 / TU100 = 0x00000160,
         NV_GPU_ARCHITECTURE_GA100 / GA100 = 0x00000170,
-        NV_GPU_ARCHITECTURE_AD100 / AD100 = 0x00000180,
+        // Ada Lovelace (AD). NOTE: the authoritative NVIDIA nvapi.h assigns
+        // AD100 = 0x190 (NOT 0x180 — that was a stale assumption). Ada GPUs
+        // (RTX 40 / RTX 50 consumer, L4/L40 server) report architecture_id
+        // 0x190; e.g. AD107 (RTX 4060 Laptop) reports id=400=0x190, impl=7.
+        NV_GPU_ARCHITECTURE_AD100 / AD100 = 0x00000190,
+        // Blackwell (GB). RTX 50 consumer + B100/B200 server.
+        NV_GPU_ARCHITECTURE_GB200 / GB200 = 0x000001B0,
     }
 }
 
@@ -695,10 +701,25 @@ nvenum! {
         NV_GPU_ARCH_IMPLEMENTATION_AD102 / AD102 = 0x00000002,
         NV_GPU_ARCH_IMPLEMENTATION_AD103 / AD103 = 0x00000003,
         NV_GPU_ARCH_IMPLEMENTATION_AD104 / AD104 = 0x00000004,
+        // AD106 (0x06) / AD107 (0x07) are not in the upstream nvapi.h enum,
+        // but the driver reports them (RTX 4060 Laptop = AD107, impl=7). Keep
+        // them named so the hi-layer can render "AD106"/"AD107" instead of the
+        // raw value, matching how GPU-Z / nvapi report these chips.
+        NV_GPU_ARCH_IMPLEMENTATION_AD106 / AD106 = 0x00000006,
+        NV_GPU_ARCH_IMPLEMENTATION_AD107 / AD107 = 0x00000007,
     }
 }
 nvenum_display! {
     ArchitectureImplementationAD100 => _
+}
+
+nvenum! {
+    pub enum NV_GPU_ARCH_IMPLEMENTATION_ID_GB200 / ArchitectureImplementationGB200 {
+        NV_GPU_ARCH_IMPLEMENTATION_GB202 / GB202 = 0x00000002,
+    }
+}
+nvenum_display! {
+    ArchitectureImplementationGB200 => _
 }
 
 pub type NV_GPU_ARCH_IMPLEMENTATION_ID = NV_GPU_ARCH_IMPLEMENTATION_ID_AD100;

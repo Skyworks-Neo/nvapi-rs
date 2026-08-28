@@ -1655,6 +1655,11 @@ pub mod undocumented {
     impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1 {
         /// Literal magic dword the GetInfo handler accepts (live-verified).
         pub const MAGIC: u32 = 0x78604;
+        /// Legacy magic (R391.35/Kepler-Fermi): the GetInfo handler on old
+        /// drivers only accepts this small-table stamp (83996B) and rejects
+        /// the R610 0x78604 with IncompatibleStructVersion. Live-verified on
+        /// GT730/391.35: status=0 (escape succeeds) where 0x78604 → -9.
+        pub const MAGIC_LEGACY: u32 = 83996; // 0x1481C
     }
 
     impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1 {
@@ -1781,6 +1786,10 @@ pub mod undocumented {
         /// {85016, 158200, 214652, 300164, 1525252, 2000388} — the full
         /// 2×2048-record layout (live-verified).
         pub const MAGIC: u32 = 2000388;
+        /// Legacy magic (R391.35): smallest of the accepted set, 85016B.
+        /// Old drivers reject the R610 2000388 stamp with -9; this one
+        /// succeeds (live-verified GT730/391.35: status=0).
+        pub const MAGIC_LEGACY: u32 = 85016; // 0x14C18
     }
 
     impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1 {
@@ -1906,6 +1915,10 @@ pub mod undocumented {
     pub mod clk_vfp_control {
         /// canonical magic (accepted input and internal fill stamp)
         pub const MAGIC: u32 = 4670980;
+        /// Legacy magic (R391.35): the GetControl/SetControl handlers on old
+        /// drivers accept this small stamp (90116B) and reject the R610
+        /// 4670980 with -9. Live-verified on GT730/391.35.
+        pub const MAGIC_LEGACY: u32 = 90116; // 0x16004
         /// buffer size (0x424604 — NOT derived from the magic)
         pub const SIZE: usize = 4343300;
         /// bank-1 point mask (input seed from GetInfo)

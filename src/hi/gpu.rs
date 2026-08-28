@@ -269,8 +269,20 @@ impl Gpu {
             core_count: self.gpu.core_count()?,
             shader_pipe_count: self.gpu.shader_pipe_count()?,
             shader_sub_pipe_count: self.gpu.shader_sub_pipe_count()?,
-            base_clocks: self.gpu.clock_frequencies(ClockFrequencyType::Base)?,
-            boost_clocks: self.gpu.clock_frequencies(ClockFrequencyType::Boost)?,
+            // GetAllClockFrequencies (0xDCB616C3) is gated on a kernel-side
+            // clock-domain escape (0x07000002) that legacy drivers (e.g. 391.35
+            // Fermi) don't implement — the call returns NOT_SUPPORTED on those
+            // GPUs. Soft-fail to empty clocks instead of aborting the whole
+            // `info()` build, so dependent queries (get-uuid, get-info) keep
+            // working on old hardware. See [[getallclockfrequencies-gate]].
+            base_clocks: allowable_result_fallback(
+                self.gpu.clock_frequencies(ClockFrequencyType::Base),
+                Default::default(),
+            )?,
+            boost_clocks: allowable_result_fallback(
+                self.gpu.clock_frequencies(ClockFrequencyType::Boost),
+                Default::default(),
+            )?,
             sensors: match allowable_result(self.gpu.thermal_settings(None))? {
                 Ok(s) => s.into_iter().map(From::from).collect(),
                 Err(..) => Default::default(),

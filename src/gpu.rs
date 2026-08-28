@@ -1177,6 +1177,18 @@ impl PhysicalGpu {
             let mut data_v1 = std::mem::zeroed::<
                 power::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1,
             >();
+            // IDA + live-verified against deployed 391.35 nvapi64.dll: the
+            // GetStatus handler's stamp gate `(stamp-0x11C28)&0xFFFEFFFF==0`
+            // admits BOTH {0x11C28 ver1, 0x21C28 ver2} (both 7208B, identical
+            // 0x1C28 layout — the 0xFFFEFFFF mask zeroes bit16, the version
+            // nibble), so the fallback stamp is NOT the gate on legacy HW.
+            // Both stamps then issue RM escape 0x0700004A; on 391.35/Kepler-
+            // Fermi the kernel nvlddmkm does NOT implement that escape, so the
+            // handler returns failure and vfp_info's mask comes back all-zero
+            // → "no points" regardless of stamp. Same root cause as
+            // GetAllClockFrequencies escape 0x07000002 (see [[getallclockfrequencies-gate]]).
+            // V1/V2 share the 0x1C28 layout (nvversion! STATUS_V1(1)/(2) both
+            // = 0x1c28); ver2 is kept as the documented newer default.
             *data_v1.nvapi_version_mut() = NvVersion::with_struct::<
                 power::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_V1,
             >(2);
@@ -1868,6 +1880,14 @@ impl PhysicalGpu {
         // builds (release inlines the construction straight into the box),
         // which overflows a 1-2 MB main thread stack. Allocate zeroed and
         // stamp the magic directly — both structs' Default is zeros + MAGIC.
+        //
+        // Legacy-driver fallback (R391.35/Kepler-Fermi): old drivers reject
+        // the R610 large-table magics with IncompatibleStructVersion; their
+        // handlers accept only the small-table stamps (MAGIC_LEGACY). We try
+        // the R610 stamp first, and on IncompatibleStructVersion retry with
+        // the legacy stamp. The large Box buffer covers both layouts (the
+        // legacy handler only fills its smaller region). Live-verified on
+        // GT730/391.35: 0x78604 → -9, 0x1481C → status=0.
         let mut info = unsafe {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
             let mut b = b.assume_init();
@@ -1877,8 +1897,25 @@ impl PhysicalGpu {
         };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
-            .map_err(crate::Error::from)?;
+        let info_err = crate::status_result(
+            sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo,
+            st,
+        )
+        .map_err(crate::Error::from);
+        if let Err(ref e) = info_err {
+            if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+                info.version = NvVersion::with_version(
+                    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC_LEGACY,
+                );
+                let st2 = unsafe {
+                    NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
+                };
+                crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st2)
+                    .map_err(crate::Error::from)?;
+            } else {
+                info_err?;
+            }
+        }
 
         let mut status = unsafe {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE>::new_zeroed();
@@ -1891,8 +1928,26 @@ impl PhysicalGpu {
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetStatus(self.0, ptr::from_mut(&mut *status).cast())
         };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetStatus, st)
-            .map_err(crate::Error::from)?;
+        let status_err = crate::status_result(
+            sys::Api::NvAPI_GPU_ClockClkVfPointsGetStatus,
+            st,
+        )
+        .map_err(crate::Error::from);
+        if let Err(ref e) = status_err {
+            if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+                status.version = NvVersion::with_version(
+                    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE::MAGIC_LEGACY,
+                );
+                info.seed_status_header(&mut status);
+                let st2 = unsafe {
+                    NvAPI_GPU_ClockClkVfPointsGetStatus(self.0, ptr::from_mut(&mut *status).cast())
+                };
+                crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetStatus, st2)
+                    .map_err(crate::Error::from)?;
+            } else {
+                status_err?;
+            }
+        }
 
         // collapse the two 64-dword bank masks into 8 u64s
         let mut masks = [0u64; 8];
@@ -2041,6 +2096,9 @@ impl PhysicalGpu {
 
         // Same stack-overflow hazard as clk_vf_points_private: the control
         // block alone is 4.3 MB — allocate zeroed, never Box::new(default()).
+        // Legacy-driver fallback (R391.35): see clk_vf_points_private — old
+        // drivers reject the R610 magics with IncompatibleStructVersion; retry
+        // with the small-table legacy stamps (MAGIC_LEGACY).
         let mut info = unsafe {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
             let mut b = b.assume_init();
@@ -2050,8 +2108,25 @@ impl PhysicalGpu {
         };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
-            .map_err(crate::Error::from)?;
+        let info_err = crate::status_result(
+            sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo,
+            st,
+        )
+        .map_err(crate::Error::from);
+        if let Err(ref e) = info_err {
+            if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+                info.version = NvVersion::with_version(
+                    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC_LEGACY,
+                );
+                let st2 = unsafe {
+                    NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
+                };
+                crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st2)
+                    .map_err(crate::Error::from)?;
+            } else {
+                info_err?;
+            }
+        }
 
         let mut ctrl = unsafe {
             let b = Box::<clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
@@ -2063,8 +2138,27 @@ impl PhysicalGpu {
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *ctrl).cast())
         };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
-            .map_err(crate::Error::from)?;
+        let ctrl_err = crate::status_result(
+            sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl,
+            st,
+        )
+        .map_err(crate::Error::from);
+        if let Err(ref e) = ctrl_err {
+            eprintln!("DIAG ctrl_err status={:?}", e.nvapi_status());
+            if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+                ctrl.version =
+                    NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC_LEGACY);
+                ctrl.seed_masks_from_info(&info);
+                let st2 = unsafe {
+                    NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *ctrl).cast())
+                };
+                eprintln!("DIAG ctrl retry st2={:#x}", st2 as i32);
+                crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st2)
+                    .map_err(crate::Error::from)?;
+            } else {
+                ctrl_err?;
+            }
+        }
 
         let mut points = Vec::new();
         for bank in 0..2usize {
@@ -2967,7 +3061,34 @@ impl PhysicalGpu {
     > {
         trace!("gpu.power_limit_info()");
 
-        unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesGetInfo@get(self.0) => raw) }
+        // V2 first (default stamp). R391 on Kepler only accepts V1 (stamp
+        // 0x100B8, 184B) and rejects V2 with IncompatibleStructVersion. The V1
+        // INFO lacks a container RawConversion, but its entries carry the same
+        // min/def/max_power fields the V2 path reads, so map them here.
+        match unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesGetInfo@get(self.0) => raw) } {
+            Ok(v) => return Ok(v),
+            Err(crate::Error::Nvapi(crate::NvapiError {
+                status: crate::Status::IncompatibleStructVersion,
+                ..
+            })) => {}
+            Err(e) => return Err(e),
+        }
+        let mut v1 = power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_V1::zeroed();
+        use crate::sys::nvapi::VersionedStructField;
+        *v1.nvapi_version_mut() =
+            <power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_V1 as sys::nvapi::StructVersion<1>>::NVAPI_VERSION;
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfo(self.0, ptr::from_mut(&mut v1).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientPowerPoliciesGetInfo, st)
+            .map_err(crate::Error::from)?;
+        Ok(crate::clock::PowerInfo {
+            valid: v1.valid != 0,
+            entries: sys::types::counted(&*v1.entries, v1.count as usize)
+                .iter()
+                .map(RawConversion::convert_raw)
+                .collect::<Result<_, _>>()?,
+        })
     }
 
     pub fn power_limit(
@@ -2977,7 +3098,32 @@ impl PhysicalGpu {
     > {
         trace!("gpu.power_limit()");
 
-        unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesGetStatus@get(self.0) => raw) }
+        // V2 first (default stamp). R391 on Kepler only accepts V1 (stamp
+        // 0x10048, 72B) and rejects V2 with IncompatibleStructVersion. The V1
+        // STATUS lacks a container RawConversion, but its entries carry the
+        // same power_target field the V2 path reads, so map them here.
+        match unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesGetStatus@get(self.0) => raw) } {
+            Ok(v) => return Ok(v),
+            Err(crate::Error::Nvapi(crate::NvapiError {
+                status: crate::Status::IncompatibleStructVersion,
+                ..
+            })) => {}
+            Err(e) => return Err(e),
+        }
+        let mut v1 = power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_STATUS_V1::zeroed();
+        use crate::sys::nvapi::VersionedStructField;
+        *v1.nvapi_version_mut() =
+            <power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_STATUS_V1 as sys::nvapi::StructVersion<1>>::NVAPI_VERSION;
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClientPowerPoliciesGetStatus(self.0, ptr::from_mut(&mut v1).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientPowerPoliciesGetStatus, st)
+            .map_err(crate::Error::from)?;
+        sys::types::counted(&*v1.entries, v1.count as usize)
+            .iter()
+            .map(RawConversion::convert_raw)
+            .collect::<Result<_, _>>()
+            .map_err(Into::into)
     }
 
     pub fn set_power_limit<I: IntoIterator<Item = Percentage1000>>(
@@ -2985,15 +3131,40 @@ impl PhysicalGpu {
         values: I,
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_power_limit()");
+        let values: Vec<Percentage1000> = values.into_iter().collect();
         let mut data = power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_STATUS::default();
         //data.valid = 1;
-        for (entry, v) in data.entries.iter_mut().zip(values) {
+        for (entry, v) in data.entries.iter_mut().zip(&values) {
             trace!("gpu.set_power_limit({:?})", v);
             entry.power_target = v.0;
             data.count += 1;
         }
 
-        unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesSetStatus(self.0, &data)) }
+        match unsafe { nvcall!(NvAPI_GPU_ClientPowerPoliciesSetStatus(self.0, &data)) } {
+            Ok(()) => return Ok(()),
+            Err(crate::NvapiError {
+                status: crate::Status::IncompatibleStructVersion,
+                ..
+            }) => {}
+            Err(e) => return Err(e),
+        }
+        // R391/Kepler only accepts V1 (stamp 0x10048, 72B): retry the write
+        // with the V1 STATUS layout. V1 entries carry the same power_target
+        // field; the b/d padding words stay zero. The FFI decl is typed to the
+        // V2 alias, so cast the V1 buffer through a raw pointer.
+        let mut v1 = power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_STATUS_V1::zeroed();
+        use crate::sys::nvapi::VersionedStructField;
+        *v1.nvapi_version_mut() =
+            <power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_STATUS_V1 as sys::nvapi::StructVersion<1>>::NVAPI_VERSION;
+        for (entry, v) in v1.entries.iter_mut().zip(&values) {
+            entry.power_target = v.0;
+            v1.count += 1;
+        }
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClientPowerPoliciesSetStatus(self.0, ptr::from_ref(&v1).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientPowerPoliciesSetStatus, st)?;
+        Ok(())
     }
 
     /// Set the PPAB / Dynamic-Boost controller enable state (notebook platform
@@ -4028,7 +4199,29 @@ impl PhysicalGpu {
     > {
         trace!("gpu.thermal_limit_info()");
 
-        unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesGetInfo@get(self.0) => raw) }
+        // V3 first (default stamp). Old drivers — e.g. R391 on Kepler — only
+        // accept V2 (stamp 0x20068, 104B) and reject V3 with
+        // IncompatibleStructVersion. The V2 layout carries the same min/max/
+        // default temperature fields (just no pff_curve); its RawConversion
+        // yields the same Vec<ThermalInfo> target with pff=None.
+        match unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesGetInfo@get(self.0) => raw) } {
+            Ok(v) => return Ok(v),
+            Err(crate::Error::Nvapi(crate::NvapiError {
+                status: crate::Status::IncompatibleStructVersion,
+                ..
+            })) => {}
+            Err(e) => return Err(e),
+        }
+        let mut v2 = thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V2::zeroed();
+        use crate::sys::nvapi::VersionedStructField;
+        *v2.nvapi_version_mut() =
+            <thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_INFO_V2 as sys::nvapi::StructVersion<2>>::NVAPI_VERSION;
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClientThermalPoliciesGetInfo(self.0, ptr::from_mut(&mut v2).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientThermalPoliciesGetInfo, st)
+            .map_err(crate::Error::from)?;
+        v2.convert_raw().map_err(Into::into)
     }
 
     pub fn thermal_limit(
@@ -4038,7 +4231,28 @@ impl PhysicalGpu {
     > {
         trace!("gpu.thermal_limit()");
 
-        unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesGetStatus@get(self.0) => raw) }
+        // V3 first. Old drivers accept at most V2 (stamp 0x20038, 56B); fall
+        // back to it on IncompatibleStructVersion. V2 STATUS lacks the
+        // remove_tdp_limit/pff fields (both default to false/None) but maps to
+        // the same Vec<ThermalLimit> target.
+        match unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesGetStatus@get(self.0) => raw) } {
+            Ok(v) => return Ok(v),
+            Err(crate::Error::Nvapi(crate::NvapiError {
+                status: crate::Status::IncompatibleStructVersion,
+                ..
+            })) => {}
+            Err(e) => return Err(e),
+        }
+        let mut v2 = thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V2::zeroed();
+        use crate::sys::nvapi::VersionedStructField;
+        *v2.nvapi_version_mut() =
+            <thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V2 as sys::nvapi::StructVersion<2>>::NVAPI_VERSION;
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClientThermalPoliciesGetStatus(self.0, ptr::from_mut(&mut v2).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientThermalPoliciesGetStatus, st)
+            .map_err(crate::Error::from)?;
+        v2.convert_raw().map_err(Into::into)
     }
 
     pub fn set_thermal_limit<I: IntoIterator<Item = crate::thermal::ThermalLimit>>(
@@ -4046,14 +4260,41 @@ impl PhysicalGpu {
         value: I,
     ) -> crate::NvapiResult<()> {
         trace!("gpu.set_thermal_limit()");
+        let values: Vec<crate::thermal::ThermalLimit> = value.into_iter().collect();
         let mut data = thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS::default();
-        for (entry, v) in data.entries.iter_mut().zip(value) {
+        for (entry, v) in data.entries.iter_mut().zip(&values) {
             trace!("gpu.set_thermal_limit({:?})", v);
             *entry = v.to_raw();
             data.count += 1;
         }
 
-        unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesSetStatus(self.0, &data)) }
+        match unsafe { nvcall!(NvAPI_GPU_ClientThermalPoliciesSetStatus(self.0, &data)) } {
+            Ok(()) => return Ok(()),
+            Err(crate::NvapiError {
+                status: crate::Status::IncompatibleStructVersion,
+                ..
+            }) => {}
+            Err(e) => return Err(e),
+        }
+        // R391/Fermi only accepts V2 (stamp 0x20038, 56B): retry the write
+        // with the V2 STATUS layout. V2 entries carry policy_id +
+        // temp_limit_C + pstate only — remove_tdp_limit and pff are V3-only
+        // fields that old drivers don't support anyway, so dropping them is
+        // faithful (the hardware can't act on them).
+        let mut v2 = thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V2::zeroed();
+        use crate::sys::nvapi::VersionedStructField;
+        *v2.nvapi_version_mut() =
+            <thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V2 as sys::nvapi::StructVersion<2>>::NVAPI_VERSION;
+        for (entry, v) in v2.entries.iter_mut().zip(&values) {
+            entry.policy_id = v.policy.into();
+            entry.temp_limit_C = v.value.0 as u32;
+            v2.count += 1;
+        }
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClientThermalPoliciesSetStatus(self.0, ptr::from_ref(&v2).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientThermalPoliciesSetStatus, st)?;
+        Ok(())
     }
 
     /// Read the current target-temperature wall (mobile "targettemp") for the
@@ -5652,6 +5893,14 @@ pub enum Architecture {
     GV110(sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID),
     TU100(sys::gpu::ArchitectureImplementationTU100),
     GA100(sys::gpu::ArchitectureImplementationGA100),
+    // Ada Lovelace (AD) — RTX 40 / RTX 50 consumer, L4/L40 server. The
+    // authoritative NVIDIA nvapi.h assigns AD100 = 0x190 (Ada was previously
+    // assumed to be 0x180). AD106/AD107 are reported by the driver even
+    // though upstream nvapi.h only enumerates AD102/AD103/AD104; e.g. an
+    // RTX 4060 Laptop (AD107) reports implementation=7.
+    AD100(sys::gpu::ArchitectureImplementationAD100),
+    // Blackwell (GB) — RTX 50 consumer + B100/B200 server.
+    GB200(sys::gpu::ArchitectureImplementationGB200),
     Unknown {
         id: sys::gpu::NV_GPU_ARCHITECTURE_ID,
         implementation: sys::gpu::NV_GPU_ARCH_IMPLEMENTATION_ID,
@@ -5713,6 +5962,8 @@ impl Architecture {
             ),
             sys::gpu::NV_GPU_ARCHITECTURE_TU100 => Architecture::TU100(implementation.try_into()?),
             sys::gpu::NV_GPU_ARCHITECTURE_GA100 => Architecture::GA100(implementation.try_into()?),
+            sys::gpu::NV_GPU_ARCHITECTURE_AD100 => Architecture::AD100(implementation.try_into()?),
+            sys::gpu::NV_GPU_ARCHITECTURE_GB200 => Architecture::GB200(implementation.try_into()?),
             _ => return Err(Default::default()),
         })
     }
@@ -5738,6 +5989,8 @@ impl Architecture {
             Architecture::GV110(..) => ArchitectureId::GV110,
             Architecture::TU100(..) => ArchitectureId::TU100,
             Architecture::GA100(..) => ArchitectureId::GA100,
+            Architecture::AD100(..) => ArchitectureId::AD100,
+            Architecture::GB200(..) => ArchitectureId::GB200,
             Architecture::Unknown { id, .. } => return id.try_into().map_err(|_| id),
         })
     }
@@ -5767,6 +6020,8 @@ impl Architecture {
             Architecture::GV110(i) => i,
             Architecture::TU100(i) => i.repr().into(),
             Architecture::GA100(i) => i.repr().into(),
+            Architecture::AD100(i) => i.repr().into(),
+            Architecture::GB200(i) => i.repr().into(),
             Architecture::Unknown { implementation, .. } => implementation,
         }
     }
@@ -5791,6 +6046,8 @@ impl fmt::Display for Architecture {
             Architecture::GV100(i) => fmt::Display::fmt(i, f),
             Architecture::TU100(i) => fmt::Display::fmt(i, f),
             Architecture::GA100(i) => fmt::Display::fmt(i, f),
+            Architecture::AD100(i) => fmt::Display::fmt(i, f),
+            Architecture::GB200(i) => fmt::Display::fmt(i, f),
             Architecture::G78(implementation)
             | Architecture::GM000(implementation)
             | Architecture::GV110(implementation)
