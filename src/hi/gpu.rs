@@ -1241,6 +1241,16 @@ impl Gpu {
         }
     }
 
+    /// Reads the full VBIOS image via `NvAPI_GPU_GetVbiosImage`
+    pub fn vbios_image(&self) -> crate::NvapiResult<Vec<u8>> {
+        self.gpu.vbios_image()
+    }
+
+    /// VBIOS version string (e.g. "70.08.0F.00.05") via
+    pub fn vbios_version_string(&self) -> crate::NvapiResult<String> {
+        self.gpu.vbios_version_string()
+    }
+
     /// V/F curve points from the private ClockClient V/F-POINTS read path
     /// (GetInfo 0x8895B510 → GetStatus 0x7FEE9032, RM 0x20809061/0x20809062).
     /// Units live-calibrated vs the public GPC VFP curve. `Ok(None)` where

@@ -152,6 +152,44 @@ nvapi! {
     pub unsafe fn NvAPI_GPU_GetVbiosVersionString;
 }
 
+// VBIOS image retrieval (ID 0xFC13EE11). IDA-verified against deployed
+// 391.35 nvapi64.dll (handler @0x18014E5A0): the handler issues RM escape
+// 0x0700004F (distinct from the VFP family's 0x0700004A) to read the full
+// VBIOS image into the caller's buffer.
+//
+// Layout (16 bytes):
+// - `version` (u32 @+0): struct stamp. Handler accepts 0x10008 (V1, 64 KiB
+//   buffer) or 0x20010 (V2, ~1 MiB buffer). With V1 the image is truncated
+//   to 0x10000; V2 returns the full image (typical VBIOS is 64–256 KiB).
+// - `size` (u32 @+4): input = caller buffer capacity; output = actual image
+//   size. Input 0 makes the handler fill `size` with the default (1024000)
+//   and return without copying (size-query mode).
+// - `pImage` (*mut u8 @+8): caller-allocated buffer; the image is copied
+//   here when `size` on output ≤ input capacity.
+nvstruct! {
+    pub struct NV_GPU_VBIOS_IMAGE {
+        /// Struct stamp: 0x10008 (V1, 64 KiB) or 0x20010 (V2, ~1 MiB).
+        pub version: NvVersion,
+        /// Input = caller buffer capacity; output = actual image size.
+        pub size: u32,
+        /// Caller-allocated buffer pointer, stored as a raw `usize` because
+        /// the `nvstruct!` derive requires `IntoBytes`/`FromBytes` (zerocopy),
+        /// which raw pointers don't implement. Cast to `*mut u8` at the call
+        /// site. Layout is the ABI pointer at offset +8.
+        pub pImage: usize,
+    }
+}
+
+nvapi! {
+    pub type GPU_GetVbiosImageFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pVbiosImage: *mut NV_GPU_VBIOS_IMAGE) -> NvAPI_Status;
+
+    /// Reads the full VBIOS image. On legacy drivers (391.35) the escape
+    /// 0x0700004F succeeds where the VFP-curve escape 0x0700004A is
+    /// kernel-unimplemented — so this is the viable path to the V/F curve on
+    /// old GPUs: read the image, then parse the BIT VoltageTable offline.
+    pub unsafe fn NvAPI_GPU_GetVbiosImage;
+}
+
 nvapi! {
     pub type GPU_GetPCIIdentifiersFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pDeviceId: *mut u32, pSubSystemId: *mut u32, pRevisionId: *mut u32, pExtDeviceId: *mut u32) -> NvAPI_Status;
 
