@@ -600,8 +600,16 @@ pub struct ClkVfSegment {
     /// "vf_curve" (type 8/13/18) or "pstate_bins" (type 7) — plotting hint
     pub kind: ClkVfSegmentKind,
     /// EMPIRICAL domain attribution (advisory), by ordinal within the bank:
-    /// vf_curve #1=GPC, #2=XBAR, #3=HOST; pstate_bins #1=Mem, #2=Host.
-    /// Live A/B on an RTX 4060 Laptop / R610.74; the ordinal order is
+    /// vf_curve #1=GPC, #2=XBAR, #3=SYS; pstate_bins #1=Mem, #2=DISP.
+    /// Live A/B on an RTX 4060 Laptop / R610.74. Curve #3 was initially
+    /// mislabeled HOST until a voltage-lock experiment showed it tracks SYS
+    /// (locked 0.89 V → curve reads 1980 MHz, live SYS 1994 MHz ≈ one
+    /// 15 MHz step; the Host clock never exceeds 1350 MHz). The curve is
+    /// best read as the uncore/MSVDD-domain cluster curve (SYS/Hub/Host
+    /// family share it; offsetting the ClkDomains "host" record shifts it
+    /// too). Bins #2 was likewise mislabeled HOST until Disp was observed
+    /// running at 675/1080/1350 MHz — values inside the bin list (and
+    /// MEASURE_FREQ shows Disp bit 6 at 1080 MHz). The ordinal order is
     /// stable per driver but another GPU may pack domains differently —
     /// confirm by offsetting one domain and watching which segment's
     /// per-point current/default values shift.
@@ -627,7 +635,8 @@ pub struct ClkVfSegment {
 pub enum ClkVfDomainHint {
     Gpc,
     Xbar,
-    Host,
+    Sys,
+    Disp,
     Mem,
     #[default]
     Unknown,
@@ -639,7 +648,8 @@ impl ClkVfDomainHint {
         match self {
             ClkVfDomainHint::Gpc => "gpc",
             ClkVfDomainHint::Xbar => "xbar",
-            ClkVfDomainHint::Host => "host",
+            ClkVfDomainHint::Sys => "sys",
+            ClkVfDomainHint::Disp => "disp",
             ClkVfDomainHint::Mem => "mem",
             ClkVfDomainHint::Unknown => "unknown",
         }

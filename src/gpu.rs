@@ -2110,14 +2110,17 @@ impl PhysicalGpu {
             s.domain_hint = match (s.kind, *ord) {
                 (crate::clock::ClkVfSegmentKind::VfCurve, 0) => crate::clock::ClkVfDomainHint::Gpc,
                 (crate::clock::ClkVfSegmentKind::VfCurve, 1) => crate::clock::ClkVfDomainHint::Xbar,
-                (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Host,
+                // initially mislabeled HOST — voltage-lock A/B shows it
+                // tracks SYS (see ClkVfSegment::domain_hint doc)
+                (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Sys,
                 (crate::clock::ClkVfSegmentKind::PstateBins, 0) => {
                     crate::clock::ClkVfDomainHint::Mem
                 }
-                // 4060: host/disp pstate ceiling; Turing: unknown 5-bin
-                // list — pstate-family either way
+                // 4060: disp pstate ceiling (675/1080/1350 observed live;
+                // initially mislabeled HOST); Turing: unknown 5-bin list —
+                // pstate-family either way
                 (crate::clock::ClkVfSegmentKind::PstateBins, 1) => {
-                    crate::clock::ClkVfDomainHint::Host
+                    crate::clock::ClkVfDomainHint::Disp
                 }
                 _ => crate::clock::ClkVfDomainHint::Unknown,
             };
