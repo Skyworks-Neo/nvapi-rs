@@ -2049,41 +2049,51 @@ impl PhysicalGpu {
         let mut vf_ordinal = [0usize; 2];
         let mut bins_ordinal = [0usize; 2];
         for p in &points {
-            let last = segments.last_mut();
-            match last {
-                Some(s)
-                    if s.bank == p.bank
-                        && s.record_type == p.record_type
-                        && s.end_index + 1 == p.index
-                        // a same-type curve CONCATENATION (GPC then XBAR,
-                        // both type 8) restarts the voltage axis — split
-                        // there too, or plotting would glue two domains
-                        // into one curve
-                        && p.voltage_uV >= s.voltage_uV_max =>
-                {
-                    s.end_index = p.index;
-                    s.count += 1;
-                    s.voltage_uV_min = s.voltage_uV_min.min(p.voltage_uV);
-                    s.voltage_uV_max = s.voltage_uV_max.max(p.voltage_uV);
-                    s.freq_default_mhz_min = s.freq_default_mhz_min.min(p.freq_default_mhz);
-                    s.freq_default_mhz_max = s.freq_default_mhz_max.max(p.freq_default_mhz);
-                }
-                _ => {
-                    segments.push(crate::clock::ClkVfSegment {
-                        bank: p.bank,
-                        record_type: p.record_type,
-                        // provisional — re-classified after the runs are built
-                        kind: crate::clock::ClkVfSegmentKind::VfCurve,
-                        domain_hint: crate::clock::ClkVfDomainHint::Unknown,
-                        start_index: p.index,
-                        end_index: p.index,
-                        count: 1,
-                        voltage_uV_min: p.voltage_uV,
-                        voltage_uV_max: p.voltage_uV,
-                        freq_default_mhz_min: p.freq_default_mhz,
-                        freq_default_mhz_max: p.freq_default_mhz,
-                    })
-                }
+            // Merge decision: same bank/type/index-contiguity, and the shared
+            // axis must not reset. The PRIMARY axis is VOLTAGE — a reset there
+            // marks a same-type curve CONCATENATION (GPC then XBAR, both type
+            // 8) — split there, or plotting would glue two domains into one
+            // curve. Some drivers never fill the voltage fields (GP100/TCC
+            // 582.41: every type-1 record reads 0 µV, live-verified); there
+            // the voltage axis is degenerate (segment max stays 0) and the
+            // rule would never fire — fall back to the FREQUENCY axis, which
+            // restarts at exactly the same boundary (P100 bank 0: 80-pt core
+            // curve 405→1328 MHz, then the second 80-pt curve restarts at
+            // 405). Without the fallback the two domains glue into one
+            // 160-point "curve" and the ordinal domain attribution collapses.
+            let merges = segments.last().is_some_and(|s| {
+                s.bank == p.bank
+                    && s.record_type == p.record_type
+                    && s.end_index + 1 == p.index
+                    && if s.voltage_uV_max == 0 {
+                        p.freq_default_mhz >= s.freq_default_mhz_max
+                    } else {
+                        p.voltage_uV >= s.voltage_uV_max
+                    }
+            });
+            if merges {
+                let s = segments.last_mut().expect("is_some_and just verified");
+                s.end_index = p.index;
+                s.count += 1;
+                s.voltage_uV_min = s.voltage_uV_min.min(p.voltage_uV);
+                s.voltage_uV_max = s.voltage_uV_max.max(p.voltage_uV);
+                s.freq_default_mhz_min = s.freq_default_mhz_min.min(p.freq_default_mhz);
+                s.freq_default_mhz_max = s.freq_default_mhz_max.max(p.freq_default_mhz);
+            } else {
+                segments.push(crate::clock::ClkVfSegment {
+                    bank: p.bank,
+                    record_type: p.record_type,
+                    // provisional — re-classified after the runs are built
+                    kind: crate::clock::ClkVfSegmentKind::VfCurve,
+                    domain_hint: crate::clock::ClkVfDomainHint::Unknown,
+                    start_index: p.index,
+                    end_index: p.index,
+                    count: 1,
+                    voltage_uV_min: p.voltage_uV,
+                    voltage_uV_max: p.voltage_uV,
+                    freq_default_mhz_min: p.freq_default_mhz,
+                    freq_default_mhz_max: p.freq_default_mhz,
+                });
             }
         }
 
@@ -2102,6 +2112,24 @@ impl PhysicalGpu {
                 crate::clock::ClkVfSegmentKind::PstateBins
             };
         }
+        // Pascal-HBM detection (compute cards: GP100/V100): bank 0 packs
+        // exactly TWO V/F curves of 80 points each — GPC 0..79 then HBM MEM
+        // 80..159. The 2nd was long mislabeled XBAR; live A/B confirmed it
+        // is the MEM domain (MEM domain offset hits 80..159). This is a
+        // STRUCTURAL marker, not a freq-ladder match: it is immune to the
+        // default-frequency drift an active OC introduces, and it cannot
+        // false-fire on consumer Pascal (single 80-pt GPC curve, no 2nd
+        // segment) nor on Ada (127-pt curves, not 80). Only HBM Pascal
+        // produces the 80+80 split.
+        let mut first_vf_curve_count: [u16; 2] = [0; 2];
+        for s in segments.iter() {
+            if s.kind == crate::clock::ClkVfSegmentKind::VfCurve && s.bank as usize <= 1 {
+                // record the FIRST vf_curve's count per bank (others stay 0)
+                if first_vf_curve_count[s.bank as usize] == 0 {
+                    first_vf_curve_count[s.bank as usize] = s.count;
+                }
+            }
+        }
         for s in segments.iter_mut() {
             let ord = &mut (match s.kind {
                 crate::clock::ClkVfSegmentKind::VfCurve => &mut vf_ordinal,
@@ -2109,7 +2137,15 @@ impl PhysicalGpu {
             }[s.bank as usize]);
             s.domain_hint = match (s.kind, *ord) {
                 (crate::clock::ClkVfSegmentKind::VfCurve, 0) => crate::clock::ClkVfDomainHint::Gpc,
-                (crate::clock::ClkVfSegmentKind::VfCurve, 1) => crate::clock::ClkVfDomainHint::Xbar,
+                (crate::clock::ClkVfSegmentKind::VfCurve, 1) => {
+                    // Pascal-HBM: two 80-pt curves in bank 0 → 2nd is HBM MEM.
+                    // Otherwise Ada: GPC(127) then a distinct XBAR(127) curve.
+                    if s.count == 80 && first_vf_curve_count[s.bank as usize] == 80 {
+                        crate::clock::ClkVfDomainHint::Mem
+                    } else {
+                        crate::clock::ClkVfDomainHint::Xbar
+                    }
+                }
                 // initially mislabeled HOST — voltage-lock A/B shows it
                 // tracks SYS (see ClkVfSegment::domain_hint doc)
                 (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Sys,
