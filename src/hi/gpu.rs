@@ -241,6 +241,9 @@ impl Gpu {
             name: self.gpu.full_name()?,
             codename: self.gpu.short_name()?,
             bios_version: self.gpu.vbios_version_string()?,
+            // TCC devices fail GetDriverModel with NvidiaDeviceNotFound (no
+            // WDDM driver model) — treated as "feature absent" by
+            // allowable_result since the -6 addition; see hi/mod.rs.
             driver_model: allowable_result(self.gpu.driver_model())?.ok(),
             bus: allowable_result_fallback(self.gpu.bus_info(), Default::default())?,
             memory: allowable_result(self.gpu.memory_info())?.ok(),
