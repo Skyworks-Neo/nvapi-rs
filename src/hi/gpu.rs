@@ -188,6 +188,14 @@ pub struct GpuSettings {
     pub pstate_deltas: BTreeMap<PState, BTreeMap<ClockDomain, KilohertzDelta>>,
     pub overvolt: Vec<MicrovoltsDelta>,
     pub vfp_locks: BTreeMap<PerfLimitId, ClockLockEntry>,
+    /// All P-States the driver exposes (via `NvAPI_GPU_GetPstates20`), in
+    /// ascending order — the SAME source `GpuInfo.pstate_limits` renders. This
+    /// is the full list (including non-editable P-States); `pstate_deltas`
+    /// above carries only the editable subset with their clock offsets.
+    /// Surfaced so callers that only need the P-State roster (e.g. pynvoc's
+    /// `supported_pstates` on NVAPI-only backends) don't have to run the full
+    /// `QueryGpuInfo` just for this list.
+    pub pstates: Vec<PState>,
 }
 
 impl Gpu {
@@ -570,6 +578,9 @@ impl Gpu {
                 Ok(v) => v.into_iter().map(|lock| (lock.limit, lock)).collect(),
                 Err(..) => Default::default(),
             },
+            // Full P-State roster (ascending) from the same pstates() call —
+            // captured before the editable filter drops the non-editable ones.
+            pstates: pstates.iter().map(|p| p.id).collect(),
             pstate_deltas: pstates
                 .into_iter()
                 .filter(|p| p.editable)
@@ -1242,13 +1253,37 @@ impl Gpu {
     }
 
     /// Reads the full VBIOS image via `NvAPI_GPU_GetVbiosImage`
+    /// (0xFC13EE11, escape 0x0700004F). On legacy drivers (391.35) this escape
+    /// succeeds where the VFP-curve escape 0x0700004A is kernel-unimplemented,
+    /// so this is the viable path to the V/F curve on old GPUs: read the
+    /// image, then parse the BIT VoltageTable offline.
     pub fn vbios_image(&self) -> crate::NvapiResult<Vec<u8>> {
         self.gpu.vbios_image()
     }
 
     /// VBIOS version string (e.g. "70.08.0F.00.05") via
+    /// `NvAPI_GPU_GetVbiosVersionString`.
     pub fn vbios_version_string(&self) -> crate::NvapiResult<String> {
         self.gpu.vbios_version_string()
+    }
+
+    /// Fan-policy capabilities via the private ClientFanPoliciesGetInfo
+    /// (0x52B76D12): V2 block (0x2004C, raw) on modern drivers, legacy V1
+    /// block (0x1003C, decoded policy entries) on R391-era drivers.
+    /// `Ok(None)` where the driver doesn't expose the private interface.
+    pub fn fan_policy_info(&self) -> crate::Result<Option<crate::FanPolicyInfo>> {
+        match self.gpu.fan_policy_info() {
+            Ok(v) => Ok(Some(v)),
+            Err(e)
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported | crate::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(crate::Error::Nvapi(e)),
+        }
     }
 
     /// V/F curve points from the private ClockClient V/F-POINTS read path
@@ -1280,9 +1315,17 @@ impl Gpu {
             Err(crate::Error::Nvapi(e))
                 if matches!(
                     e.status,
-                    crate::Status::NotSupported | crate::Status::NoImplementation
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::IncompatibleStructVersion
                 ) =>
             {
+                // IncompatibleStructVersion: legacy drivers (e.g. 391.35) reject
+                // both the R610 and the legacy control stamp on GPUs that don't
+                // expose a control table (GT730/Fermi). The read path
+                // (GetInfo/GetStatus) still succeeds with the legacy stamp; the
+                // control readback is optional, so soft-fail to None rather
+                // than aborting the whole `get-private-vftable` query.
                 Ok(None)
             }
             Err(e) => Err(e),

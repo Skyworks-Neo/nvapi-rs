@@ -418,8 +418,8 @@ impl PhysicalGpu {
     pub fn vbios_image(&self) -> crate::NvapiResult<Vec<u8>> {
         trace!("gpu.vbios_image()");
         use crate::sys::api::NvAPI_GPU_GetVbiosImage;
-        use crate::sys::nvapi::NvVersion;
         use crate::sys::gpu::NV_GPU_VBIOS_IMAGE;
+        use crate::sys::nvapi::NvVersion;
 
         // 1 MiB buffer (V2 capacity). The handler truncates to actual size on
         // output. Boxed because 1 MiB on the main thread stack risks overflow
@@ -1289,8 +1289,15 @@ impl PhysicalGpu {
 
         let mut info = NV_GPU_VOLT_RAILS_INFO::default();
         let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
-        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo, st)
-            .map_err(crate::Error::from)?;
+        // Legacy drivers (e.g. R391 on Fermi) only accept the V1 stamp
+        // (0x10ACC/2764B) whose layout is unmapped — the per-rail telemetry
+        // subsystem this family exposes is Blackwell-era. No faithful
+        // downgrade exists; surface as NotSupported (soft-fails to None in hi).
+        Self::map_legacy_struct_version(crate::status_result(
+            sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo,
+            st,
+        ))
+        .map_err(crate::Error::from)?;
 
         let mut control = NV_GPU_VOLT_RAILS_CONTROL::default();
         control.seed_from_info(&info);
@@ -1351,8 +1358,13 @@ impl PhysicalGpu {
 
         let mut info = NV_GPU_VOLT_RAILS_INFO::default();
         let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
-        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo, st)
-            .map_err(crate::Error::from)?;
+        // Same legacy-driver mapping as volt_rails(): R391/Fermi only accepts
+        // the unmapped V1 stamp → NotSupported.
+        Self::map_legacy_struct_version(crate::status_result(
+            sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo,
+            st,
+        ))
+        .map_err(crate::Error::from)?;
 
         let dense = Self::dense_index_for(info.rail_mask, rail_bit)?;
 
@@ -1936,11 +1948,8 @@ impl PhysicalGpu {
         };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
-        let info_err = crate::status_result(
-            sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo,
-            st,
-        )
-        .map_err(crate::Error::from);
+        let info_err = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from);
         if let Err(ref e) = info_err {
             if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
                 info.version = NvVersion::with_version(
@@ -1967,11 +1976,8 @@ impl PhysicalGpu {
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetStatus(self.0, ptr::from_mut(&mut *status).cast())
         };
-        let status_err = crate::status_result(
-            sys::Api::NvAPI_GPU_ClockClkVfPointsGetStatus,
-            st,
-        )
-        .map_err(crate::Error::from);
+        let status_err = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetStatus, st)
+            .map_err(crate::Error::from);
         if let Err(ref e) = status_err {
             if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
                 status.version = NvVersion::with_version(
@@ -2147,11 +2153,8 @@ impl PhysicalGpu {
         };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
-        let info_err = crate::status_result(
-            sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo,
-            st,
-        )
-        .map_err(crate::Error::from);
+        let info_err = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from);
         if let Err(ref e) = info_err {
             if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
                 info.version = NvVersion::with_version(
@@ -2177,11 +2180,8 @@ impl PhysicalGpu {
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *ctrl).cast())
         };
-        let ctrl_err = crate::status_result(
-            sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl,
-            st,
-        )
-        .map_err(crate::Error::from);
+        let ctrl_err = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+            .map_err(crate::Error::from);
         if let Err(ref e) = ctrl_err {
             if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
                 ctrl.version =
@@ -4285,7 +4285,10 @@ impl PhysicalGpu {
         *v2.nvapi_version_mut() =
             <thermal::undocumented::NV_GPU_CLIENT_THERMAL_POLICIES_STATUS_V2 as sys::nvapi::StructVersion<2>>::NVAPI_VERSION;
         let st = unsafe {
-            sys::api::NvAPI_GPU_ClientThermalPoliciesGetStatus(self.0, ptr::from_mut(&mut v2).cast())
+            sys::api::NvAPI_GPU_ClientThermalPoliciesGetStatus(
+                self.0,
+                ptr::from_mut(&mut v2).cast(),
+            )
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClientThermalPoliciesGetStatus, st)
             .map_err(crate::Error::from)?;
@@ -4843,14 +4846,10 @@ impl PhysicalGpu {
     /// layout (policy-id/flag mapping) than the V2 curve-table layout nvoc
     /// expects — no faithful downgrade is possible, so the call is genuinely
     /// unsupported on those drivers.
-    fn map_legacy_struct_version<T>(
-        result: crate::NvapiResult<T>,
-    ) -> crate::NvapiResult<T> {
+    fn map_legacy_struct_version<T>(result: crate::NvapiResult<T>) -> crate::NvapiResult<T> {
         match result {
             Ok(v) => Ok(v),
-            Err(ne)
-                if ne.status == crate::Status::IncompatibleStructVersion =>
-            {
+            Err(ne) if ne.status == crate::Status::IncompatibleStructVersion => {
                 Err(crate::NvapiError::new(ne.nvid, crate::Status::NotSupported))
             }
             Err(e) => Err(e),
@@ -4858,24 +4857,57 @@ impl PhysicalGpu {
     }
 
     /// Read the fan-policy capabilities block (`ClientFanPoliciesGetInfo` NDA
-    /// 0x52B76D12, structure magic `0x2004C`, 76 bytes). Size/magic
-    /// corroborated by EVGA Precision X1 (ManagedNvApi.dll). Field layout
-    /// beyond the version dword is opaque — returned raw for decoding.
-    pub fn fan_policy_info(
-        &self,
-    ) -> crate::NvapiResult<cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_INFO> {
+    /// 0x52B76D12). Modern drivers fill the V2 block (magic `0x2004C`, 76B —
+    /// size/magic corroborated by EVGA Precision X1; fields beyond the
+    /// version dword opaque, returned raw). Legacy drivers (R391-era) reject
+    /// the V2 stamp with INCOMPATIBLE_STRUCT_VERSION but accept the V1 block
+    /// (magic `0x1003C`, 60B) — the R391 "which fan policies exist / which
+    /// is active" query — which is faithfully decoded into `entries`.
+    /// Unlike the curve GetControl/SetControl family there is no semantic
+    /// loss: this call never carries curve points in either layout.
+    pub fn fan_policy_info(&self) -> crate::NvapiResult<FanPolicyInfo> {
         trace!("gpu.fan_policy_info()");
 
-        let raw = unsafe {
+        let v2 = unsafe {
             nvcall!(NvAPI_GPU_ClientFanPoliciesGetInfo@get{
                 cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_INFO::new()
             }(self.0))
         };
-        // Old drivers (e.g. R391/Fermi) only implement the legacy V1
-        // (stamp 0x1003C, 60B), which is a policy-id/flag mapping — a
-        // different layout, not a version of the V2 (0x2004C/76B) info.
-        // No faithful mapping exists; surface as NotSupported.
-        Self::map_legacy_struct_version(raw)
+        match v2 {
+            Ok(raw) => {
+                return Ok(FanPolicyInfo {
+                    stamp: cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_INFO::MAGIC,
+                    raw: raw.data.to_vec(),
+                    entries: Vec::new(),
+                });
+            }
+            Err(e) if e.status == crate::Status::IncompatibleStructVersion => {
+                // legacy driver → retry with the V1 stamp below
+            }
+            Err(e) => return Err(e),
+        }
+
+        let mut v1 = cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_INFO_LEGACY_V1::new();
+        let st = unsafe {
+            crate::sys::api::NvAPI_GPU_ClientFanPoliciesGetInfo(
+                self.0,
+                ptr::from_mut(&mut v1).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientFanPoliciesGetInfo, st)?;
+        let count = v1.count.min(4) as usize;
+        Ok(FanPolicyInfo {
+            stamp: cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_INFO_LEGACY_V1::MAGIC,
+            raw: Vec::new(),
+            entries: v1.entries[..count]
+                .iter()
+                .map(|e| FanPolicyInfoEntry {
+                    dword0: e.dword0,
+                    active: e.active != 0,
+                    flags: e.flags,
+                })
+                .collect(),
+        })
     }
 
     /// Read the GPU fan-curve table (`ClientFanPoliciesGetControl` NDA
@@ -5074,11 +5106,25 @@ impl PhysicalGpu {
         let mut ctrl = vec![0u8; NV_GPU_FAN_COOLER_CONTROL_SIZE];
         ctrl[..4].copy_from_slice(&NV_GPU_FAN_COOLER_CONTROL_MAGIC.to_ne_bytes());
         write_u32(&mut ctrl, 0x04, mask);
-        unsafe {
+        let ctrl_res = unsafe {
             nvcall!(NvAPI_GPU_FanCoolerGetControl(
                 self.0,
                 ctrl.as_mut_ptr() as *mut _
-            ))?;
+            ))
+        };
+        if let Err(e) = ctrl_res {
+            // GetInfo succeeded (init gate + stamps pass) but the per-cooler
+            // control read failed with a generic Error: legacy kernels
+            // (e.g. R391 on Fermi) don't implement the fan-cooler RM escape
+            // at all. The driver exposes no coolers through this NDA path —
+            // report an empty list (this API's job is to say which coolers
+            // exist), mirroring how the public cooler path soft-fails to
+            // empty in `settings()`. Surface anything that is NOT the
+            // escape-unimplemented signature unchanged.
+            if e.status == crate::Status::Error {
+                return Ok(Vec::new());
+            }
+            return Err(e);
         }
 
         // Status struct: current speed + current PWM per cooler.
@@ -5355,8 +5401,13 @@ impl PhysicalGpu {
         let res = unsafe { nvcall!(NvAPI_GPU_ClientFanCoolersSetControl(self.0, &data)) };
 
         match res {
+            // NDA→public downgrade. Legacy drivers reject the NDA ID with
+            // different codes: R391 (Fermi/Kepler) has no implementation at
+            // all (-3 NO_IMPLEMENTATION); some others report -4
+            // NOT_SUPPORTED. Both mean "fall back to the public
+            // NvAPI_GPU_SetCoolerLevels", which exists since the R3xx era.
             Err(crate::NvapiError {
-                status: Status::NotSupported,
+                status: Status::NotSupported | Status::NoImplementation,
                 ..
             }) => unsafe {
                 nvcall!(NvAPI_GPU_SetCoolerLevels(
@@ -5892,23 +5943,19 @@ impl DriverModel {
     }
 
     pub fn wddm(&self) -> (u8, u8) {
-        // 2.0 or 1.(value >> 8)
+        // Packed nibbles: major = bits 12-15, minor = bits 8-11. WDDM 2.x
+        // spans 2.0-2.9 (the old "2.x == 2.0" special case was wrong: e.g.
+        // Win10 1709 reports 0x00002300 = WDDM 2.3), 3.x the same encoding.
         let major = ((self.value >> 12) & 0xf) as u8;
-        (
-            major,
-            if major == 2 {
-                0
-            } else {
-                (self.value >> 8) as u8 & 0xf
-            },
-        )
+        let minor = ((self.value >> 8) & 0xf) as u8;
+        (major, minor)
     }
 }
 
 impl fmt::Display for DriverModel {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let wddm = self.wddm();
-        write!(f, "WDDM {}.{:02}", wddm.0, wddm.1)
+        write!(f, "WDDM {}.{}", wddm.0, wddm.1)
     }
 }
 
@@ -6328,6 +6375,34 @@ pub struct PerfFreqCapEntry {
     pub type_marker: u32,
     pub freq_khz: u32,
     pub locked: bool,
+}
+
+/// Fan-policy capabilities, normalized across the two GetInfo layouts:
+/// modern drivers fill the V2 block (magic `0x2004C`, 76B — fields beyond
+/// the version dword opaque, returned raw), legacy drivers (R391-era) fill
+/// the V1 block (magic `0x1003C`, 60B — decoded into `entries`).
+#[derive(Debug, Clone)]
+pub struct FanPolicyInfo {
+    /// Which layout the driver filled: 0x2004C (V2, raw) or 0x1003C (V1).
+    pub stamp: u32,
+    /// V2 path: the opaque 72B payload for offline decoding; V1: empty.
+    pub raw: Vec<u8>,
+    /// V1 path: decoded per-policy entries (which policies exist, which is
+    /// active, two capability flag bits each); V2: empty.
+    pub entries: Vec<FanPolicyInfoEntry>,
+}
+
+/// One policy entry of the legacy (`0x1003C`) FanPolicies GetInfo block.
+#[derive(Debug, Clone, Copy)]
+pub struct FanPolicyInfoEntry {
+    /// Entry dword 0 — not written by the 391.35 GET handler (request
+    /// field or policy id of another revision); surfaced raw.
+    pub dword0: u32,
+    /// 1 on the entry whose mask-bit index equals the driver's
+    /// active-policy byte.
+    pub active: bool,
+    /// bit0 from per-policy record byte [14·i+13], bit1 from [14·i+14].
+    pub flags: u32,
 }
 
 /// Per-cooler info aggregated from the private FanCoolers family (NDA):

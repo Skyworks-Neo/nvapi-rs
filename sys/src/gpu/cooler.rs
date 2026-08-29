@@ -816,6 +816,70 @@ pub mod undocumented {
         pub unsafe fn NvAPI_GPU_ClientFanPoliciesGetInfo;
     }
 
+    /// ClientFanPolicies GetInfo LEGACY capabilities block (structure magic
+    /// `0x1003C`, 60 bytes) — the only layout R391-era drivers accept (they
+    /// reject the `0x2004C` V2 stamp with INCOMPATIBLE_STRUCT_VERSION).
+    /// Layout RE'd from the 391.35 nvapi64.dll GetInfo handler (0x180111F10):
+    /// the driver runs RM escape 0x07000038 (cmd 0x20800532) which fills a
+    /// 232-byte internal fanPolicyInfo table — dword 0 = policy mask (≤16
+    /// bits, indices ≥0x10 rejected), byte +4 = active-policy index — then
+    /// emits one 12-byte entry per set mask bit:
+    ///   +0x00 u32  dword0 (not written by the handler on the GET path; may
+    ///              be a request field or policy id from another revision)
+    ///   +0x04 u32  active marker — 1 on the entry whose mask-bit index
+    ///              equals the internal active-policy byte
+    ///   +0x08 u32  flags — bit0 from per-policy record byte [14·i+13],
+    ///              bit1 from byte [14·i+14] (semantics TBD via live probe)
+    /// Unlike the V2 (0x2004C) path this layout carries NO curve points — it
+    /// is the R391-era "which fan policies exist / which is active" query.
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
+    pub struct NV_GPU_CLIENT_FAN_POLICIES_INFO_LEGACY_V1 {
+        /// structure magic — `0x1003C` (v1 | 60)
+        pub version: u32,
+        /// +0x04: flags — bit0 set when the driver emitted ≥1 entry
+        pub flags: u32,
+        /// +0x08: emitted entry count (≤ 4 on the observed path)
+        pub count: u8,
+        /// +0x09..+0x0C padding
+        pub padding: [u8; 3],
+        /// +0x0C: 4 × 12-byte entries
+        pub entries: [NV_GPU_CLIENT_FAN_POLICIES_INFO_LEGACY_ENTRY; 4],
+    }
+
+    /// One 12-byte policy entry of the legacy (`0x1003C`) GetInfo block.
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug, Default)]
+    pub struct NV_GPU_CLIENT_FAN_POLICIES_INFO_LEGACY_ENTRY {
+        /// +0x00: not written by the 391.35 GET handler (see struct docs)
+        pub dword0: u32,
+        /// +0x04: 1 on the active policy, 0 otherwise
+        pub active: u32,
+        /// +0x08: bit0/bit1 capability flags per policy
+        pub flags: u32,
+    }
+
+    impl NV_GPU_CLIENT_FAN_POLICIES_INFO_LEGACY_V1 {
+        /// The `0x1003C` structure magic accepted by legacy drivers.
+        pub const MAGIC: u32 = 0x1003C;
+
+        pub fn new() -> Self {
+            Self {
+                version: Self::MAGIC,
+                flags: 0,
+                count: 0,
+                padding: [0u8; 3],
+                entries: [Default::default(); 4],
+            }
+        }
+    }
+
+    impl Default for NV_GPU_CLIENT_FAN_POLICIES_INFO_LEGACY_V1 {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     // ------------------------------------------------------------------
     // FanPolicy whole-block reset family (NDA). RE'd from ref tool 2
     // `GPUHandle::resetFanCurve` (sub_140030830): GET the full 0x14AC-byte
