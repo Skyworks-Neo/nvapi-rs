@@ -85,7 +85,11 @@ pub struct VoltRailEntry {
     pub rail_bit: u32,
     /// entry type discriminator: RTX 5090 MSVDD control = 3 (the µV-offset
     /// entry melonVolt writes); RTX 4060 Laptop control = 0 (offset object,
-    /// unsupported) / status = 1 (live voltage)
+    /// unsupported) / status = 1 (live voltage). GB10 (Spark) status: rail 0
+    /// = 1, rail 1 (Xbar) = 3 — the same six-value status layout on both, so
+    /// the type is a per-rail protocol/discriminator tag, NOT proof of the
+    /// payload layout. Match status entries by `rail_bit` and gate on the
+    /// `p0_bounds` plausibility check instead of filtering on this field.
     pub entry_type: u32,
     /// six payload u32; semantics depend on `entry_type`. For **status** type 1
     /// (see [`VoltRails::p0_bounds`] and `sys::gpu::power::undocumented::status_values`):
@@ -164,18 +168,17 @@ pub struct P0VoltageBounds {
 }
 
 impl VoltRails {
-    /// Extract P0 core-domain voltage bounds from the first type-1 status
-    /// entry (preferring rail bit 0, the core rail on observed platforms).
-    /// Returns `None` unless the values pass a plausibility check
-    /// (`0 < min_hold <= current <= effective_wall`), so a differently-laid-out
-    /// driver degrades to `None` instead of returning garbage.
-    pub fn p0_bounds(&self) -> Option<P0VoltageBounds> {
+    /// Extract P0 voltage bounds for one rail from its status entry (matched
+    /// by `rail_bit` — the status list holds one entry per rail in the mask,
+    /// and the entry's `entry_type` is a per-rail protocol tag, not a layout
+    /// marker: GB10's Xbar status entry is type 3 with the same six-value
+    /// layout as a type-1 core entry). Returns `None` unless the values pass
+    /// a plausibility check (`0 < min_hold <= current <= effective_wall`),
+    /// so a differently-laid-out driver degrades to `None` instead of
+    /// returning garbage.
+    pub fn p0_bounds_for(&self, rail_bit: u32) -> Option<P0VoltageBounds> {
         use power::undocumented::status_values;
-        let entry = self
-            .status
-            .iter()
-            .filter(|e| e.entry_type == 1)
-            .min_by_key(|e| e.rail_bit)?;
+        let entry = self.status.iter().find(|e| e.rail_bit == rail_bit)?;
         let (current, effective, hold) = (
             entry.values[status_values::CURRENT_UV],
             entry.values[status_values::EFFECTIVE_WALL_UV],
@@ -195,6 +198,17 @@ impl VoltRails {
         }
     }
 
+    /// Extract P0 core-domain voltage bounds from the lowest-`rail_bit`
+    /// status entry that passes the plausibility check (rail 0, the core
+    /// rail, on every observed platform — 4060 Laptop type 1, GB10 rail 0
+    /// type 1). See [`VoltRails::p0_bounds_for`] for why the entry type is
+    /// not filtered on.
+    pub fn p0_bounds(&self) -> Option<P0VoltageBounds> {
+        let mut bits: Vec<u32> = self.status.iter().map(|e| e.rail_bit).collect();
+        bits.sort_unstable();
+        bits.into_iter().find_map(|bit| self.p0_bounds_for(bit))
+    }
+
     /// Max overvolt offset the driver will actually honour for `rail_bit`.
     /// The effective wall (index 4) is clamped to `min(target, vbios_wall,
     /// vrm_max_wall)`, so the ceiling is `min(vbios_wall, vrm_max_wall) −
@@ -204,12 +218,7 @@ impl VoltRails {
     #[allow(non_snake_case)]
     pub fn offset_ceiling_uV(&self, rail_bit: u32) -> Option<i32> {
         use power::undocumented::status_values;
-        let status = self
-            .status
-            .iter()
-            .filter(|e| e.entry_type == 1 && e.rail_bit == rail_bit)
-            .min_by_key(|e| e.rail_bit)
-            .or_else(|| self.status.iter().find(|e| e.entry_type == 1))?;
+        let status = self.status.iter().find(|e| e.rail_bit == rail_bit)?;
         let control = self.control.iter().find(|e| e.rail_bit == rail_bit)?;
         let vrm_max = status.values[status_values::VRM_MAX_WALL_UV];
         let vbios = status.values[status_values::VBIOS_WALL_UV];
@@ -434,8 +443,7 @@ impl PhysicalGpu {
             pImage: buf.as_mut_ptr() as usize,
         };
         let st = unsafe { NvAPI_GPU_GetVbiosImage(self.0, &mut image) };
-        let () = crate::status_result(sys::Api::NvAPI_GPU_GetVbiosImage, st)
-            .map_err(crate::NvapiError::from)?;
+        let () = crate::status_result(sys::Api::NvAPI_GPU_GetVbiosImage, st)?;
         let actual = image.size as usize;
         if actual > BUF_CAP {
             return Err(crate::NvapiError::new(
