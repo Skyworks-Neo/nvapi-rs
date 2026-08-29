@@ -39,7 +39,9 @@ fn gb10_rails() -> VoltRails {
 fn p0_bounds_for_matches_type3_xbar_status_by_rail_bit() {
     let rails = gb10_rails();
     // The regression: the type-3 status entry must parse like a type-1 one.
-    let xbar = rails.p0_bounds_for(1).expect("type-3 Xbar status must parse");
+    let xbar = rails
+        .p0_bounds_for(1)
+        .expect("type-3 Xbar status must parse");
     assert_eq!(xbar.current_uV, 940000);
     assert_eq!(xbar.target_wall_uV, 1025000);
     assert_eq!(xbar.vbios_wall_uV, 0);
@@ -47,7 +49,9 @@ fn p0_bounds_for_matches_type3_xbar_status_by_rail_bit() {
     assert_eq!(xbar.effective_wall_uV, 1025000);
     assert_eq!(xbar.min_hold_uV, 660000);
 
-    let core = rails.p0_bounds_for(0).expect("type-1 core status must parse");
+    let core = rails
+        .p0_bounds_for(0)
+        .expect("type-1 core status must parse");
     assert_eq!(core.current_uV, 925000);
     assert_eq!(core.target_wall_uV, 1200000);
 }
