@@ -730,8 +730,35 @@ impl PhysicalGpu {
         };
         let status =
             unsafe { sys::api::NvAPI_GPU_GetAllClocks(self.0, ptr::from_mut(&mut data).cast()) };
-        crate::status_result(sys::Api::NvAPI_GPU_GetAllClocks, status)
-            .map(|_| crate::clock::all_clocks_from_raw(&data))
+        crate::status_result(sys::Api::NvAPI_GPU_GetAllClocks, status).map(|_| {
+            let mut clocks = crate::clock::all_clocks_from_raw(&data);
+            // Pascal second-cluster decode (live P100/582.41): the second
+            // fabric cluster's GetAllClocks V2 domains — Gpc2/Xbar2/Sys2/
+            // Ltc2 — report their counters on the Pascal 2× scale (same
+            // encoding as the private V/F table's type-1 records): Gpc2 read
+            // 2657.809 kHz-value exactly 2× the 1328.9 MHz running clock.
+            // Halve them on ALL Pascal (architecture GP100 covers GP10x
+            // consumer too). The first-cluster and constant domains are
+            // unaffected — Hub2's 810/1296 already match the real pstate-bin
+            // ladder, M/Host/Hub/Pwr/Utils/HardwareMisc are 1×.
+            let pascal = self
+                .architecture()
+                .map(|a| matches!(a.arch, crate::Architecture::GP100(_)))
+                .unwrap_or(false);
+            if pascal {
+                for id in [
+                    crate::clock::ClockDomainId::Gpc2,
+                    crate::clock::ClockDomainId::Xbar2,
+                    crate::clock::ClockDomainId::Sys2,
+                    crate::clock::ClockDomainId::Ltc2,
+                ] {
+                    if let Some(khz) = clocks.get_mut(&id) {
+                        *khz = crate::Kilohertz(khz.0 / 2);
+                    }
+                }
+            }
+            clocks
+        })
     }
 
     /// Base/boost clock pairs via GetAllClockFrequencies V3 compact (ID
