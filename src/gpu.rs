@@ -1510,6 +1510,23 @@ impl PhysicalGpu {
         Ok(crate::clock::ClockDomainControl { mask, entries })
     }
 
+    /// MEM (bit 4) decode divisor for this GPU's memory topology — see
+    /// the generation census on [`clk_domain_freq_direct`]. 4 on HBM parts
+    /// (the MEM counter counts DDR pairs × pseudo-channels; live P100/HBM2:
+    /// 2862 raw vs 715.5 MHz effective), 1 everywhere else. Read failure →
+    /// 1 (unscaled, the historical behavior).
+    fn mem_scale_divisor(&self, domain_bit: u32, freq_nonzero: bool) -> u32 {
+        if domain_bit == 4 && freq_nonzero {
+            let hbm = self
+                .ram_bus_width()
+                .map(|bits| bits >= 2048)
+                .unwrap_or(false);
+            if hbm { 4 } else { 1 }
+        } else {
+            1
+        }
+    }
+
     /// Physical clock for one domain from the private ClockClient
     /// MEASURE_FREQ (RM 0x20809006, ID 0xFB8F61EC). Windows returns a raw
     /// {counter, timestamp} pair — NOT the article's direct kHz — so this
@@ -1563,11 +1580,14 @@ impl PhysicalGpu {
         } else {
             0.0
         };
+        // HBM MEM decode (see mem_scale_divisor / the generation census on
+        // clk_domain_freq_direct) — the raw Δcounter/Δt is 4× on HBM.
+        let divisor = self.mem_scale_divisor(domain_bit, freq_hz > 0.0) as f64;
 
         Ok(crate::clock::ClockDomainFreq {
             domain: crate::clock::ClockDomainId::try_from(domain_bit as i32)
                 .unwrap_or(crate::clock::ClockDomainId::Gpc),
-            freq_mhz: freq_hz / 1e6,
+            freq_mhz: freq_hz / 1e6 / divisor,
         })
     }
 
@@ -1622,11 +1642,14 @@ impl PhysicalGpu {
         } else {
             0.0
         };
+        // HBM MEM decode (see mem_scale_divisor / the generation census on
+        // clk_domain_freq_direct) — the raw Δcounter/Δt is 4× on HBM.
+        let divisor = self.mem_scale_divisor(domain_bit, freq_hz > 0.0) as f64;
 
         Ok(crate::clock::ClockDomainFreqDetail {
             domain: crate::clock::ClockDomainId::try_from(domain_bit as i32)
                 .unwrap_or(crate::clock::ClockDomainId::Gpc),
-            freq_mhz: freq_hz / 1e6,
+            freq_mhz: freq_hz / 1e6 / divisor,
             protocol,
             counter: c2,
             timestamp_ns: t2,
@@ -1663,10 +1686,42 @@ impl PhysicalGpu {
             unsafe { NvAPI_GPU_ClockClkDomainsMeasureFreq(self.0, ptr::from_mut(&mut m).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsMeasureFreq, st)
             .map_err(crate::Error::from)?;
+
+        // MEM (bit 4) decode, by memory topology — generation census (the
+        // canonical comment lives here; the counter-based
+        // clk_domain_freq/_detail variants share the rule via
+        // mem_scale_divisor):
+        //
+        //   Pascal GP100 HBM2 (4096-bit)     ÷4  LIVE-VERIFIED (P100/TCC
+        //     582.41: MEASURE bit 4 reads 2862 while NVML clocks.mem AND
+        //     GetAllClocks M(4) both read 715.5 MHz; 2862/4 ≈ 715.5 ✓).
+        //     The HBM MEM counter counts DDR pairs × pseudo-channels.
+        //   Volta GV100 HBM2                 ÷4  presumed (same counter
+        //     design, no live sample).
+        //   A100 HBM2e / H100 HBM3           ÷4  presumed, UNVERIFIED — if
+        //     a live H100/A100 sample disagrees, adjust here (the bus-width
+        //     gate below already covers them).
+        //   GDDR parts (Pascal consumer → Ada) ÷1  (Ada 4060 census:
+        //     AllClocks M(4) 7993 kHz tracks NVML 8000 — no scaling).
+        //   GPC / XBAR / SYS / every other domain: ÷1 on ALL generations
+        //     (the GPU ×2 encoding belongs to the SetPstates/VFP freqDelta
+        //     path, NOT to MEASURE).
+        //
+        // Topology detection: Ram Bus Width ≥ 2048 bit = HBM (P100/V100
+        // 4096, A100/H100 5120 — every NVIDIA HBM part to date) vs GDDR
+        // topping out at 512 bit. GetRamType is useless as the signal —
+        // HBM parts report RamType Unknown (no NV_RAM_TYPE HBM value
+        // exists; live P100: "Ram Type: Unknown", "Bus Width: 4096 bit").
+        // A read failure falls back to divisor 1 (unscaled — the
+        // historical behavior, safe on GDDR where 1 is correct anyway).
+        let mem_scale_divisor = self.mem_scale_divisor(domain_bit, m.freq_khz > 0);
         Ok(crate::clock::ClockDomainFreqDirect {
             domain: crate::clock::ClockDomainId::try_from(domain_bit as i32)
                 .unwrap_or(crate::clock::ClockDomainId::Gpc),
-            freq_khz: m.freq_khz,
+            // decoded user-facing kHz; the raw driver counter is
+            // freq_khz × mem_scale_divisor
+            freq_khz: m.freq_khz / mem_scale_divisor,
+            mem_scale_divisor,
         })
     }
 

@@ -508,8 +508,16 @@ pub struct ClockDomainFreqDetail {
 pub struct ClockDomainFreqDirect {
     /// the measured domain
     pub domain: ClockDomainId,
-    /// physical frequency in kHz (driver-direct; 0 = refused/unmeasurable)
+    /// physical frequency in kHz (driver-direct; 0 = refused/unmeasurable),
+    /// ALREADY DECODED for display — on HBM parts the MEM (bit 4) raw
+    /// counter is freq_khz × mem_scale_divisor (see that field)
     pub freq_khz: u32,
+    /// decode divisor for the domain on this GPU's memory topology:
+    /// 1 for GDDR (and every non-MEM domain), 4 for HBM where the MEM
+    /// MEASURE counter counts DDR pairs × pseudo-channels (P100/HBM2
+    /// live-verified: MEASURE 2862 vs NVML 715.5 MHz). The raw driver
+    /// value = `freq_khz × mem_scale_divisor`.
+    pub mem_scale_divisor: u32,
 }
 
 /// One V/F curve point from the private ClockClient V/F-POINTS GetStatus
