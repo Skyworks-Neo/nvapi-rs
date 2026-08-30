@@ -2138,10 +2138,14 @@ impl PhysicalGpu {
                 if info.point_present(bank, idx) != Some(true) {
                     continue;
                 }
-                let typ = match status.record_type(bank, idx) {
-                    Some(t) if t != 0 => t,
-                    _ => continue,
-                };
+                // type-0 present records are KEPT: on GP100/TCC they are the
+                // pstate frequency bins (live P100: 8 records @160..167,
+                // ladder 405/648/810/1080 doubled — values matching the
+                // VBIOS perf table's pstate-class clocks), and the reset
+                // path clears them by mask (168 vs 160 discrepancy).
+                // Consumer images so far show no type-0 present records, so
+                // this only widens what is surfaced.
+                let typ = status.record_type(bank, idx).unwrap_or(0);
                 // Pascal-generation parser: type-1 records report the
                 // +0x24 frequency term DOUBLED (live-observed on a
                 // 10-series: the parsed "default" is exactly 2× the
@@ -2225,8 +2229,14 @@ impl PhysicalGpu {
         // (mem-style: one freq/voltage per pstate) are 4-5 points.
         // Record TYPE is useless here — generations reuse types across
         // the two kinds (Turing's GPC curve and Ada's bins share a type).
+        // UNTYPED (type-0) runs are always pstate bins regardless of length —
+        // they are the driver's pstate frequency ladder (P100: 405/648/810/
+        // 1080 doubled), never a V/F curve; without this the 8-record bin
+        // run would cross the ≥8 curve bar and plot as a fake curve.
         for s in segments.iter_mut() {
-            s.kind = if s.count >= 8 {
+            s.kind = if s.record_type == 0 {
+                crate::clock::ClkVfSegmentKind::PstateBins
+            } else if s.count >= 8 {
                 crate::clock::ClkVfSegmentKind::VfCurve
             } else {
                 crate::clock::ClkVfSegmentKind::PstateBins
@@ -3734,7 +3744,10 @@ impl PhysicalGpu {
         let mut buf = vec![0u8; GET_SIZE];
         buf[..4].copy_from_slice(&stamp.to_ne_bytes());
         unsafe {
-            nvcall!(NvAPI_GPU_GetPstates20Private(self.0, buf.as_mut_ptr() as *mut _))?;
+            nvcall!(NvAPI_GPU_GetPstates20Private(
+                self.0,
+                buf.as_mut_ptr() as *mut _
+            ))?;
         }
         Ok(buf)
     }

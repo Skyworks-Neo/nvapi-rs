@@ -553,7 +553,10 @@ pub struct ClkVfPointsPrivate {
     /// present-point masks, 2048 bits per bank: bank0 = masks[0..4],
     /// bank1 = masks[4..8]
     pub masks: [u64; 8],
-    /// V/F points the driver filled (record type != 0), bank-major order
+    /// V/F points the driver filled, bank-major order. Includes UNTYPED
+    /// (type-0) present records — the pstate frequency bins on some
+    /// kernels (GP100/TCC: 8 records @160..167) — which land in
+    /// `segments` as `PstateBins` runs.
     pub points: Vec<ClkVfPointPrivate>,
     /// contiguous same-type runs of [`points`] — bank 0 packs multiple
     /// domains back-to-back, so segmentation is what makes the table
