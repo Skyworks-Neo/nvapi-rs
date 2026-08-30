@@ -109,3 +109,66 @@ fn vbios_meta_magic_sweep() {
         }
     }
 }
+
+#[test]
+#[ignore]
+fn vbios_status_string_enum_sweep() {
+    use nvapi::PhysicalGpu;
+    nvapi::initialize().expect("init");
+    let gpus = PhysicalGpu::enumerate().expect("enumerate");
+    let gpu = gpus.first().expect("no gpu");
+    let h = *gpu.handle();
+    let ptr = match nvapi_QueryInterface(0x8011c22c) {
+        Ok(p) if !p.is_null() => p,
+        _ => return,
+    };
+    for code in 0u32..80 {
+        let mut buf = vec![0u8; 512];
+        buf[..4].copy_from_slice(&code.to_le_bytes());
+        let st = unsafe {
+            let f: extern "system" fn(usize, *mut u8) -> i32 = std::mem::transmute(ptr);
+            f(h.as_ptr() as usize, buf.as_mut_ptr())
+        };
+        let s = String::from_utf8_lossy(&buf[4..])
+            .trim_end_matches('\0')
+            .to_string();
+        if st == 0 && !s.is_empty() && s != "Unexpected value" {
+            eprintln!("code={code:3}  {s:?}");
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn vbios_wrapped_methods() {
+    use nvapi::PhysicalGpu;
+    nvapi::initialize().expect("init");
+    let gpu = PhysicalGpu::enumerate().expect("enumerate").remove(0);
+    match gpu.vbios_security_flags() {
+        Ok(flags) => eprintln!("wrapped security flags: {flags:#010x}"),
+        Err(e) => eprintln!("wrapped security flags: Err {e:?}"),
+    }
+    match gpu.vbios_status_string() {
+        Ok(s) => eprintln!("wrapped status string: {s:?}"),
+        Err(e) => eprintln!("wrapped status string: Err {e:?}"),
+    }
+}
+
+#[test]
+#[ignore]
+fn plane_a_presence() {
+    // Plane-A (pstate-delta) family presence — QueryInterface only, no call.
+    // 0x4C0B519A SetPstates20Private (32524B block, escape 0x0700016A);
+    // 0xB23B70EE EnableOverclockedPstates (56B, escape 0x070000BA).
+    nvapi::initialize().expect("init");
+    for (id, name) in [
+        (0x4c0b519au32, "SetPstates20Private"),
+        (0xb23b70eeu32, "EnableOverclockedPstates"),
+    ] {
+        let st = match nvapi_QueryInterface(id) {
+            Ok(p) if !p.is_null() => "IMPLEMENTED",
+            _ => "absent",
+        };
+        eprintln!("{name:26} {id:#010x}  {st}");
+    }
+}
