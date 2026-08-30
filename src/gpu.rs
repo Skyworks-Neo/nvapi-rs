@@ -2164,8 +2164,8 @@ impl PhysicalGpu {
         // XBAR curve, ...), so runs are the plottable units.
         let mut segments: Vec<crate::clock::ClkVfSegment> = Vec::new();
         // ordinal of each kind within the current bank — the empirical
-        // domain_hint is keyed on it (vf #1=GPC, #2=XBAR, #3=HOST; bins
-        // #1=Mem, #2=Host; live A/B on 4060 Laptop / R610.74)
+        // domain_hint is keyed on it (vf #1=GPC, #2=XBAR, #3=MSD; bins
+        // #1=Mem, #2=Disp; live A/B on 4060 Laptop / R610.74)
         let mut vf_ordinal = [0usize; 2];
         let mut bins_ordinal = [0usize; 2];
         for p in &points {
@@ -2266,9 +2266,10 @@ impl PhysicalGpu {
                         crate::clock::ClkVfDomainHint::Xbar
                     }
                 }
-                // initially mislabeled HOST — voltage-lock A/B shows it
-                // tracks SYS (see ClkVfSegment::domain_hint doc)
-                (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Sys,
+                // attribution history HOST → SYS → MSD: the bit-5 offset
+                // A/B (+200 MHz shifted every point, Host MEASURE unmoved)
+                // pinned MSD (see ClkVfSegment::domain_hint doc)
+                (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Msd,
                 (crate::clock::ClkVfSegmentKind::PstateBins, 0) => {
                     crate::clock::ClkVfDomainHint::Mem
                 }
