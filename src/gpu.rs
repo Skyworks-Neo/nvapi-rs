@@ -1510,16 +1510,31 @@ impl PhysicalGpu {
         // decide which per-domain records to fill, and echoes it back. Seed a
         // broad mask so every controllable domain is populated, then derive
         // the TRUE controllable set from records the driver actually filled
-        // (record type != 0). The driver rejects u32::MAX; 0xFF is accepted.
+        // (record type != 0). Mask acceptance is capped by the driver: on
+        // Ada/R610 bits 0..=9 are individually addressable (0x3FF accepted,
+        // records at bits 8=Pclk0/9=Pclk1 are real, type 0x0A) and any bit
+        // >= 10 makes V2 reject the whole call — so seed 0x3FF first and fall
+        // back to the historical 0xFF if the driver refuses the wider mask.
+        // u32::MAX is rejected outright.
         //
         // V2 (magic 0x261A4, 24996B) is preferred: it marshals value dwords
         // for the type-0x0A records modern drivers report; V1 only fills
         // their type dword. Fall back to V1 when the driver rejects V2.
         let mut v2 = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2::default();
-        v2.set_mask(0xFF);
-        let st =
-            unsafe { NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut v2).cast()) };
-        if crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st).is_ok() {
+        let probe_mask = std::env::var("NVOC_CLK_MASK_SEED")
+            .ok()
+            .and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok());
+        let seeded = probe_mask
+            .map(|m| vec![m])
+            .unwrap_or_else(|| vec![0x3FF, 0xFF]);
+        let seeded_ok = seeded.iter().any(|&m| {
+            v2.set_mask(m);
+            let st = unsafe {
+                NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut v2).cast())
+            };
+            crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st).is_ok()
+        });
+        if seeded_ok {
             let mask = v2.controllable_mask();
             let entries = (0..32u32)
                 .filter_map(|bit| {
@@ -1924,12 +1939,21 @@ impl PhysicalGpu {
         // V2 (magic 0x261A4) is the write path: it marshals the type-0x0A
         // records this driver reports; V1 would silently drop them.
         let mut probe = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2::default();
-        probe.set_mask(0xFF);
-        let st = unsafe {
-            NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut probe).cast())
-        };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st)
-            .map_err(crate::Error::from)?;
+        // same descending seed as clk_domains_control: 0x3FF (bits 0..=9,
+        // the Ada acceptance cap) with the historical 0xFF as fallback
+        let probe_seeded = [0x3FFu32, 0xFF].iter().any(|&m| {
+            probe.set_mask(m);
+            let st = unsafe {
+                NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut probe).cast())
+            };
+            crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st).is_ok()
+        });
+        if !probe_seeded {
+            return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClockClkDomainsGetControl,
+                Status::NotSupported,
+            )));
+        }
 
         // Step 1/2: version/size gate — refuse the write if the driver
         // returned an unknown/mismatched magic. Only V2 (0x261A4) is
