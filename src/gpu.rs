@@ -3735,7 +3735,10 @@ impl PhysicalGpu {
         let mut buf = vec![0u8; GET_SIZE];
         buf[..4].copy_from_slice(&stamp.to_ne_bytes());
         unsafe {
-            nvcall!(NvAPI_GPU_GetPstates20Private(self.0, buf.as_mut_ptr() as *mut _))?;
+            nvcall!(NvAPI_GPU_GetPstates20Private(
+                self.0,
+                buf.as_mut_ptr() as *mut _
+            ))?;
         }
         Ok(buf)
     }

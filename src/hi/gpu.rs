@@ -1424,7 +1424,9 @@ impl Gpu {
     /// VBIOS clamp). P100 server experiment entry point for the pstate-delta
     /// plane.
     pub fn enable_overclocked_pstates(&self, enable: bool) -> crate::Result<()> {
-        self.gpu.enable_overclocked_pstates(enable).map_err(Into::into)
+        self.gpu
+            .enable_overclocked_pstates(enable)
+            .map_err(Into::into)
     }
 
     /// Raw dump of the private pstates-2.0 delta table (the frequency-ceiling
@@ -1437,7 +1439,9 @@ impl Gpu {
     /// produced by [`Gpu::pstates20_private_raw`]). DANGEROUS: no validation
     /// anywhere in this path.
     pub fn set_pstates20_private_raw(&self, table: &[u8]) -> crate::Result<()> {
-        self.gpu.set_pstates20_private_raw(table).map_err(Into::into)
+        self.gpu
+            .set_pstates20_private_raw(table)
+            .map_err(Into::into)
     }
 
     /// Read back the active GPU frequency perf-caps (NDA 0xEFCEDD1F). Returns
