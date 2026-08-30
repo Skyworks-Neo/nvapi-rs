@@ -1524,11 +1524,14 @@ impl PhysicalGpu {
         let probe_mask = std::env::var("NVOC_CLK_MASK_SEED")
             .ok()
             .and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok());
-        let seeded = probe_mask.map(|m| vec![m]).unwrap_or_else(|| vec![0x3FF, 0xFF]);
+        let seeded = probe_mask
+            .map(|m| vec![m])
+            .unwrap_or_else(|| vec![0x3FF, 0xFF]);
         let seeded_ok = seeded.iter().any(|&m| {
             v2.set_mask(m);
-            let st =
-                unsafe { NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut v2).cast()) };
+            let st = unsafe {
+                NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut v2).cast())
+            };
             crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st).is_ok()
         });
         if seeded_ok {
