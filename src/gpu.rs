@@ -3614,11 +3614,24 @@ impl PhysicalGpu {
     ///   id 5/4 mode 1 (PstateSelect) value=pstate.
     ///
     /// Calls the private lifecycle init + clearRatedTdp (0xC9E9BB33 mode 0)
-    /// first, exactly as the ref tool's setPState does. `freq_khz` is in kHz
-    /// (MHz × 1000). Returns Ok if the lock applied.
+    /// first, mirroring the ref tool's setPState. The lifecycle init is
+    /// best-effort: on this Turing card the 0x39442CFB SET applies fine
+    /// without it (elevated `Applied: yes` with the init call removed), and on
+    /// desktop Linux `libnvidia-api` does not implement the init at all yet the
+    /// private setters are live — so its failure must not abort the lock. Any
+    /// init error is logged and the SET proceeds regardless (it surfaces its own
+    /// status if it genuinely cannot proceed). `clear_rated_tdp` stays fatal.
+    /// `freq_khz` is in kHz (MHz × 1000). Returns Ok if the lock applied. The
+    /// same path serves `reset-pstate-lock` (the `Reset` variant), so the
+    /// best-effort init covers both.
     pub fn set_pstate_native(&self, lock: PStateNativeLock) -> crate::NvapiResult<()> {
         trace!("gpu.set_pstate_native({:?})", lock);
-        self.private_lifecycle_init()?;
+        if let Err(e) = self.private_lifecycle_init() {
+            warn!(
+                "set_pstate_native: private_lifecycle_init failed ({:?}); attempting {:?} anyway",
+                e.status, lock
+            );
+        }
         self.clear_rated_tdp()?;
 
         // 780-byte PerfClientLimits V2 buffer. Heap-backed.
