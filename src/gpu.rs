@@ -417,6 +417,44 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetVbiosVersionString@get(self.0) => into) }
     }
 
+    /// VBIOS security configuration word (`NvAPI_GPU_GetVbiosSecurityInfo`,
+    /// ID 0x8d3ac6b9). Struct stamp 0x1000C (v1, 12B) — the only magic the
+    /// 582.41 handler accepts. Returns the raw flags dword; on the P100
+    /// (server/TCC) it reads 0x0203 (bit0|bit1 + bit9). Bit semantics are
+    /// driver-opaque — compare across SKUs before assigning meaning (the
+    /// server-OC-cap research hypothesis: a policy bit lives here).
+    pub fn vbios_security_flags(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.vbios_security_flags()");
+        use crate::sys::api::NvAPI_GPU_GetVbiosSecurityInfo;
+        use crate::sys::gpu::NV_GPU_VBIOS_SECURITY_INFO;
+        use crate::sys::nvapi::NvVersion;
+
+        let mut info = NV_GPU_VBIOS_SECURITY_INFO {
+            version: NvVersion::with_version(0x1000C),
+            flags: 0,
+            padding: 0,
+        };
+        let st = unsafe { NvAPI_GPU_GetVbiosSecurityInfo(self.0, &mut info) };
+        crate::status_result(sys::Api::NvAPI_GPU_GetVbiosSecurityInfo, st)?;
+        Ok(info.flags)
+    }
+
+    /// Human-readable VBIOS status (`NvAPI_GPU_GetVbiosStatusString`, ID
+    /// 0x8011c22c). Plain (handle, out-string) — no struct, no version gate.
+    /// The text is driver-state-dependent (the P100/TCC card returns the
+    /// literal "Unexpected value"); compare across cards/states, don't parse.
+    pub fn vbios_status_string(&self) -> crate::NvapiResult<String> {
+        trace!("gpu.vbios_status_string()");
+        use crate::sys::api::NvAPI_GPU_GetVbiosStatusString;
+        use crate::sys::types::NvAPI_String;
+
+        // NvAPI_String is 4 KiB — Box it (stack discipline of the big structs).
+        let mut buf: Box<NvAPI_String> = Box::default();
+        let st = unsafe { NvAPI_GPU_GetVbiosStatusString(self.0, &mut *buf) };
+        crate::status_result(sys::Api::NvAPI_GPU_GetVbiosStatusString, st)?;
+        Ok(String::from(*buf))
+    }
+
     /// Reads the full VBIOS image via `NvAPI_GPU_GetVbiosImage` (0xFC13EE11).
     /// Uses the V2 stamp (0x20010) with a 1 MiB buffer to capture the whole
     /// image (typical VBIOS is 64–256 KiB). On legacy drivers (391.35) the

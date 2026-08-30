@@ -190,6 +190,45 @@ nvapi! {
     pub unsafe fn NvAPI_GPU_GetVbiosImage;
 }
 
+// VBIOS security word (ID 0x8d3ac6b9, live-cracked on P100/TCC 582.41 by a
+// version/size magic sweep: only v1/12B = 0x1000C passes the gate). The
+// payload is one flags dword — on the P100 server card it reads 0x0203
+// (bit0|bit1 + bit9). Bit semantics are driver-opaque so far; the working
+// hypothesis (server-OC-cap research) is that a server/consumer policy
+// difference lives in this word. Compare against a consumer card before
+// assigning meaning to individual bits.
+//
+// Layout (12 bytes):
+// - `version` (u32 @+0): struct stamp 0x1000C (version 1, size 12)
+// - `flags` (u32 @+4): security configuration word (out)
+// - padding (u32 @+8): zero
+nvstruct! {
+    pub struct NV_GPU_VBIOS_SECURITY_INFO {
+        pub version: NvVersion,
+        /// Security configuration word (out). P100 server: 0x0203.
+        pub flags: u32,
+        pub padding: u32,
+    }
+}
+
+nvapi! {
+    pub type GPU_GetVbiosSecurityInfoFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pSecurityInfo: *mut NV_GPU_VBIOS_SECURITY_INFO) -> NvAPI_Status;
+
+    /// Reads the VBIOS security configuration word. Struct stamp 0x1000C
+    /// (v1, 12B); wrong stamps return IncompatibleStructVersion.
+    pub unsafe fn NvAPI_GPU_GetVbiosSecurityInfo;
+}
+
+nvapi! {
+    pub type GPU_GetVbiosStatusStringFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, szStatus: *mut NvAPI_String) -> NvAPI_Status;
+
+    /// Reads the VBIOS status as a plain (handle, out-string) call — no
+    /// struct, no version gate. On the P100/TCC card it returns the literal
+    /// "Unexpected value"; treat the text as driver-state-dependent and
+    /// compare across cards/states rather than parsing it.
+    pub unsafe fn NvAPI_GPU_GetVbiosStatusString;
+}
+
 nvapi! {
     pub type GPU_GetPCIIdentifiersFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pDeviceId: *mut u32, pSubSystemId: *mut u32, pRevisionId: *mut u32, pExtDeviceId: *mut u32) -> NvAPI_Status;
 

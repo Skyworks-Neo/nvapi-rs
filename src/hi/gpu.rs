@@ -1270,6 +1270,20 @@ impl Gpu {
         self.gpu.vbios_version_string()
     }
 
+    /// VBIOS security configuration word via
+    /// `NvAPI_GPU_GetVbiosSecurityInfo` (0x8d3ac6b9, struct stamp 0x1000C).
+    /// P100 server/TCC reads 0x0203; bit semantics driver-opaque (see the
+    /// medium-layer doc for the server-OC-cap research hypothesis).
+    pub fn vbios_security_flags(&self) -> crate::NvapiResult<u32> {
+        self.gpu.vbios_security_flags()
+    }
+
+    /// Human-readable VBIOS status via `NvAPI_GPU_GetVbiosStatusString`
+    /// (0x8011c22c, plain out-string). State-dependent text — don't parse.
+    pub fn vbios_status_string(&self) -> crate::NvapiResult<String> {
+        self.gpu.vbios_status_string()
+    }
+
     /// Fan-policy capabilities via the private ClientFanPoliciesGetInfo
     /// (0x52B76D12): V2 block (0x2004C, raw) on modern drivers, legacy V1
     /// block (0x1003C, decoded policy entries) on R391-era drivers.
