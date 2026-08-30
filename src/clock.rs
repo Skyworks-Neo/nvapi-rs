@@ -98,9 +98,13 @@ pub type EffectiveClocks = BTreeMap<ClockDomain, Kilohertz>;
 /// semantically wrong here; consumers should interpret index 31 as a gen
 /// number, not kHz.
 ///
-/// `Msd` (index 21) is a memory sub-domain clock (most likely the GDDR
-/// controller/PHY serdes) — observed scaling ~1/4 of the effective memory rate
-/// (1970 MHz at 8000 MHz memory on RTX 4060). Treat the MSD label as advisory.
+/// `Msd` (index 21) is the uncore-band fabric clock the ClkDomains bit-5
+/// offset record drives — the third V/F curve's domain (see
+/// [`ClkVfSegment::domain_hint`]). Earlier single-sample readings (1970 MHz
+/// at 8000 MHz memory) suggested a memory-¼-rate sub-domain, but later
+/// samples (2460 MHz pinned while Sys floats 2340–2385 at the same memory
+/// rate) show it tracks the uncore cluster rather than memory. Treat the
+/// MSD label as advisory.
 pub type AllClocks = BTreeMap<ClockDomainId, Kilohertz>;
 
 /// Extract all 32 clock domains from a raw GetAllClocks V2 result (companion
@@ -361,6 +365,15 @@ impl ClkDomainControlEntry {
 impl ClkDomainControlEntry {
     /// The typed clock-domain id for this entry's bit, or `None` if the bit
     /// doesn't map to a known [`ClockDomainId`] (e.g. an unnamed NDA domain).
+    ///
+    /// **BIT-5 CAVEAT (live A/B, Ada 4060 Laptop / R610.74):** the control
+    /// RECORD at bit 5 drives the MSD domain, not the Host the RTSS label
+    /// at index 5 names — offsetting it (+200 MHz) moved the third V/F
+    /// curve (MSD-attributed) while the Host MEASURE channel stayed inside
+    /// its 825–1350 MHz band. Consumers rendering human-facing names for
+    /// control records should relabel bit 5 to MSD (nvoc's CLI does); the
+    /// RTSS [`ClockDomainId`] naming itself is kept untouched — MEASURE
+    /// bit 5 still reads the Host-band clock.
     pub fn domain(&self) -> Option<ClockDomainId> {
         ClockDomainId::try_from(self.bit as i32).ok()
     }
@@ -499,8 +512,10 @@ pub struct ClockDomainFreqDetail {
 /// (which use the counter-based `0xFB8F61EC` and require two samples +
 /// Δcounter/Δt computation), this API returns `freq_khz` directly — no
 /// sampling, no sleep, no division. Best for an immediate post-write
-/// verification read of an XBar/SYS clock offset (XBAR=domain 1, SYS=domain
-/// 2). Returns `freq_khz == 0` when the driver refuses or the domain is not
+/// verification read of an XBar/uncore clock offset (XBAR=domain 1; the
+/// uncore/MSD offset — ClkDomains bit-5 record — is visible in the
+/// uncore-band MEASURE channels, bits 2 and 21). Returns
+/// `freq_khz == 0` when the driver refuses or the domain is not
 /// measurable (VIDEO/entry 4 has no measure domain — use control-block
 /// readback there).
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -595,7 +610,7 @@ pub struct ClkVfControlPrivate {
 /// One contiguous same-record-type run inside the V/F-points table.
 /// Attribution (live A/B on a 4060 Laptop, R610.74 — bank 0):
 /// type-8 run 1 (127 pts) = GPC curve, type-7 run = mem pstate bins,
-/// type-8 run 2 (127 pts) = XBAR curve, then HOST curve + its pstate
+/// type-8 run 2 (127 pts) = XBAR curve, then MSD curve + its pstate
 /// list. Segment ORDER is stable per GPU/driver but the domain each run
 /// belongs to must be A/B'd (offset one domain, watch which segment's
 /// `freq_current_mhz` shifts).
@@ -611,19 +626,22 @@ pub struct ClkVfSegment {
     /// "vf_curve" (type 8/13/18) or "pstate_bins" (type 7) — plotting hint
     pub kind: ClkVfSegmentKind,
     /// EMPIRICAL domain attribution (advisory), by ordinal within the bank:
-    /// vf_curve #1=GPC, #2=XBAR, #3=SYS; pstate_bins #1=Mem, #2=DISP.
-    /// Live A/B on an RTX 4060 Laptop / R610.74. Curve #3 was initially
-    /// mislabeled HOST until a voltage-lock experiment showed it tracks SYS
-    /// (locked 0.89 V → curve reads 1980 MHz, live SYS 1994 MHz ≈ one
-    /// 15 MHz step; the Host clock never exceeds 1350 MHz). The curve is
-    /// best read as the uncore/MSVDD-domain cluster curve (SYS/Hub/Host
-    /// family share it; offsetting the ClkDomains "host" record shifts it
-    /// too). Bins #2 was likewise mislabeled HOST until Disp was observed
-    /// running at 675/1080/1350 MHz — values inside the bin list (and
-    /// MEASURE_FREQ shows Disp bit 6 at 1080 MHz). The ordinal order is
-    /// stable per driver but another GPU may pack domains differently —
-    /// confirm by offsetting one domain and watching which segment's
-    /// per-point current/default values shift.
+    /// vf_curve #1=GPC, #2=XBAR, #3=MSD; pstate_bins #1=Mem, #2=DISP.
+    /// Live A/B on an RTX 4060 Laptop / R610.74. Curve #3's attribution has
+    /// moved twice: initially HOST, then SYS (a 0.89 V voltage-lock matched
+    /// the curve to the SYS MEASURE channel, 1980 vs 1994 MHz), and finally
+    /// MSD — pinned by the causal experiment: writing +200 MHz into the
+    /// ClkDomains bit-5 control record shifted EVERY curve-#3 point by
+    /// +195 MHz (15 MHz grid) while the Host MEASURE channel stayed inside
+    /// its 825–1350 MHz band. The bit-5 record therefore drives MSD, and
+    /// so does this curve. (The SYS-labeled MEASURE bit 2 co-scales in the
+    /// same frequency band, which is why the passive voltage-lock match
+    /// could not separate SYS from MSD.) Bins #2 was initially mislabeled
+    /// HOST until Disp was observed running at 675/1080/1350 MHz — values
+    /// inside the bin list (and MEASURE_FREQ shows Disp bit 6 at 1080 MHz).
+    /// The ordinal order is stable per driver but another GPU may pack
+    /// domains differently — confirm by offsetting one domain and watching
+    /// which segment's per-point current/default values shift.
     pub domain_hint: ClkVfDomainHint,
     /// index of the first point (within the bank)
     pub start_index: u16,
@@ -646,7 +664,7 @@ pub struct ClkVfSegment {
 pub enum ClkVfDomainHint {
     Gpc,
     Xbar,
-    Sys,
+    Msd,
     Disp,
     Mem,
     #[default]
@@ -659,7 +677,7 @@ impl ClkVfDomainHint {
         match self {
             ClkVfDomainHint::Gpc => "gpc",
             ClkVfDomainHint::Xbar => "xbar",
-            ClkVfDomainHint::Sys => "sys",
+            ClkVfDomainHint::Msd => "msd",
             ClkVfDomainHint::Disp => "disp",
             ClkVfDomainHint::Mem => "mem",
             ClkVfDomainHint::Unknown => "unknown",

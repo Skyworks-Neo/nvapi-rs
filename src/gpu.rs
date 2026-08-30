@@ -2168,8 +2168,8 @@ impl PhysicalGpu {
         // XBAR curve, ...), so runs are the plottable units.
         let mut segments: Vec<crate::clock::ClkVfSegment> = Vec::new();
         // ordinal of each kind within the current bank — the empirical
-        // domain_hint is keyed on it (vf #1=GPC, #2=XBAR, #3=HOST; bins
-        // #1=Mem, #2=Host; live A/B on 4060 Laptop / R610.74)
+        // domain_hint is keyed on it (vf #1=GPC, #2=XBAR, #3=MSD; bins
+        // #1=Mem, #2=Disp; live A/B on 4060 Laptop / R610.74)
         let mut vf_ordinal = [0usize; 2];
         let mut bins_ordinal = [0usize; 2];
         for p in &points {
@@ -2276,9 +2276,10 @@ impl PhysicalGpu {
                         crate::clock::ClkVfDomainHint::Xbar
                     }
                 }
-                // initially mislabeled HOST — voltage-lock A/B shows it
-                // tracks SYS (see ClkVfSegment::domain_hint doc)
-                (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Sys,
+                // attribution history HOST → SYS → MSD: the bit-5 offset
+                // A/B (+200 MHz shifted every point, Host MEASURE unmoved)
+                // pinned MSD (see ClkVfSegment::domain_hint doc)
+                (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Msd,
                 (crate::clock::ClkVfSegmentKind::PstateBins, 0) => {
                     crate::clock::ClkVfDomainHint::Mem
                 }
@@ -3525,9 +3526,19 @@ impl PhysicalGpu {
     pub fn set_dnotify_limit(&self, didx: i32) -> crate::NvapiResult<()> {
         trace!("gpu.set_dnotify_limit({})", didx);
         // the ref tool's process performs a private lifecycle init at startup before
-        // any power-control setter; mirror that (harmless if already done), the
-        // same guard set_dynamic_boost / set_tgp_watt use.
-        self.private_lifecycle_init()?;
+        // any power-control setter; mirror that (harmless if already done). Unlike
+        // set_dynamic_boost — where the driver verifiably returns
+        // API_NOT_INITIALIZED without the init — no observation ties THIS
+        // setter's success to the init's result (the ref tool always has it
+        // done by process start, so the no-init path was never observable),
+        // so an init error is a warning and the SET reports its own status,
+        // exactly like set_tgp_watt.
+        if let Err(e) = self.private_lifecycle_init() {
+            warn!(
+                "set_dnotify_limit: private_lifecycle_init failed ({:?}); attempting set anyway",
+                e.status
+            );
+        }
         // Pass the signed level as a u32 (0xFFFFFFFF for D1's -1, matching
         // the ref tool's mov v15, -1).
         unsafe { nvcall!(NvAPI_GPU_ClientExternPowerStateSet(self.0, didx as u32)) }
