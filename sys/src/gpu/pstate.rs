@@ -551,3 +551,37 @@ pub mod undocumented {
         pub unsafe fn NvAPI_GPU_SetForcePstateEx;
     }
 }
+
+// --- Private pstates-2.0 delta table (the "plane A" storage that governs the
+// frequency-request ceiling; the public SetPstates20 validates against it and
+// writes it via these two IDs on consumer cards) ---
+
+nvapi! {
+    pub type GPU_GetPstates20PrivateFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pPstatesPrivateInfo: *mut u8) -> NvAPI_Status;
+
+    /// Undocumented private pstates table GET (NDA 0xC5DDF56E, escape
+    /// 0x07000169, 32528-byte RM block; nvapi64 582.41 sub_1801C3A20).
+    /// Caller buffer layout: dword@+0 stamp {81044, 146840} (146840 also
+    /// fills the extended-entry tail), byte@+4 caps (bit0 = kernel
+    /// "editable" — the bit the public SetPstates20 validation REQUIRES set,
+    /// else -104), u32@+8 numPstates, @+12 numClocks, @+16 numVoltages;
+    /// per-pstate 968 B blocks at +20 (pstateId u32, 16 = wildcard; enabled
+    /// bit @+24; 22 x 44 B clock slots at +28: domain u32 (32 = wildcard),
+    /// fmt dword @+4, enabled bit @+8, delta dword @+12 …), voltage entries
+    /// 32 B at +732.
+    pub unsafe fn NvAPI_GPU_GetPstates20Private;
+}
+
+nvapi! {
+    pub type GPU_SetPstates20PrivateFn = extern "C" fn(hPhysicalGPU: NvPhysicalGpuHandle, pPstatesPrivateInfo: *const u8) -> NvAPI_Status;
+
+    /// Undocumented private pstates table SET (NDA 0x4C0B519A, escape
+    /// 0x0700016A, 32524-byte RM block; nvapi64 582.41 sub_180154140). Same
+    /// user layout as the [`NvAPI_GPU_GetPstates20Private`] output: stamp
+    /// {81044, 146840}, flags byte@+4 (bit1 → RM flags=2), counts @+8/12/16,
+    /// per-pstate 968 B blocks (pstateId @+20 → 1<<id mask, clock slots:
+    /// domain @+28, delta dword @+40 — written to the RM delta slot),
+    /// voltages @+732. Deltas are stored in percent-of-domainMax units (the
+    /// public path stores `100 * delta_khz / domainMax_khz`).
+    pub unsafe fn NvAPI_GPU_SetPstates20Private;
+}

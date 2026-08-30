@@ -1417,6 +1417,29 @@ impl Gpu {
         self.gpu.set_perf_freq_cap(cap).map_err(Into::into)
     }
 
+    /// Toggle the overclocked-pstate unlock (NvAPI_GPU_EnableOverclockedPstates
+    /// NDA 0xB23B70EE, single escape 0x070000BA, 56-byte payload). enable=true
+    /// unlocks the extended/overclocked pstate range (50-series: extended
+    /// memory OC; call before a SetPstates20 delta write to exceed the stock
+    /// VBIOS clamp). P100 server experiment entry point for the pstate-delta
+    /// plane.
+    pub fn enable_overclocked_pstates(&self, enable: bool) -> crate::Result<()> {
+        self.gpu.enable_overclocked_pstates(enable).map_err(Into::into)
+    }
+
+    /// Raw dump of the private pstates-2.0 delta table (the frequency-ceiling
+    /// "plane A" storage). Read-only.
+    pub fn pstates20_private_raw(&self, stamp: u32) -> crate::Result<Vec<u8>> {
+        self.gpu.pstates20_private_raw(stamp).map_err(Into::into)
+    }
+
+    /// Write a raw private pstates-2.0 delta table (user-layout buffer as
+    /// produced by [`Gpu::pstates20_private_raw`]). DANGEROUS: no validation
+    /// anywhere in this path.
+    pub fn set_pstates20_private_raw(&self, table: &[u8]) -> crate::Result<()> {
+        self.gpu.set_pstates20_private_raw(table).map_err(Into::into)
+    }
+
     /// Read back the active GPU frequency perf-caps (NDA 0xEFCEDD1F). Returns
     /// one [`crate::PerfFreqCapEntry`] per active cap (max/min). Empty where
     /// the driver doesn't expose the private interface.

@@ -3722,6 +3722,40 @@ impl PhysicalGpu {
         Ok(out)
     }
 
+    /// Raw dump of the private pstates-2.0 delta table (GetPstates20Private
+    /// NDA 0xC5DDF56E, escape 0x07000169). This is the "plane A" storage:
+    /// the ONLY table whose deltas move the frequency-request ceiling (the
+    /// CLFC V/F curve write never touches it — see
+    /// [[p100-gpc-cap-two-planes]]). `stamp` picks 81044 (base) or 146840
+    /// (+ extended-entry tail).
+    pub fn pstates20_private_raw(&self, stamp: u32) -> crate::NvapiResult<Vec<u8>> {
+        trace!("gpu.pstates20_private_raw(stamp={stamp})");
+        const GET_SIZE: usize = 32528;
+        let mut buf = vec![0u8; GET_SIZE];
+        buf[..4].copy_from_slice(&stamp.to_ne_bytes());
+        unsafe {
+            nvcall!(NvAPI_GPU_GetPstates20Private(self.0, buf.as_mut_ptr() as *mut _))?;
+        }
+        Ok(buf)
+    }
+
+    /// Write a raw private pstates-2.0 delta table (SetPstates20Private NDA
+    /// 0x4C0B519A, escape 0x0700016A). `table` is a USER-layout buffer as
+    /// produced by [`Gpu::pstates20_private_raw`] (32528 B GET buffer works —
+    /// the SET reads only the fields it needs; stamp at +0 must be 81044 or
+    /// 146840). NO user-side validation happens inside this API: whatever
+    /// deltas are in the buffer go to the kernel as-is.
+    pub fn set_pstates20_private_raw(&self, table: &[u8]) -> crate::NvapiResult<()> {
+        trace!("gpu.set_pstates20_private_raw(len={})", table.len());
+        unsafe {
+            nvcall!(NvAPI_GPU_SetPstates20Private(
+                self.0,
+                table.as_ptr() as *const _
+            ))?;
+        }
+        Ok(())
+    }
+
     /// Read the entry count from the medium PerfLimitsGetInfo struct (NDA
     /// 0xE63AE22B, magic 0x1300C). ref tool 2's `isPStateLocked` uses this as the
     /// entry count for the paired large GetStatus struct.
