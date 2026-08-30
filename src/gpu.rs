@@ -1515,7 +1515,10 @@ impl PhysicalGpu {
         // records at bits 8=Pclk0/9=Pclk1 are real, type 0x0A) and any bit
         // >= 10 makes V2 reject the whole call — so seed 0x3FF first and fall
         // back to the historical 0xFF if the driver refuses the wider mask.
-        // u32::MAX is rejected outright.
+        // u32::MAX is rejected outright. The acceptance cap is NOT
+        // monotonic by generation (live 2026-08-31): GTX16 also accepts
+        // 0x3FF (10 records, MSD + bits 8/9 present) while the newer
+        // RTX20/Ampere30 stop at 8 records (0x3FF falls back to 0xFF).
         //
         // V2 (magic 0x261A4, 24996B) is preferred: it marshals value dwords
         // for the type-0x0A records modern drivers report; V1 only fills
