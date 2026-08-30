@@ -3516,9 +3516,19 @@ impl PhysicalGpu {
     pub fn set_dnotify_limit(&self, didx: i32) -> crate::NvapiResult<()> {
         trace!("gpu.set_dnotify_limit({})", didx);
         // the ref tool's process performs a private lifecycle init at startup before
-        // any power-control setter; mirror that (harmless if already done), the
-        // same guard set_dynamic_boost / set_tgp_watt use.
-        self.private_lifecycle_init()?;
+        // any power-control setter; mirror that (harmless if already done). Unlike
+        // set_dynamic_boost — where the driver verifiably returns
+        // API_NOT_INITIALIZED without the init — no observation ties THIS
+        // setter's success to the init's result (the ref tool always has it
+        // done by process start, so the no-init path was never observable),
+        // so an init error is a warning and the SET reports its own status,
+        // exactly like set_tgp_watt.
+        if let Err(e) = self.private_lifecycle_init() {
+            warn!(
+                "set_dnotify_limit: private_lifecycle_init failed ({:?}); attempting set anyway",
+                e.status
+            );
+        }
         // Pass the signed level as a u32 (0xFFFFFFFF for D1's -1, matching
         // the ref tool's mov v15, -1).
         unsafe { nvcall!(NvAPI_GPU_ClientExternPowerStateSet(self.0, didx as u32)) }
