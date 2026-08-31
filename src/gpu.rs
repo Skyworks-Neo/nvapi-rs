@@ -3484,6 +3484,54 @@ impl PhysicalGpu {
         }))
     }
 
+    /// Currently-REQUESTED TGP watts (the TGP slider's live position — the
+    /// "Requested" half of nvidia-smi's PPAB `GPU Ceiling Power Limit` trio),
+    /// read standalone via the private `ClientTgpWattGetStatus` (0x8B3E7343) —
+    /// the GET half of [`set_tgp_watt`]'s read-modify-write, never previously
+    /// exposed on its own. Mirrors set_tgp_watt's proven call sequence:
+    /// best-effort private lifecycle init → GetInfoPrivate prime (which also
+    /// resolves the active policy index) → GET. Returns `Ok(None)` where the
+    /// driver doesn't expose the private interface, or when the GET reports the
+    /// `0xFFFFFFFF` reset sentinel instead of a live value.
+    pub fn tgp_watt_status(&self) -> crate::NvapiResult<Option<TgpWattStatus>> {
+        trace!("gpu.tgp_watt_status()");
+        if let Err(e) = self.private_lifecycle_init() {
+            warn!(
+                "tgp_watt_status: private_lifecycle_init failed ({:?}); attempting read anyway",
+                e.status
+            );
+        }
+        // Prime + resolve the active policy index exactly like set_tgp_watt.
+        let idx = match self.tgp_watt_range()? {
+            Some(range) => range.policy_index,
+            None => return Ok(None),
+        };
+        // 10KB — heap-backed to be stack-safe (same as set_tgp_watt).
+        let mut buf: Vec<u8> =
+            vec![0u8; std::mem::size_of::<power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
+        let ver = <power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
+        // Seed the request mask with the entry we want — the RM escape is
+        // mask-seeded like the XBar ClockClient GET_CONTROL (an unseeded GET
+        // fills no entries and every power dword reads 0). The SET path never
+        // notices because set_power_mw ORs the same bit in before writing.
+        buf[4..8].copy_from_slice(&(1u32.wrapping_shl(idx as u32)).to_ne_bytes());
+        unsafe {
+            let status =
+                sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)?;
+        }
+        let data: &power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS =
+            unsafe { &*(buf.as_ptr() as *const _) };
+        // 0xFFFFFFFF is the SET-side "reset to rated" sentinel; treat it as
+        // "no live requested value" rather than 4.29 million watts.
+        let current_mw = data.power_mw(idx).filter(|mw| *mw != 0xFFFF_FFFF);
+        Ok(Some(TgpWattStatus {
+            policy_index: idx,
+            current_mw,
+        }))
+    }
+
     /// D-Notifier (D0-notify / "extern power state") current state + the D1..D5
     /// power-cap table, from the SAME private ClientPowerPoliciesGetInfo variant
     /// as [`tgp_watt_range`] (NDA, ID `0x67F31384`). The D-Notifier fields live
@@ -3537,9 +3585,15 @@ impl PhysicalGpu {
         // Backfill D1's slot: it has no table value, conventionally Unlimited.
         levels[0].power_mw = None;
 
-        let active = info
+        let mut active = info
             .dnotify_active_index()
             .and_then(DNotifierLevel::from_index);
+        // from_index() leaves power_mw at its Some(0) placeholder for D2..D5 —
+        // fill the ACTIVE level's cap from the same table the levels array
+        // reads, so `active.power_mw` is the real cap (D1 keeps None=Unlimited).
+        if let Some(active) = active.as_mut() {
+            active.power_mw = info.dnotify_power_mw(active.index);
+        }
 
         Ok(Some(DNotifierInfo { active, levels }))
     }
@@ -6527,6 +6581,20 @@ pub struct TgpWattRange {
     pub default_mw: Option<u32>,
     /// Maximum TGP (mW), if the entry exposed it.
     pub max_mw: Option<u32>,
+}
+
+/// Currently-requested TGP watts (NDA 0x8B3E7343, the GET half of the
+/// set_tgp_watt read-modify-write). Values are in **milliwatts**.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default)]
+pub struct TgpWattStatus {
+    /// The power-policy entry index the value was read at (same source as
+    /// [`TgpWattRange::policy_index`]).
+    pub policy_index: usize,
+    /// The requested TGP (mW) — what the TGP slider last wrote, i.e. the
+    /// "Requested Power Limit" nvidia-smi prints on PPAB platforms. `None`
+    /// when the GET returned the 0xFFFFFFFF reset sentinel.
+    pub current_mw: Option<u32>,
 }
 
 /// One D-Notifier (D0-notify / "extern power state") level: the named D level

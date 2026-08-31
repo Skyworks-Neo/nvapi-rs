@@ -641,6 +641,13 @@ impl Gpu {
             .map_err(Into::into)
     }
 
+    /// Currently-requested TGP watts (the GET half of the set_tgp_watt RMW,
+    /// NDA 0x8B3E7343) — nvidia-smi's "Requested Power Limit" on PPAB
+    /// platforms. `Ok(None)` where the driver doesn't expose it.
+    pub fn tgp_watt_status(&self) -> crate::Result<Option<crate::TgpWattStatus>> {
+        self.gpu.tgp_watt_status().map_err(Into::into)
+    }
+
     /// Reset GPU TGP to rated/default (NDA triplet). Returns the default mW, if known.
     pub fn reset_tgp_watt(&self, policy_index: usize) -> crate::Result<Option<u32>> {
         self.gpu.reset_tgp_watt(policy_index).map_err(Into::into)
