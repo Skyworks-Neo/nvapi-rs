@@ -999,12 +999,7 @@ pub mod undocumented {
     pub fn perf_pstates_legacy_record(buf: &[u8], bit: u32) -> (u32, u32, u32, u8) {
         let base = 72 + 2252 * bit as usize;
         let dw = |o: usize| u32::from_ne_bytes(buf[o..o + 4].try_into().expect("4 bytes"));
-        (
-            dw(base),
-            dw(base + 4),
-            dw(base + 8) & !1,
-            buf[base + 12],
-        )
+        (dw(base), dw(base + 4), dw(base + 8) & !1, buf[base + 12])
     }
 
     // ------------------------------------------------------------------

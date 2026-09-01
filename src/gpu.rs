@@ -3952,9 +3952,9 @@ impl PhysicalGpu {
     /// returned, one per mask bit.
     fn pstate_levels_legacy(&self) -> crate::NvapiResult<Option<PStateLevelsInfo>> {
         use clock::undocumented::{
-            perf_pstates_legacy_mask, perf_pstates_legacy_record,
             PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC,
             PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC,
+            perf_pstates_legacy_mask, perf_pstates_legacy_record,
         };
 
         for (len, magic, tag) in [
