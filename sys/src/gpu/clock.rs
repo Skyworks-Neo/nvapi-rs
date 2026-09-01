@@ -1014,6 +1014,11 @@ pub mod undocumented {
     ///
     /// Returns `(nominal_khz, live_min_khz, max_khz)` for `domain_bit` of
     /// record `bit`, or `None` when the entry is absent/out of range.
+    /// NOTE the values are domain-appropriate, not uniformly kHz: on V100
+    /// the Pclk0 entry (bit 8) carries the PCIe GEN LEVEL (3 = Gen3, user
+    /// confirmed — same "gen count" semantics as GetAllClocks domain 31),
+    /// not a clock. Only the kHz clock domains (Gpc/Xbar/Mem/Sys/M/Msd…)
+    /// should be consumed as frequencies.
     pub fn perf_pstates_legacy_domain_clock(
         buf: &[u8],
         record_bit: u32,

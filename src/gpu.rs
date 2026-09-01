@@ -3939,7 +3939,7 @@ impl PhysicalGpu {
             }
             Err(_) => return Ok(None),
         }
-        self.pstate_levels_legacy()
+        self.pstate_levels_legacy(domain)
     }
 
     /// Legacy-layout fallback for `pstate_levels_domain` (pre-V4 drivers):
@@ -3950,7 +3950,7 @@ impl PhysicalGpu {
     /// The `domain` selector is not expressible in the legacy views (records
     /// carry a live-semantics domain type instead) — ALL present pstates are
     /// returned, one per mask bit.
-    fn pstate_levels_legacy(&self) -> crate::NvapiResult<Option<PStateLevelsInfo>> {
+    fn pstate_levels_legacy(&self, domain: usize) -> crate::NvapiResult<Option<PStateLevelsInfo>> {
         use clock::undocumented::{
             PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC,
             PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC,
@@ -3988,19 +3988,28 @@ impl PhysicalGpu {
                             // 0 = the driver didn't fill the legacy header
                             // min/max (live V100: the clocks live in the
                             // record SUB-TABLE) — keep the V4 convention of
-                            // None over a fake 0. The sub-table's GPC entry
-                            // (domain bit 0, ladder-anchored: V100 max 1530
-                            // == NVML boost) rescues the max; its +12 field
-                            // tracks the LIVE clock (135 at idle), not a
-                            // wall — min stays None.
+                            // None over a fake 0. The sub-table entry for
+                            // THIS domain (GPC=0, Xbar=1, Mem=2, …) rescues
+                            // both: +12 is NVML's P0-min parity value
+                            // (nvidia-smi "Core Min 135" the same instant),
+                            // +16 the ladder-anchored max (1530 == NVML
+                            // boost). Header fields take precedence when a
+                            // driver does fill them.
+                            let clocks =
+                                perf_pstates_legacy_domain_clock(&buf, b, domain);
+                            let min = if min > 0 {
+                                Some(min)
+                            } else {
+                                clocks.map(|(_, live_min, _)| live_min)
+                            };
                             let max = if max > 0 {
                                 Some(max)
                             } else {
-                                perf_pstates_legacy_domain_clock(&buf, b, 0).map(|(_, _, mx)| mx)
+                                clocks.map(|(_, _, mx)| mx)
                             };
                             PStateClockRange {
                                 pstate,
-                                min_khz: (min > 0).then_some(min),
+                                min_khz: min.filter(|v| *v > 0),
                                 max_khz: max.filter(|v| *v > 0),
                             }
                         })
