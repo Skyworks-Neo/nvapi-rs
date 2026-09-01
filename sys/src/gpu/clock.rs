@@ -951,6 +951,63 @@ pub mod undocumented {
     }
 
     // ------------------------------------------------------------------
+    // PerfPstatesGetInfoPrivate LEGACY fallback layouts (pre-V4 drivers).
+    //
+    // IDA nvapi64.dll 538.78, handler sub_1802E4570 (IID 0x7B30AE0D, escape
+    // 0x07000048): the version check accepts EXACTLY three caller magic
+    // dwords — 0x379C8 (native V3, 227784 B), 0x31A38 (V3, 203208 B) and
+    // 0x119C8 (V1, 72136 B); anything else (incl. the V4 0x432D0/0x832D0
+    // the R610-era ref tool and our V4 path send) → -9
+    // INCOMPATIBLE_STRUCT_VERSION. So V4 is R610-only; older drivers speak
+    // the legacy layouts and the caller degrades V4 → V3 → V1.
+    //
+    // The magic dword IS the raw struct size (high nibble = version,
+    // 0x119C8 = 72136 …) — nvversion's `size | version<<16` encoding cannot
+    // express that folding, so the magic is written raw into the buffer
+    // (same pattern as ClientPStateLimitStatus's 0x10088 above).
+    //
+    // Shared record layout (from the driver's own marshal loops into both
+    // legacy views): present bitmask @ +4, table version byte @ +8, then
+    // one record per set mask bit at byte 72 + 2252*bit:
+    //   +0  u32 clock-domain type (semantics live; V1 re-indexes by pstate
+    //       number — multi-domain slots overwrite — V3 keeps every slot,
+    //       so prefer V3)
+    //   +4  u32 min_kHz
+    //   +8  u32 max_kHz (bit0 = driver flag, masked off)
+    //   +12 u8  pstate number
+    // (V1 aggregates mask bits BY pstate number — bit p ⇔ P{p} present;
+    //  V3's mask is the raw slot mask and the pstate number rides in each
+    //  record. Iterating set bits and reading record.pstate decodes BOTH.)
+    // ------------------------------------------------------------------
+
+    /// V3 legacy version magic (= struct size 203208, high nibble = v3).
+    pub const PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC: u32 = 0x31A38;
+    /// V3 legacy buffer size (bytes).
+    pub const PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN: usize = 203208;
+    /// V1 legacy version magic (= struct size 72136, high nibble = v1).
+    pub const PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC: u32 = 0x119C8;
+    /// V1 legacy buffer size (bytes).
+    pub const PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN: usize = 72136;
+
+    /// Present-pstate bitmask in a legacy PerfPstatesGetInfoPrivate buffer.
+    pub fn perf_pstates_legacy_mask(buf: &[u8]) -> u32 {
+        u32::from_ne_bytes(buf[4..8].try_into().expect("4 bytes"))
+    }
+
+    /// Decode the legacy per-pstate record for mask bit `bit`:
+    /// `(type, min_khz, max_khz, pstate)`; max bit0 (driver flag) masked off.
+    pub fn perf_pstates_legacy_record(buf: &[u8], bit: u32) -> (u32, u32, u32, u8) {
+        let base = 72 + 2252 * bit as usize;
+        let dw = |o: usize| u32::from_ne_bytes(buf[o..o + 4].try_into().expect("4 bytes"));
+        (
+            dw(base),
+            dw(base + 4),
+            dw(base + 8) & !1,
+            buf[base + 12],
+        )
+    }
+
+    // ------------------------------------------------------------------
     // ClientPStateLimitStatus (NDA, ID 0x9962C97C) — the "which P-States are
     // currently locked" view. RE'd from the ref tool's `[GPUHandle::pollPState]`
     // "get p state limit" branch (thunk sub_140003D60). the ref tool allocates a
@@ -1919,6 +1976,38 @@ pub mod undocumented {
         /// drivers accept this small stamp (90116B) and reject the R610
         /// 4670980 with -9. Live-verified on GT730/391.35.
         pub const MAGIC_LEGACY: u32 = 90116; // 0x16004
+        /// Volta/GV100: BOTH stamps above are rejected (-9) — but the R610
+        /// snapshot magics are accepted for GetControl and (per the RMW
+        /// path being present) SetControl. Smallest = smallest table.
+        /// Live-verified on V100-SXM2/538.78 (2026-09-01).
+        pub const MAGIC_SNAPSHOT: u32 = 82976; // 0x14420
+
+        /// Volta legacy CONTROL layout (rest-relative, marker-echo mapped
+        /// on V100: head [0,0x20) validated, payload [0x40,..) echoed
+        /// verbatim, driver-owned fields = rec+0 flags + rec+0x24 value).
+        /// Mask = LE bitfield (bit r = byte r/8 bit r%8) over the same
+        /// point space as the legacy GetStatus records (128 GPC curve
+        /// points + 4 bins on V100 = 132 present of 136 mask bits).
+        pub const LEGACY_MASK: usize = 0x00; // 17 bytes = 136 bits
+        pub const LEGACY_REC_BASE: usize = 0x60;
+        pub const LEGACY_STRIDE: usize = 0x44;
+        pub const LEGACY_POINTS: usize = 136;
+        /// driver-owned flags dword: 1 = curve point, 0 = bin (mirrors
+        /// the legacy GetStatus flags)
+        pub const LEGACY_TYPE: usize = 0x00;
+        /// driver-owned mode dword, same +36 offset as the R610 record's
+        /// MODE field (0 = absolute kHz offset). First write attempt put
+        /// the offset value here and the driver zeroed it — this dword is
+        /// state-filled, not the user value slot.
+        pub const LEGACY_MODE: usize = 0x24;
+        /// user-space value dword (kHz offset), same +56 offset as the
+        /// R610 record's VALUE field. ECHOED on GetControl (user space),
+        /// so a stored offset is NOT readable back via GetControl — the
+        /// effect must be verified through the legacy GetStatus freq
+        /// dword (+8) instead. WRITE VERDICT: inert — the legacy
+        /// SetControl accepts the struct but never applies the records
+        /// (write matrix 2026-09-01, see gpu.rs set_vfp_point_private).
+        pub const LEGACY_VALUE: usize = 0x38;
         /// buffer size (0x424604 — NOT derived from the magic)
         pub const SIZE: usize = 4343300;
         /// bank-1 point mask (input seed from GetInfo)
@@ -2086,6 +2175,67 @@ pub mod undocumented {
             dword |= 1u32 << bit_idx;
             self.rest[off..off + 4].copy_from_slice(&dword.to_le_bytes());
             Some(())
+        }
+
+        fn legacy_rec_base(idx: usize) -> Option<usize> {
+            if idx >= clk_vfp_control::LEGACY_POINTS {
+                return None;
+            }
+            Some(clk_vfp_control::LEGACY_REC_BASE + clk_vfp_control::LEGACY_STRIDE * idx)
+        }
+
+        /// Volta legacy: mode dword (rec+0x24, state-filled on GetControl
+        /// — the marker probe showed the driver overwrites user input
+        /// here, so this IS the readable-back field).
+        pub fn legacy_mode(&self, idx: usize) -> Option<u32> {
+            let base = Self::legacy_rec_base(idx)?;
+            self.u32_at(base + clk_vfp_control::LEGACY_MODE)
+        }
+
+        /// Volta legacy SET field map (538.78 sub_180258570, case 0x14420
+        /// — the 0x44-stride normalizer): rec+0x00 = MODE dword (0 =
+        /// absolute u32 kHz offset, 1 = delta i16, anything else is
+        /// SKIPPED silently), rec+0x24 = VALUE. Note the GET side
+        /// OVERLOADS rec+0 as the curve/bin flag (1/0) and rec+0x24 as
+        /// its state slot — a snapshot RMW must REWRITE both fields for
+        /// every record it sends, never carry the GET echo over.
+        pub fn legacy_set_mode_value(&mut self, idx: usize, mode: u32, value: u32) -> Option<()> {
+            let base = Self::legacy_rec_base(idx)?;
+            let m = self.off_mut(base + clk_vfp_control::LEGACY_TYPE, 4)?;
+            self.rest[m..m + 4].copy_from_slice(&mode.to_le_bytes());
+            let v = self.off_mut(base + clk_vfp_control::LEGACY_MODE, 4)?;
+            self.rest[v..v + 4].copy_from_slice(&value.to_le_bytes());
+            Some(())
+        }
+
+        /// Volta legacy: neutralize one record for SET (mode 0 + value 0
+        /// = absolute zero offset) — used to scrub the GET-echoed flag
+        /// bytes out of the mask records that must stay untouched.
+        pub fn legacy_set_neutral(&mut self, idx: usize) -> Option<()> {
+            self.legacy_set_mode_value(idx, 0, 0)
+        }
+
+        /// Volta legacy: set mask bit `idx` (LE bitfield at rest[0..0x11]).
+        pub fn legacy_set_mask_bit(&mut self, idx: usize) -> Option<()> {
+            if idx >= clk_vfp_control::LEGACY_POINTS {
+                return None;
+            }
+            let off = self.off_mut(clk_vfp_control::LEGACY_MASK + idx / 8, 1)?;
+            self.rest[off] |= 1 << (idx % 8);
+            Some(())
+        }
+
+        /// Volta legacy: seed the control mask from the legacy GetInfo
+        /// mask (rest[0..0x14], same LE-bitfield format, truncated to the
+        /// control's 136-bit space).
+        pub fn legacy_seed_masks_from_info(
+            &mut self,
+            info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1,
+        ) {
+            let src = info.off(clk_vfp_info::MASK1, 17).unwrap_or(0);
+            let dst = self.off_mut(clk_vfp_control::LEGACY_MASK, 17).unwrap_or(0);
+            let n = 17.min(self.rest.len() - dst).min(info.rest.len() - src);
+            self.rest[dst..dst + n].copy_from_slice(&info.rest[src..src + n]);
         }
     }
 

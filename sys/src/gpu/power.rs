@@ -140,6 +140,16 @@ pub mod undocumented {
     nvversion! { @=NV_GPU_VOLT_RAILS_INFO NV_GPU_VOLT_RAILS_INFO_V2(2) = 6220 }
 
     impl NV_GPU_VOLT_RAILS_INFO {
+        /// V1 stamp ((1<<16)|0xACC, 2764B total): the variant Volta parts
+        /// (V100/GV100, live 538.78, 2026-09-01 — probe
+        /// tests/volta_voltrails_v1_layout.rs) and R391-era drivers accept
+        /// where the V2 stamp ((2<<16)|6220) is rejected with
+        /// IncompatibleStructVersion. SAME dense rail-entry layout as V2
+        /// (192B/rail, type @+76, undecoded descriptor dwords) — only the
+        /// header differs: V1 carries NO rail mask (single fixed dense
+        /// rail; entry 0 live on V100 with type=1).
+        pub const MAGIC_V1: u32 = 0x10ACC;
+
         /// Type discriminator of the rail entry for `bit` (u32 @+192*bit+76).
         pub fn rail_type(&self, bit: u32) -> Option<u32> {
             let base = rail_entry::STRIDE.checked_mul(bit as usize)?;
@@ -196,6 +206,14 @@ pub mod undocumented {
     }
 
     nvversion! { @=NV_GPU_VOLT_RAILS_CONTROL NV_GPU_VOLT_RAILS_CONTROL_V2(2) = 2760 }
+
+    impl NV_GPU_VOLT_RAILS_CONTROL {
+        /// V1 stamp (0x10AC8 — coincidentally the same value as the STATUS
+        /// V1 stamp; both structs total 2760B): the GetControl/SetControl
+        /// variant Volta/R391-era drivers accept (live V100 GetControl
+        /// V1: status=0, entry type=1, stock offsets all zero).
+        pub const MAGIC_V1: u32 = 0x10AC8;
+    }
 
     nvstruct! {
         /// Live-voltage variant: identical layout, but the driver only accepts

@@ -565,9 +565,11 @@ pub struct ClkVfPointPrivate {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ClkVfPointsPrivate {
-    /// present-point masks, 2048 bits per bank: bank0 = masks[0..4],
-    /// bank1 = masks[4..8]
-    pub masks: [u64; 8],
+    /// present-point masks, 2048 bits (= 32 u64 words) per bank:
+    /// bank0 = masks[0..32], bank1 = masks[32..64]. Sized to the full
+    /// GetInfo point space (2048/bank) — a fixed small array panicked the
+    /// first time a generation set present bits past it (V100/GV100).
+    pub masks: Vec<u64>,
     /// V/F points the driver filled, bank-major order. Includes UNTYPED
     /// (type-0) present records — the pstate frequency bins on some
     /// kernels (GP100/TCC: 8 records @160..167) — which land in

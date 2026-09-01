@@ -1350,30 +1350,67 @@ impl PhysicalGpu {
     /// GetControl + GetStatus. Never writes; the SetControl sibling
     /// (0x87C55C8A, the µV-offset path melonVolt drives on RTX 5090) is
     /// intentionally unwrapped.
+    /// VoltRails GetInfo with the V1 stamp fallback. Volta parts (V100/
+    /// GV100, live 538.78, 2026-09-01 — probes volta_voltrails_probe.rs /
+    /// volta_voltrails_v1_layout.rs) and R391-era drivers reject the V2
+    /// stamp ((2<<16)|6220) with IncompatibleStructVersion but IMPLEMENT
+    /// the family via the V1 stamp (0x10ACC): same dense entry layout
+    /// (INFO type @76, 192B/rail; ctrl/status type @72 + six µV payload
+    /// values @76) — only the header differs, V1 carries no rail mask.
+    /// Live V100 STATUS decode: current 868.75 mV, target wall 1068.75,
+    /// VBIOS 0, VRM-max 1125, effective = min(target, vrm) 1068.75,
+    /// P0-min-hold 618.75 (µV) — exact match with the V2 semantics.
+    /// On V1 the single dense rail is UNMASKED; synthesize bit 0 after
+    /// confirming the entry is actually populated (R391/Fermi accepts V1
+    /// too but fills an all-zero table → keep NotSupported there).
+    /// Returns (info, legacy_v1).
+    fn volt_rails_info(
+        &self,
+    ) -> crate::Result<(power::undocumented::NV_GPU_VOLT_RAILS_INFO, bool)> {
+        use crate::sys::api::NvAPI_GPU_VoltVoltRailsGetInfo;
+        use power::undocumented::NV_GPU_VOLT_RAILS_INFO;
+        let mut info = NV_GPU_VOLT_RAILS_INFO::default();
+        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
+        if let Err(ne) = crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo, st) {
+            if ne.status != crate::Status::IncompatibleStructVersion {
+                return Err(crate::Error::from(ne));
+            }
+            info.version = NvVersion::with_version(NV_GPU_VOLT_RAILS_INFO::MAGIC_V1);
+            let st2 =
+                unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
+            crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo, st2)
+                .map_err(crate::Error::from)?;
+            if info.rail_mask == 0 {
+                if info.rail_type(0).unwrap_or(0) == 0 {
+                    // R391/Fermi accepts V1 but has no rail subsystem —
+                    // same NotSupported the pre-fallback code surfaced.
+                    return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                        sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo,
+                        crate::Status::NotSupported,
+                    )));
+                }
+                info.rail_mask = 1;
+            }
+            Ok((info, true))
+        } else {
+            Ok((info, false))
+        }
+    }
+
     pub fn volt_rails(&self) -> crate::Result<VoltRails> {
         trace!("gpu.volt_rails()");
         use crate::sys::api::{
-            NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsGetInfo,
-            NvAPI_GPU_VoltVoltRailsGetStatus,
+            NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsGetStatus,
         };
-        use power::undocumented::{
-            NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO, NV_GPU_VOLT_RAILS_STATUS_V1,
-        };
+        use power::undocumented::{NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_STATUS_V1};
 
-        let mut info = NV_GPU_VOLT_RAILS_INFO::default();
-        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
-        // Legacy drivers (e.g. R391 on Fermi) only accept the V1 stamp
-        // (0x10ACC/2764B) whose layout is unmapped — the per-rail telemetry
-        // subsystem this family exposes is Blackwell-era. No faithful
-        // downgrade exists; surface as NotSupported (soft-fails to None in hi).
-        Self::map_legacy_struct_version(crate::status_result(
-            sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo,
-            st,
-        ))
-        .map_err(crate::Error::from)?;
+        let (info, legacy_v1) = self.volt_rails_info()?;
 
         let mut control = NV_GPU_VOLT_RAILS_CONTROL::default();
         control.seed_from_info(&info);
+        if legacy_v1 {
+            control.version = NvVersion::with_version(NV_GPU_VOLT_RAILS_CONTROL::MAGIC_V1);
+        }
         let st = unsafe {
             NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut control).cast())
         };
@@ -1424,25 +1461,19 @@ impl PhysicalGpu {
     pub fn set_volt_rail_value(&self, rail_bit: u32, value_uV: i32) -> crate::Result<i32> {
         trace!("gpu.set_volt_rail_value({rail_bit}, {value_uV})");
         use crate::sys::api::{
-            NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsGetInfo,
-            NvAPI_GPU_VoltVoltRailsSetControl,
+            NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsSetControl,
         };
-        use power::undocumented::{NV_GPU_VOLT_RAILS_CONTROL, NV_GPU_VOLT_RAILS_INFO, ctrl_entry};
+        use power::undocumented::{NV_GPU_VOLT_RAILS_CONTROL, ctrl_entry};
 
-        let mut info = NV_GPU_VOLT_RAILS_INFO::default();
-        let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(self.0, ptr::from_mut(&mut info).cast()) };
-        // Same legacy-driver mapping as volt_rails(): R391/Fermi only accepts
-        // the unmapped V1 stamp → NotSupported.
-        Self::map_legacy_struct_version(crate::status_result(
-            sys::Api::NvAPI_GPU_VoltVoltRailsGetInfo,
-            st,
-        ))
-        .map_err(crate::Error::from)?;
+        let (info, legacy_v1) = self.volt_rails_info()?;
 
         let dense = Self::dense_index_for(info.rail_mask, rail_bit)?;
 
         let mut control = NV_GPU_VOLT_RAILS_CONTROL::default();
         control.seed_from_info(&info);
+        if legacy_v1 {
+            control.version = NvVersion::with_version(NV_GPU_VOLT_RAILS_CONTROL::MAGIC_V1);
+        }
         let st = unsafe {
             NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut control).cast())
         };
@@ -1465,6 +1496,9 @@ impl PhysicalGpu {
         // readback: fresh seeded GET, compare payload index 0
         let mut verify = NV_GPU_VOLT_RAILS_CONTROL::default();
         verify.seed_from_info(&info);
+        if legacy_v1 {
+            verify.version = NvVersion::with_version(NV_GPU_VOLT_RAILS_CONTROL::MAGIC_V1);
+        }
         let st =
             unsafe { NvAPI_GPU_VoltVoltRailsGetControl(self.0, ptr::from_mut(&mut verify).cast()) };
         crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetControl, st)
@@ -2105,8 +2139,13 @@ impl PhysicalGpu {
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         let info_err = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
             .map_err(crate::Error::from);
+        // set when the R610 large-table stamp was rejected and the driver
+        // took the LEGACY small-table fallback — the buffer then uses the
+        // legacy layout, which needs its own decoder (see below)
+        let mut legacy_layout = false;
         if let Err(ref e) = info_err {
             if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+                legacy_layout = true;
                 info.version = NvVersion::with_version(
                     NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC_LEGACY,
                 );
@@ -2135,6 +2174,7 @@ impl PhysicalGpu {
             .map_err(crate::Error::from);
         if let Err(ref e) = status_err {
             if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+                legacy_layout = true;
                 status.version = NvVersion::with_version(
                     NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE::MAGIC_LEGACY,
                 );
@@ -2149,44 +2189,94 @@ impl PhysicalGpu {
             }
         }
 
-        // collapse the two 64-dword bank masks into 8 u64s
-        let mut masks = [0u64; 8];
-        for bank in 0..2usize {
-            for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
-                if info.point_present(bank, idx) == Some(true) {
-                    masks[bank * 4 + idx / 64] |= 1u64 << (idx % 64);
-                }
-            }
-        }
-
+        // collapse the two per-bank present-point masks (2048 bits = 32
+        // u64 words per bank) into u64 words, sized to the FULL point
+        // space. A fixed [u64; 8] only covered the first 256 points/bank
+        // and panicked the moment a generation set present bits past that
+        // (V100/GV100 live 2026-08-31: "index out of bounds: the len is 8
+        // but the index is 12").
+        let words_per_bank = clock::undocumented::clk_vfp_info::POINTS.div_ceil(64);
+        let mut masks = vec![0u64; 2 * words_per_bank];
         let mut points = Vec::new();
-        for bank in 0..2usize {
-            for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
-                if info.point_present(bank, idx) != Some(true) {
+        if legacy_layout {
+            // Volta/R391-generation LEGACY small-table decode (live-RE'd on
+            // V100/GV100, 582.41, 2026-08-31 — the R610 stamp 0x78604 is
+            // REJECTED with IncompatibleStructVersion and the driver fills
+            // the legacy 0x1481C table; validated point-for-point against
+            // get-public-vftable, probe: tests/volta_vfp_layout_probe.rs):
+            //   mask = rest[0..0x14], BYTE-LSB bit i = record i present
+            //          (V100: 132 bits = 128-pt GPC curve + 4 tail bins)
+            //   rec  = rest[0x60 + i*0x4C ..]:
+            //          +0 u32 flags (1 = curve point, 0 = untyped pstate
+            //          bin), +4 u32 voltage_uV, +8 u32 freq MHz
+            // Curve: 450 mV→405 MHz through 1243.75 mV→1717 MHz on a
+            // 6.25 mV grid; bins: 877@675 (HBM — matches the NVML memory
+            // clock), 810@668.75, 1080@725, 1325@812.5 (pstate ladder,
+            // voltages populated unlike Pascal's all-zero bins).
+            for idx in 0..0x14 * 8 {
+                if info.rest[idx / 8] & (1 << (idx % 8)) == 0 {
                     continue;
                 }
-                // type-0 present records are KEPT: on GP100/TCC they are the
-                // pstate frequency bins (live P100: 8 records @160..167,
-                // ladder 405/648/810/1080 doubled — values matching the
-                // VBIOS perf table's pstate-class clocks), and the reset
-                // path clears them by mask (168 vs 160 discrepancy).
-                // Consumer images so far show no type-0 present records, so
-                // this only widens what is surfaced.
-                let typ = status.record_type(bank, idx).unwrap_or(0);
-                // Pascal-generation parser: type-1 records report the
-                // +0x24 frequency term DOUBLED (live-observed on a
-                // 10-series: the parsed "default" is exactly 2× the
-                // running clock). Halve type-1 frequency terms; type 8/13/18
-                // (Ada+) are plain MHz.
-                let div = if typ == 1 { 2 } else { 1 };
+                masks[idx / 64] |= 1u64 << (idx % 64);
+                // records live in the GetStatus buffer (the GetInfo buffer
+                // carries its OWN 0x48-stride descriptor table at the same
+                // offsets — reading info there yields grid voltages as
+                // "freq" garbage); the mask header is identical in both
+                let rec = 0x60 + idx * 0x4C;
+                let rd = |o: usize| {
+                    u32::from_le_bytes(
+                        status.rest[rec + o..rec + o + 4]
+                            .try_into()
+                            .expect("in-bounds"),
+                    )
+                };
                 points.push(crate::clock::ClkVfPointPrivate {
-                    bank: bank as u8,
+                    bank: 0,
                     index: idx as u16,
-                    record_type: typ,
-                    voltage_uV: status.voltage_uv(bank, idx).unwrap_or(0),
-                    freq_default_mhz: status.freq_default_mhz(bank, idx).unwrap_or(0) / div,
-                    freq_current_mhz: status.freq_current_mhz(bank, idx).unwrap_or(0) / div,
+                    record_type: rd(0) as u8,
+                    voltage_uV: rd(4),
+                    freq_default_mhz: rd(8),
+                    // the legacy record exposes no separate current term
+                    freq_current_mhz: rd(8),
                 });
+            }
+        } else {
+            for bank in 0..2usize {
+                for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
+                    if info.point_present(bank, idx) == Some(true) {
+                        masks[bank * words_per_bank + idx / 64] |= 1u64 << (idx % 64);
+                    }
+                }
+            }
+
+            for bank in 0..2usize {
+                for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
+                    if info.point_present(bank, idx) != Some(true) {
+                        continue;
+                    }
+                    // type-0 present records are KEPT: on GP100/TCC they are the
+                    // pstate frequency bins (live P100: 8 records @160..167,
+                    // ladder 405/648/810/1080 doubled — values matching the
+                    // VBIOS perf table's pstate-class clocks), and the reset
+                    // path clears them by mask (168 vs 160 discrepancy).
+                    // Consumer images so far show no type-0 present records, so
+                    // this only widens what is surfaced.
+                    let typ = status.record_type(bank, idx).unwrap_or(0);
+                    // Pascal-generation parser: type-1 records report the
+                    // +0x24 frequency term DOUBLED (live-observed on a
+                    // 10-series: the parsed "default" is exactly 2× the
+                    // running clock). Halve type-1 frequency terms; type 8/13/18
+                    // (Ada+) are plain MHz.
+                    let div = if typ == 1 { 2 } else { 1 };
+                    points.push(crate::clock::ClkVfPointPrivate {
+                        bank: bank as u8,
+                        index: idx as u16,
+                        record_type: typ,
+                        voltage_uV: status.voltage_uv(bank, idx).unwrap_or(0),
+                        freq_default_mhz: status.freq_default_mhz(bank, idx).unwrap_or(0) / div,
+                        freq_current_mhz: status.freq_current_mhz(bank, idx).unwrap_or(0) / div,
+                    });
+                }
             }
         }
 
@@ -2360,8 +2450,13 @@ impl PhysicalGpu {
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
         let info_err = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
             .map_err(crate::Error::from);
+        // LEGACY layout (Volta/R391-generation): this reader has no legacy
+        // decoder — the R610 record accessor would read garbage from the
+        // legacy buffer, so return an empty snapshot instead.
+        let mut legacy_layout = false;
         if let Err(ref e) = info_err {
             if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+                legacy_layout = true;
                 info.version = NvVersion::with_version(
                     NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC_LEGACY,
                 );
@@ -2378,17 +2473,31 @@ impl PhysicalGpu {
         let mut ctrl = unsafe {
             let b = Box::<clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             let mut b = b.assume_init();
-            b.version = NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
+            // Volta takes the R610 snapshot magic (0x14420); the canonical
+            // 0x474604 AND the GT730 legacy stamp 0x16004 are both -9 there.
+            b.version = NvVersion::with_version(if legacy_layout {
+                clock::undocumented::clk_vfp_control::MAGIC_SNAPSHOT
+            } else {
+                clock::undocumented::clk_vfp_control::MAGIC
+            });
             b
         };
-        ctrl.seed_masks_from_info(&info);
+        if legacy_layout {
+            // legacy mask = LE bitfield at rest[0..0x11] (17B, 136 bits);
+            // the R610 2×128B bank seed would smear GetInfo descriptor
+            // bytes into the control head, which the driver validates.
+            ctrl.legacy_seed_masks_from_info(&info);
+        } else {
+            ctrl.seed_masks_from_info(&info);
+        }
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *ctrl).cast())
         };
         let ctrl_err = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
             .map_err(crate::Error::from);
         if let Err(ref e) = ctrl_err {
-            if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+            if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) && !legacy_layout
+            {
                 ctrl.version =
                     NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC_LEGACY);
                 ctrl.seed_masks_from_info(&info);
@@ -2403,17 +2512,37 @@ impl PhysicalGpu {
         }
 
         let mut points = Vec::new();
-        for bank in 0..2usize {
-            for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
-                if info.point_present(bank, idx) != Some(true) {
+        if legacy_layout {
+            // Volta legacy control records: the mode dword (rec+0x24) is
+            // state-filled and readable (0 = stock/absolute, 1 = raw-delta
+            // record stored by a SET); the value lives at rec+0x38 in USER
+            // space, which GetControl echoes rather than fills, so a
+            // stored value is NOT readable back here (check the legacy
+            // GetStatus freq dword +8 instead).
+            for idx in 0..0x14 * 8 {
+                if info.rest[idx / 8] & (1 << (idx % 8)) == 0 {
                     continue;
                 }
                 points.push(crate::clock::ClkVfControlPointPrivate {
-                    bank: bank as u8,
+                    bank: 0,
                     index: idx as u16,
-                    mode: ctrl.mode(bank, idx).unwrap_or(0),
-                    value: ctrl.value(bank, idx).unwrap_or(0),
+                    mode: ctrl.legacy_mode(idx).unwrap_or(0),
+                    value: 0, // user space — unreadable via GetControl
                 });
+            }
+        } else {
+            for bank in 0..2usize {
+                for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
+                    if info.point_present(bank, idx) != Some(true) {
+                        continue;
+                    }
+                    points.push(crate::clock::ClkVfControlPointPrivate {
+                        bank: bank as u8,
+                        index: idx as u16,
+                        mode: ctrl.mode(bank, idx).unwrap_or(0),
+                        value: ctrl.value(bank, idx).unwrap_or(0),
+                    });
+                }
             }
         }
 
@@ -2461,7 +2590,9 @@ impl PhysicalGpu {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
 
-        // 1. GetInfo → seed bank masks (mandatory, same as the read path)
+        // 1. GetInfo → seed bank masks (mandatory, same as the read path).
+        // R610 stamp first; Volta rejects it (-9) and takes the LEGACY
+        // small-table layout, which has a different control geometry.
         let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
             let mut b = b.assume_init();
@@ -2471,8 +2602,24 @@ impl PhysicalGpu {
         };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
-            .map_err(crate::Error::from)?;
+        let info_err = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from);
+        let mut legacy_layout = false;
+        if let Err(ref e) = info_err {
+            if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+                legacy_layout = true;
+                info.version = NvVersion::with_version(
+                    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC_LEGACY,
+                );
+                let st2 = unsafe {
+                    NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
+                };
+                crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st2)
+                    .map_err(crate::Error::from)?;
+            } else {
+                info_err?;
+            }
+        }
 
         // 2. GetControl snapshot with seeded masks — the RMW source.
         // Use unsafe { zeroed() } not default() — the 4MB rest[] array
@@ -2481,9 +2628,16 @@ impl PhysicalGpu {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             b.assume_init()
         };
-        snapshot.version =
-            sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
-        snapshot.seed_masks_from_info(&info);
+        snapshot.version = sys::api::NvVersion::with_version(if legacy_layout {
+            clock::undocumented::clk_vfp_control::MAGIC_SNAPSHOT
+        } else {
+            clock::undocumented::clk_vfp_control::MAGIC
+        });
+        if legacy_layout {
+            snapshot.legacy_seed_masks_from_info(&info);
+        } else {
+            snapshot.seed_masks_from_info(&info);
+        }
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
         };
@@ -2492,19 +2646,46 @@ impl PhysicalGpu {
 
         // 3. Patch the snapshot IN PLACE (no clone — the 4MB struct
         // would overflow the stack if cloned). We restore it on mismatch.
-        let user_type = if bank == 0 { 8 } else { 6 };
-        snapshot
-            .set_mask_bit(bank, idx)
-            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
-        snapshot
-            .set_record_type(bank, idx, user_type)
-            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
-        if freq_mode {
-            snapshot.set_absolute(bank, idx, value)
+        if legacy_layout {
+            // Volta legacy SET (538.78 sub_180258570 case 0x14420): the
+            // 0x44 records are read as mode@rec+0 (0 = abs u32 kHz, 1 =
+            // delta i16, other = silently skipped) + value@rec+0x24. The
+            // GET echo leaves rec+0 = curve/bin flag and rec+0x24 = state
+            // — scrub EVERY masked record to neutral (mode 0, value 0)
+            // before programming the target, or the snapshot RMW sends
+            // 131 bogus "mode 1 delta 0" records plus a skipped target.
+            if bank != 0 {
+                return Err(crate::Error::ArgumentRange(Default::default()));
+            }
+            for r in 0..132usize {
+                if r != idx {
+                    snapshot.legacy_set_neutral(r);
+                }
+            }
+            let (mode, raw) = if freq_mode {
+                (0u32, value)
+            } else {
+                // mode-1 raw: low i16 is the control word (R610 convention)
+                (1u32, (value as u16) as u32)
+            };
+            snapshot
+                .legacy_set_mode_value(idx, mode, raw)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
         } else {
-            snapshot.set_delta(bank, idx, value as i16)
+            let user_type = if bank == 0 { 8 } else { 6 };
+            snapshot
+                .set_mask_bit(bank, idx)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            snapshot
+                .set_record_type(bank, idx, user_type)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            if freq_mode {
+                snapshot.set_absolute(bank, idx, value)
+            } else {
+                snapshot.set_delta(bank, idx, value as i16)
+            }
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
         }
-        .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
 
         // 4. SetControl — pass the Box's inner pointer (not &Box)
         let st = unsafe {
@@ -2518,21 +2699,55 @@ impl PhysicalGpu {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             b.assume_init()
         };
-        verify.version =
-            sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
-        verify.seed_masks_from_info(&info);
+        verify.version = sys::api::NvVersion::with_version(if legacy_layout {
+            clock::undocumented::clk_vfp_control::MAGIC_SNAPSHOT
+        } else {
+            clock::undocumented::clk_vfp_control::MAGIC
+        });
+        if legacy_layout {
+            verify.legacy_seed_masks_from_info(&info);
+        } else {
+            verify.seed_masks_from_info(&info);
+        }
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
             .map_err(crate::Error::from)?;
 
-        let retained_mode = verify.mode(bank, idx).unwrap_or(0);
-        let retained_value = verify.value(bank, idx).unwrap_or(0);
+        let retained_mode = if legacy_layout {
+            // rec+0x24 is the ONE state-filled, readable-back field: the
+            // marker probe showed the driver overwriting user input here.
+            // A mode-1 SET reading back as 1 = storage proof; 0 = dropped.
+            verify.legacy_mode(idx).unwrap_or(u32::MAX)
+        } else {
+            verify.mode(bank, idx).unwrap_or(0)
+        };
+        let retained_value = if legacy_layout {
+            // the value dword (rec+0x38) is USER space — GetControl echoes
+            // the current call's input over it, so a stored value is
+            // structurally unreadable back. Report what we sent; the true
+            // effect check is the legacy GetStatus freq dword (+8) at the
+            // call site.
+            value
+        } else {
+            verify.value(bank, idx).unwrap_or(0)
+        };
 
         // For mode 0: value must match exactly
         // For mode 1: low i16 must match
-        let ok = if freq_mode {
+        let ok = if legacy_layout {
+            // NO readback verify on legacy: both candidate readback fields
+            // are structurally unusable (rec+0x38 is user-echo — a GET
+            // overwrites it with the current call's input; rec+0x24 reads
+            // back 0 even after a mode-1 SET, so it is not a user mode
+            // mirror). Treating verify-mismatch as failure here would
+            // auto-restore and silently WIPE writes that may have landed.
+            // The SET status is the only in-protocol gate; retention is
+            // arbitrated externally (legacy GetStatus freq +8, public
+            // vftable delta, live clocks).
+            true
+        } else if freq_mode {
             retained_mode == 0 && retained_value == value
         } else {
             retained_mode == 1 && (retained_value as i16) == (value as i16)
@@ -2758,7 +2973,9 @@ impl PhysicalGpu {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
 
-        // 1. GetInfo → seed masks
+        // 1. GetInfo → seed masks. Volta rejects the R610 stamp (-9) and
+        // takes the LEGACY small-table layout — its control geometry is
+        // handled below (see set_vfp_point_private for the full map).
         let mut info: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE> = unsafe {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE>::new_zeroed();
             let mut b = b.assume_init();
@@ -2768,17 +2985,40 @@ impl PhysicalGpu {
         };
         let st =
             unsafe { NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast()) };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
-            .map_err(crate::Error::from)?;
+        let info_err = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st)
+            .map_err(crate::Error::from);
+        let mut legacy_layout = false;
+        if let Err(ref e) = info_err {
+            if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) {
+                legacy_layout = true;
+                info.version = NvVersion::with_version(
+                    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC_LEGACY,
+                );
+                let st2 = unsafe {
+                    NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
+                };
+                crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st2)
+                    .map_err(crate::Error::from)?;
+            } else {
+                info_err?;
+            }
+        }
 
         // 2. GetControl snapshot (on heap, zeroed to avoid stack overflow)
         let mut snapshot: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
             let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE>::new_zeroed();
             b.assume_init()
         };
-        snapshot.version =
-            sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
-        snapshot.seed_masks_from_info(&info);
+        snapshot.version = sys::api::NvVersion::with_version(if legacy_layout {
+            clock::undocumented::clk_vfp_control::MAGIC_SNAPSHOT
+        } else {
+            clock::undocumented::clk_vfp_control::MAGIC
+        });
+        if legacy_layout {
+            snapshot.legacy_seed_masks_from_info(&info);
+        } else {
+            snapshot.seed_masks_from_info(&info);
+        }
         let st = unsafe {
             NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *snapshot).cast())
         };
@@ -2786,17 +3026,37 @@ impl PhysicalGpu {
             .map_err(crate::Error::from)?;
 
         // 3. Patch every point in [start, end] in-place
-        let user_type = if bank == 0 { 8 } else { 6 };
-        for idx in start..=end {
-            snapshot
-                .set_mask_bit(bank, idx)
-                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
-            snapshot
-                .set_record_type(bank, idx, user_type)
-                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
-            snapshot
-                .set_delta(bank, idx, delta_mhz)
-                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        if legacy_layout {
+            // one RMW over the contiguous range (mode-1 delta i16 per
+            // point, SET map = mode@rec+0 + value@rec+0x24); scrub every
+            // other masked record to neutral so the GET-echoed flag bytes
+            // don't become bogus delta records.
+            if bank != 0 {
+                return Err(crate::Error::ArgumentRange(Default::default()));
+            }
+            for r in 0..132usize {
+                if !(start..=end).contains(&r) {
+                    snapshot.legacy_set_neutral(r);
+                }
+            }
+            for idx in start..=end {
+                snapshot
+                    .legacy_set_mode_value(idx, 1, (delta_mhz as u16) as u32)
+                    .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            }
+        } else {
+            let user_type = if bank == 0 { 8 } else { 6 };
+            for idx in start..=end {
+                snapshot
+                    .set_mask_bit(bank, idx)
+                    .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+                snapshot
+                    .set_record_type(bank, idx, user_type)
+                    .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+                snapshot
+                    .set_delta(bank, idx, delta_mhz)
+                    .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            }
         }
 
         // 4. SetControl
@@ -2805,6 +3065,13 @@ impl PhysicalGpu {
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl, st)
             .map_err(crate::Error::from)?;
+
+        if legacy_layout {
+            // no readback verify on legacy — the value field is user-echo
+            // (unreadable) and the mode dword does not mirror user input
+            // (see set_vfp_point_private); the SET status is the gate.
+            return Ok(());
+        }
 
         // 5. Readback first + last point's mode to verify SET succeeded
         let mut verify: Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE> = unsafe {
@@ -3636,7 +3903,8 @@ impl PhysicalGpu {
         domain: usize,
     ) -> crate::NvapiResult<Option<PStateLevelsInfo>> {
         trace!("gpu.pstate_levels_domain({})", domain);
-        // 275KB — heap-backed to be stack-safe, same pattern as tgp_watt_range.
+        // V4 (R610-era, 275152 B) first. 275KB — heap-backed to be
+        // stack-safe, same pattern as tgp_watt_range.
         let mut buf: Vec<u8> =
             vec![0u8; std::mem::size_of::<clock::undocumented::NV_GPU_PERF_PSTATES_INFO_PRIVATE>()];
         let ver = <clock::undocumented::NV_GPU_PERF_PSTATES_INFO_PRIVATE as sys::nvapi::StructVersion>::NVAPI_VERSION;
@@ -3646,19 +3914,94 @@ impl PhysicalGpu {
         let status = unsafe {
             sys::api::NvAPI_GPU_PerfPstatesGetInfoPrivate(self.0, buf.as_mut_ptr() as *mut _)
         };
-        if crate::status_result(sys::Api::NvAPI_GPU_PerfPstatesGetInfoPrivate, status).is_err() {
-            return Ok(None);
+        match crate::status_result(sys::Api::NvAPI_GPU_PerfPstatesGetInfoPrivate, status) {
+            Ok(()) => {
+                let pstates = info
+                    .pstate_entries_domain(domain)
+                    .into_iter()
+                    .map(|e| PStateClockRange {
+                        pstate: e.pstate,
+                        min_khz: e.min_khz,
+                        max_khz: e.max_khz,
+                    })
+                    .collect();
+                return Ok(Some(PStateLevelsInfo { pstates }));
+            }
+            // Pre-V4 drivers (538.78 verified in IDA: the handler takes
+            // exactly 0x379C8/0x31A38/0x119C8) reject the V4 magic with -9 —
+            // degrade through the legacy layouts. Anything else is a real
+            // family absence (NOT_SUPPORTED etc.) → None, no fallback.
+            Err(crate::NvapiError {
+                status: Status::IncompatibleStructVersion,
+                ..
+            }) => {
+                trace!("gpu.pstate_levels_domain(): V4 rejected (-9), trying legacy V3/V1");
+            }
+            Err(_) => return Ok(None),
         }
-        let pstates = info
-            .pstate_entries_domain(domain)
-            .into_iter()
-            .map(|e| PStateClockRange {
-                pstate: e.pstate,
-                min_khz: e.min_khz,
-                max_khz: e.max_khz,
-            })
-            .collect();
-        Ok(Some(PStateLevelsInfo { pstates }))
+        self.pstate_levels_legacy()
+    }
+
+    /// Legacy-layout fallback for `pstate_levels_domain` (pre-V4 drivers):
+    /// V3 (0x31A38, slot-ordered — every domain slot keeps its own record)
+    /// preferred, V1 (0x119C8, mask re-indexed by pstate — multi-domain
+    /// slots overwrite) second. Layouts and the accepted-magic set are IDA
+    /// RE'd from nvapi64 538.78 `sub_1802E4570` (see the sys-side constants).
+    /// The `domain` selector is not expressible in the legacy views (records
+    /// carry a live-semantics domain type instead) — ALL present pstates are
+    /// returned, one per mask bit.
+    fn pstate_levels_legacy(&self) -> crate::NvapiResult<Option<PStateLevelsInfo>> {
+        use clock::undocumented::{
+            perf_pstates_legacy_mask, perf_pstates_legacy_record,
+            PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC,
+            PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC,
+        };
+
+        for (len, magic, tag) in [
+            (
+                PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN,
+                PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC,
+                "V3",
+            ),
+            (
+                PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN,
+                PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC,
+                "V1",
+            ),
+        ] {
+            let mut buf: Vec<u8> = vec![0u8; len];
+            buf[..4].copy_from_slice(&magic.to_ne_bytes());
+            let status = unsafe {
+                sys::api::NvAPI_GPU_PerfPstatesGetInfoPrivate(self.0, buf.as_mut_ptr() as *mut _)
+            };
+            match crate::status_result(sys::Api::NvAPI_GPU_PerfPstatesGetInfoPrivate, status) {
+                Ok(()) => {
+                    let mask = perf_pstates_legacy_mask(&buf);
+                    let pstates = (0..32u32)
+                        .filter(|b| mask & (1 << b) != 0)
+                        .map(|b| {
+                            let (ty, min, max, pstate) = perf_pstates_legacy_record(&buf, b);
+                            trace!(
+                                "gpu.pstate_levels_domain(): legacy {tag} bit {b} → \
+                                 P{pstate} type {ty} {min}-{max} kHz"
+                            );
+                            PStateClockRange {
+                                pstate,
+                                min_khz: Some(min),
+                                max_khz: Some(max),
+                            }
+                        })
+                        .collect();
+                    return Ok(Some(PStateLevelsInfo { pstates }));
+                }
+                Err(crate::NvapiError {
+                    status: Status::IncompatibleStructVersion,
+                    ..
+                }) => continue, // try the older layout
+                Err(_) => return Ok(None),
+            }
+        }
+        Ok(None)
     }
 
     /// P-State level table for the default (GPC/core) clock-domain. Convenience

@@ -26,6 +26,9 @@ mod types;
 pub use clock::*;
 pub use ecc::*;
 pub use error::*;
+// explicit: the thread-local last-error ledger helpers (glob-shadowing-
+// proof surface for core/CLI)
+pub use error::{clear_status_error, last_status_error};
 pub use gpu::*;
 pub use gsync::*;
 #[cfg(feature = "i2c")]

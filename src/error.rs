@@ -1,21 +1,55 @@
 use crate::{Status, sys};
+use std::cell::RefCell;
 use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fmt;
 use sys::ArgumentRangeError;
 
+thread_local! {
+    /// Most recent NVAPI status failure on this thread, preformatted via
+    /// [`NvapiError`]'s Display. Every failed call funnels through
+    /// [`status_result`], so wrapper layers that swallow the error into
+    /// `Option::None` (rendered as "supported: no") still leave the
+    /// ORIGINAL status here for the CLI renderers to surface.
+    static LAST_STATUS_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Record a status failure (called from [`status_result`]).
+fn record_status_error(err: &NvapiError) {
+    LAST_STATUS_ERROR.with(|slot| *slot.borrow_mut() = Some(err.to_string()));
+}
+
+/// The most recent NVAPI status failure on this thread, if any.
+pub fn last_status_error() -> Option<String> {
+    LAST_STATUS_ERROR.with(|slot| slot.borrow().clone())
+}
+
+/// Forget the recorded failure — call at the start of each top-level
+/// command so any annotation describes the current run only.
+pub fn clear_status_error() {
+    LAST_STATUS_ERROR.with(|slot| *slot.borrow_mut() = None);
+}
+
 pub fn status_result(nvid: sys::Api, status: sys::NvAPI_Status) -> Result<(), NvapiError> {
     match sys::Status::from_raw(status) {
         Ok(sys::Status::Ok) => Ok(()),
-        Ok(status) => Err(NvapiError::new(nvid, status)),
+        Ok(status) => {
+            let err = NvapiError::new(nvid, status);
+            record_status_error(&err);
+            Err(err)
+        }
         // the driver returned a code outside the known table (newer driver or
         // NDA surface) — keep the raw code instead of collapsing it to
         // `Status::Error` where it is lost forever
-        Err(_) => Err(NvapiError {
-            nvid,
-            status: sys::Status::Error,
-            raw_status: Some(status),
-        }),
+        Err(_) => {
+            let err = NvapiError {
+                nvid,
+                status: sys::Status::Error,
+                raw_status: Some(status),
+            };
+            record_status_error(&err);
+            Err(err)
+        }
     }
 }
 
