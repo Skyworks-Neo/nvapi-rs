@@ -1002,6 +1002,35 @@ pub mod undocumented {
         (dw(base), dw(base + 4), dw(base + 8) & !1, buf[base + 12])
     }
 
+    /// Legacy V1 record SUB-TABLE (live V100 decode 2026-09-02): the record
+    /// body packs one 68-byte clock-snapshot entry per ClkDomains record
+    /// bit, GPC (bit 0) FIRST, in bit order: `+8 nominal_kHz, +12
+    /// live/min_kHz, +16 max_kHz, +40 chained TYPE of the NEXT bit's
+    /// record`. `0xFFFFFFFF` at +40 = absent domain (V100 bit9 Host).
+    /// Anchors: entry0 +12 == the live SM clock (135 MHz idle, nvidia-smi
+    /// same-instant), entry2 == MEM 877×3; the +40 sequence 5/4/5/5/5/2/4/2/2
+    /// equals the get-private-freq-domain-info Type sequence of bits 1..9
+    /// exactly.
+    ///
+    /// Returns `(nominal_khz, live_min_khz, max_khz)` for `domain_bit` of
+    /// record `bit`, or `None` when the entry is absent/out of range.
+    pub fn perf_pstates_legacy_domain_clock(
+        buf: &[u8],
+        record_bit: u32,
+        domain_bit: usize,
+    ) -> Option<(u32, u32, u32)> {
+        let base = 72 + 2252 * record_bit as usize + 72 + 68 * domain_bit;
+        if base + 44 > buf.len() {
+            return None;
+        }
+        let dw = |o: usize| u32::from_ne_bytes(buf[o..o + 4].try_into().expect("4 bytes"));
+        let tail_type = dw(base + 40);
+        if tail_type == 0 || tail_type == u32::MAX {
+            return None; // absent domain / padding
+        }
+        Some((dw(base + 8), dw(base + 12), dw(base + 16)))
+    }
+
     // ------------------------------------------------------------------
     // ClientPStateLimitStatus (NDA, ID 0x9962C97C) — the "which P-States are
     // currently locked" view. RE'd from the ref tool's `[GPUHandle::pollPState]`

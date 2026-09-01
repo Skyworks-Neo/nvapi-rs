@@ -1,7 +1,7 @@
 // One-shot: which PerfPstatesGetInfoPrivate layout fires on this driver —
-// V4 / legacy V3 (0x31A38) / legacy V1 (0x119C8) — plus a per-68B-entry
-// dump of the present pstate records (header + sub-table region) for the
-// legacy view that lands. READ-ONLY.
+// V4 / legacy V3 (0x31A38) / legacy V1 (0x119C8) — plus, for the legacy
+// view that lands, the per-pstate record header and the decoded SUB-TABLE
+// (one 68B entry per ClkDomains bit, GPC first). READ-ONLY.
 //
 // Run: cargo test -p nvapi --test pstate_legacy_probe -- --nocapture --ignored
 
@@ -12,41 +12,14 @@ use nvapi::sys::api::NvAPI_GPU_PerfPstatesGetInfoPrivate;
 use nvapi::sys::gpu::clock::undocumented::{
     PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC,
     PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC,
-    perf_pstates_legacy_mask, perf_pstates_legacy_record,
+    perf_pstates_legacy_domain_clock, perf_pstates_legacy_mask, perf_pstates_legacy_record,
 };
 use nvapi::sys::handles::NvPhysicalGpuHandle;
 
-/// Dump one legacy record: header summary, then the record body as
-/// ENTRY_STRIDE-byte rows with every nonzero dword annotated.
-fn dump_record(buf: &[u8], bit: u32) {
-    let (ty, min, max, pstate) = perf_pstates_legacy_record(buf, bit);
-    eprintln!("P{pstate} type {ty} header min {min} max {max} kHz");
-    let base = 72 + 2252 * bit as usize;
-    const ENTRY_STRIDE: usize = 68;
-    const N_ENTRIES: usize = 16;
-    eprintln!("  body as {N_ENTRIES} × {ENTRY_STRIDE}B entries (base +72):");
-    for k in 0..N_ENTRIES {
-        let ebase = base + 72 + k * ENTRY_STRIDE;
-        let dws: Vec<(usize, u32)> = (0..ENTRY_STRIDE / 4)
-            .map(|i| {
-                (
-                    i * 4,
-                    u32::from_ne_bytes(buf[ebase + i * 4..ebase + i * 4 + 4].try_into().unwrap()),
-                )
-            })
-            .filter(|(_, v)| *v != 0)
-            .collect();
-        if dws.is_empty() {
-            continue;
-        }
-        let fields = dws
-            .iter()
-            .map(|(o, v)| format!("+{o}:{v} ({v:#x})"))
-            .collect::<Vec<_>>()
-            .join("  ");
-        eprintln!("  entry[{k:2}] @+{:4}: {}", 72 + k * ENTRY_STRIDE, fields);
-    }
-}
+/// V100 ClkDomains record names per bit (get-private-freq-domain-info).
+const DOMAIN_NAMES: [&str; 10] = [
+    "Gpc", "Xbar", "Mem", "Sys", "M", "Msd", "Disp", "Hotclk", "Pclk0", "Host",
+];
 
 fn probe(tag: &str, len: usize, magic: u32) -> bool {
     let gpus = PhysicalGpu::enumerate().expect("enumerate");
@@ -63,9 +36,23 @@ fn probe(tag: &str, len: usize, magic: u32) -> bool {
     eprintln!("{tag}: table_version byte @8 = {:#x}", buf[8]);
     eprintln!("{tag}: mask = 0x{mask:08X}");
     for bit in 0..32u32 {
-        if mask & (1 << bit) != 0 {
-            eprintln!("{tag}: record for mask bit {bit}:");
-            dump_record(&buf, bit);
+        if mask & (1 << bit) == 0 {
+            continue;
+        }
+        let (ty, min, max, pstate) = perf_pstates_legacy_record(&buf, bit);
+        eprintln!("{tag}: record bit {bit}: P{pstate} type {ty} header min {min} max {max} kHz");
+        eprintln!("{tag}:   sub-table (ClkDomains bit → nominal/live/max kHz):");
+        for domain in 0..DOMAIN_NAMES.len() {
+            match perf_pstates_legacy_domain_clock(&buf, bit, domain) {
+                Some((nominal, live, mx)) => eprintln!(
+                    "{tag}:     bit{domain:<2} {:<7} {nominal:>7} / {live:>7} / {mx:>7} kHz",
+                    DOMAIN_NAMES[domain]
+                ),
+                None => eprintln!(
+                    "{tag}:     bit{domain:<2} {:<7} — absent —",
+                    DOMAIN_NAMES[domain]
+                ),
+            }
         }
     }
     true

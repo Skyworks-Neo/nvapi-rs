@@ -3954,7 +3954,7 @@ impl PhysicalGpu {
         use clock::undocumented::{
             PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC,
             PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC,
-            perf_pstates_legacy_mask, perf_pstates_legacy_record,
+            perf_pstates_legacy_domain_clock, perf_pstates_legacy_mask, perf_pstates_legacy_record,
         };
 
         for (len, magic, tag) in [
@@ -3986,13 +3986,22 @@ impl PhysicalGpu {
                                  P{pstate} type {ty} {min}-{max} kHz"
                             );
                             // 0 = the driver didn't fill the legacy header
-                            // min/max (live V100: clocks live in an opaque
-                            // 68 B-stride sub-table instead) — keep the V4
-                            // convention of None over a fake 0.
+                            // min/max (live V100: the clocks live in the
+                            // record SUB-TABLE) — keep the V4 convention of
+                            // None over a fake 0. The sub-table's GPC entry
+                            // (domain bit 0, ladder-anchored: V100 max 1530
+                            // == NVML boost) rescues the max; its +12 field
+                            // tracks the LIVE clock (135 at idle), not a
+                            // wall — min stays None.
+                            let max = if max > 0 {
+                                Some(max)
+                            } else {
+                                perf_pstates_legacy_domain_clock(&buf, b, 0).map(|(_, _, mx)| mx)
+                            };
                             PStateClockRange {
                                 pstate,
                                 min_khz: (min > 0).then_some(min),
-                                max_khz: (max > 0).then_some(max),
+                                max_khz: max.filter(|v| *v > 0),
                             }
                         })
                         .collect();
