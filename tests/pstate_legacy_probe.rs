@@ -1,6 +1,7 @@
 // One-shot: which PerfPstatesGetInfoPrivate layout fires on this driver —
-// V4 / legacy V3 (0x31A38) / legacy V1 (0x119C8) — plus the raw decoded
-// records of whichever legacy view lands. READ-ONLY.
+// V4 / legacy V3 (0x31A38) / legacy V1 (0x119C8) — plus a per-68B-entry
+// dump of the present pstate records (header + sub-table region) for the
+// legacy view that lands. READ-ONLY.
 //
 // Run: cargo test -p nvapi --test pstate_legacy_probe -- --nocapture --ignored
 
@@ -9,11 +10,40 @@
 use nvapi::PhysicalGpu;
 use nvapi::sys::api::NvAPI_GPU_PerfPstatesGetInfoPrivate;
 use nvapi::sys::gpu::clock::undocumented::{
+    perf_pstates_legacy_mask, perf_pstates_legacy_record,
     PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC,
     PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC,
-    perf_pstates_legacy_mask, perf_pstates_legacy_record,
 };
 use nvapi::sys::handles::NvPhysicalGpuHandle;
+
+/// Dump one legacy record: header summary, then the record body as
+/// ENTRY_STRIDE-byte rows with every nonzero dword annotated.
+fn dump_record(buf: &[u8], bit: u32) {
+    let (ty, min, max, pstate) = perf_pstates_legacy_record(buf, bit);
+    eprintln!("P{pstate} type {ty} header min {min} max {max} kHz");
+    let base = 72 + 2252 * bit as usize;
+    const ENTRY_STRIDE: usize = 68;
+    const N_ENTRIES: usize = 16;
+    eprintln!(
+        "  body as {N_ENTRIES} × {ENTRY_STRIDE}B entries (base +72):"
+    );
+    for k in 0..N_ENTRIES {
+        let ebase = base + 72 + k * ENTRY_STRIDE;
+        let dws: Vec<(usize, u32)> = (0..ENTRY_STRIDE / 4)
+            .map(|i| (i * 4, u32::from_ne_bytes(buf[ebase + i * 4..ebase + i * 4 + 4].try_into().unwrap())))
+            .filter(|(_, v)| *v != 0)
+            .collect();
+        if dws.is_empty() {
+            continue;
+        }
+        let fields = dws
+            .iter()
+            .map(|(o, v)| format!("+{o}:{v} ({v:#x})"))
+            .collect::<Vec<_>>()
+            .join("  ");
+        eprintln!("  entry[{k:2}] @+{:4}: {}", 72 + k * ENTRY_STRIDE, fields);
+    }
+}
 
 fn probe(tag: &str, len: usize, magic: u32) -> bool {
     let gpus = PhysicalGpu::enumerate().expect("enumerate");
@@ -31,42 +61,8 @@ fn probe(tag: &str, len: usize, magic: u32) -> bool {
     eprintln!("{tag}: mask = 0x{mask:08X}");
     for bit in 0..32u32 {
         if mask & (1 << bit) != 0 {
-            let (ty, min, max, pstate) = perf_pstates_legacy_record(&buf, bit);
-            eprintln!("{tag}: bit {bit:2} → P{pstate} type {ty} min {min} kHz max {max} kHz");
-            // Nonzero-dword scan of this record's first 1024 bytes (header
-            // + sub-table region) to locate the real clock fields.
-            let base = 72 + 2252 * bit as usize;
-            let mut run_start: Option<usize> = None;
-            for off in 0..1024usize {
-                let dw =
-                    u32::from_ne_bytes(buf[base + off * 4..base + off * 4 + 4].try_into().unwrap());
-                let nz = dw != 0;
-                match (run_start, nz) {
-                    (None, true) => run_start = Some(off),
-                    (Some(s), false) => {
-                        eprintln!("{tag}:   record +{}..+{} dwords nonzero", s * 4, off * 4);
-                        run_start = None;
-                    }
-                    _ => {}
-                }
-                if nz
-                    && (off < 16
-                        || off % 17 == 3
-                        || off % 17 == 0
-                        || (36..44).contains(&(off % 17)))
-                {
-                    eprintln!(
-                        "{tag}:   +{:4} (dword {:3}): {:#010X} ({})",
-                        off * 4,
-                        off,
-                        dw,
-                        dw
-                    );
-                }
-            }
-            if let Some(s) = run_start {
-                eprintln!("{tag}:   record +{}..+1024 dwords nonzero", s * 4);
-            }
+            eprintln!("{tag}: record for mask bit {bit}:");
+            dump_record(&buf, bit);
         }
     }
     true
