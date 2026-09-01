@@ -10,9 +10,9 @@
 use nvapi::PhysicalGpu;
 use nvapi::sys::api::NvAPI_GPU_PerfPstatesGetInfoPrivate;
 use nvapi::sys::gpu::clock::undocumented::{
-    perf_pstates_legacy_mask, perf_pstates_legacy_record,
     PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC,
     PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC,
+    perf_pstates_legacy_mask, perf_pstates_legacy_record,
 };
 use nvapi::sys::handles::NvPhysicalGpuHandle;
 
@@ -24,13 +24,16 @@ fn dump_record(buf: &[u8], bit: u32) {
     let base = 72 + 2252 * bit as usize;
     const ENTRY_STRIDE: usize = 68;
     const N_ENTRIES: usize = 16;
-    eprintln!(
-        "  body as {N_ENTRIES} × {ENTRY_STRIDE}B entries (base +72):"
-    );
+    eprintln!("  body as {N_ENTRIES} × {ENTRY_STRIDE}B entries (base +72):");
     for k in 0..N_ENTRIES {
         let ebase = base + 72 + k * ENTRY_STRIDE;
         let dws: Vec<(usize, u32)> = (0..ENTRY_STRIDE / 4)
-            .map(|i| (i * 4, u32::from_ne_bytes(buf[ebase + i * 4..ebase + i * 4 + 4].try_into().unwrap())))
+            .map(|i| {
+                (
+                    i * 4,
+                    u32::from_ne_bytes(buf[ebase + i * 4..ebase + i * 4 + 4].try_into().unwrap()),
+                )
+            })
             .filter(|(_, v)| *v != 0)
             .collect();
         if dws.is_empty() {
