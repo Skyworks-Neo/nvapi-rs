@@ -2238,9 +2238,15 @@ impl PhysicalGpu {
                     freq_default_mhz: rd(8),
                     // the legacy record exposes no separate current term
                     freq_current_mhz: rd(8),
+                    // no per-point voltage-offset term in the legacy layout
+                    volt_offset_uV: 0,
                 });
             }
         } else {
+            // Blackwell (50-series) codename gate for the record-slot
+            // overrides below (computed once — short_name is an NVAPI call)
+            let blackwell_layout =
+                self.short_name().map(|c| c.starts_with("GB")).unwrap_or(false);
             for bank in 0..2usize {
                 for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
                     if info.point_present(bank, idx) == Some(true) {
@@ -2268,13 +2274,43 @@ impl PhysicalGpu {
                     // running clock). Halve type-1 frequency terms; type 8/13/18
                     // (Ada+) are plain MHz.
                     let div = if typ == 1 { 2 } else { 1 };
+                    // Blackwell (50-series) record variant: +0x64 is a SIGNED
+                    // per-point voltage offset in µV, not the current
+                    // frequency (live probe 2026-09-02: a −45 mV experiment
+                    // read back as 4294922296 = 2³² + (−45000)). Field order
+                    // 电压|电压偏置|当前|默认 maps to slots: current ← +0x24,
+                    // offset ← +0x64 (i32), default ← +0x68 (UNVERIFIED — on
+                    // pre-Blackwell records that slot mirrors the voltage; at
+                    // stock current == default so only a live freq-offset A/B
+                    // can separate them, and a still-mirroring +0x68 shows up
+                    // as a default column numerically equal to the voltage).
+                    // Codename gate: GB* covers desktop/laptop/workstation/
+                    // server Blackwell; Volta GV100 and Pascal GP* don't
+                    // collide with the prefix.
+                    let (volt_offset_uv, def_mhz, cur_mhz) = if blackwell_layout {
+                        use clock::undocumented::clk_vfp_status as bw;
+                        (
+                            status
+                                .raw_dword(bank, idx, bw::BW_VOLT_OFFSET_UV)
+                                .unwrap_or(0) as i32,
+                            status.raw_dword(bank, idx, bw::BW_FREQ_DEFAULT_MHZ).unwrap_or(0),
+                            status.raw_dword(bank, idx, bw::BW_FREQ_CURRENT_MHZ).unwrap_or(0),
+                        )
+                    } else {
+                        (
+                            0,
+                            status.freq_default_mhz(bank, idx).unwrap_or(0) / div,
+                            status.freq_current_mhz(bank, idx).unwrap_or(0) / div,
+                        )
+                    };
                     points.push(crate::clock::ClkVfPointPrivate {
                         bank: bank as u8,
                         index: idx as u16,
                         record_type: typ,
                         voltage_uV: status.voltage_uv(bank, idx).unwrap_or(0),
-                        freq_default_mhz: status.freq_default_mhz(bank, idx).unwrap_or(0) / div,
-                        freq_current_mhz: status.freq_current_mhz(bank, idx).unwrap_or(0) / div,
+                        freq_default_mhz: def_mhz,
+                        freq_current_mhz: cur_mhz,
+                        volt_offset_uV: volt_offset_uv,
                     });
                 }
             }

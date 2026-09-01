@@ -542,6 +542,11 @@ pub struct ClockDomainFreqDirect {
 /// public point #0), default MHz @rec+0x24, current MHz @rec+0x64
 /// (= default + applied offset — 300 = 210 + 90 matched a live +90 MHz
 /// public OC).
+///
+/// **Blackwell (50系) variant** (live user probe 2026-09-02): +0x64 is a
+/// SIGNED per-point voltage offset in µV, not the current frequency — a
+/// −45 mV experiment read back as 4294922296 = 2³² + (−45000). See the
+/// decode in `Gpu::clk_vf_points_private`.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 #[allow(nonstandard_style)] // uV/mhz suffixes match the sys-layer field naming
@@ -558,6 +563,10 @@ pub struct ClkVfPointPrivate {
     pub freq_default_mhz: u32,
     /// current/effective frequency (MHz; = default + applied offset)
     pub freq_current_mhz: u32,
+    /// per-point V/F-curve voltage offset (µV, signed). Blackwell only
+    /// (+0x64 as i32); 0 on every generation whose +0x64 slot is the
+    /// current-frequency term.
+    pub volt_offset_uV: i32,
 }
 
 /// Read-only snapshot of the private ClockClient V/F-POINTS read path:

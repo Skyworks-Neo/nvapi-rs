@@ -1851,6 +1851,21 @@ pub mod undocumented {
         pub const VOLTAGE_UV: usize = 0x58;
         /// current/effective frequency (u32 MHz; = default + applied delta)
         pub const FREQ_CURRENT_MHZ: usize = 0x64;
+
+        // Blackwell (50-series) slot overrides. The +0x64 dword is a SIGNED
+        // per-point voltage offset in µV instead of the current frequency
+        // (live user probe 2026-09-02: a −45 mV experiment read back as
+        // 4294922296 = 2³² + (−45000)); the current term moves to +0x24
+        // (the 180 the 3-slot decoder displayed as "default"), and +0x68 —
+        // a voltage MIRROR on pre-Blackwell records — is hypothesized as
+        // the default-frequency term (stock current == default, so only a
+        // live freq-offset A/B on a 50-series card can separate them).
+        /// Blackwell: signed per-point voltage offset (i32 µV)
+        pub const BW_VOLT_OFFSET_UV: usize = 0x64;
+        /// Blackwell: current frequency (u32 MHz)
+        pub const BW_FREQ_CURRENT_MHZ: usize = 0x24;
+        /// Blackwell: default frequency (u32 MHz — UNVERIFIED slot)
+        pub const BW_FREQ_DEFAULT_MHZ: usize = 0x68;
     }
 
     nvstruct! {
@@ -1952,6 +1967,15 @@ pub mod undocumented {
         pub fn voltage_uv(&self, bank: usize, idx: usize) -> Option<u32> {
             let base = Self::rec_base(bank, idx)?;
             self.u32_at(base + clk_vfp_status::VOLTAGE_UV)
+        }
+
+        /// Raw u32 at `offset` inside point (bank, idx)'s record — escape
+        /// hatch for generation-specific slots outside the R610.74
+        /// calibrated layout (Blackwell's +0x64 voltage-offset / +0x68
+        /// default-frequency overrides).
+        pub fn raw_dword(&self, bank: usize, idx: usize, offset: usize) -> Option<u32> {
+            let base = Self::rec_base(bank, idx)?;
+            self.u32_at(base + offset)
         }
     }
 
