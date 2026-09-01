@@ -3985,10 +3985,14 @@ impl PhysicalGpu {
                                 "gpu.pstate_levels_domain(): legacy {tag} bit {b} → \
                                  P{pstate} type {ty} {min}-{max} kHz"
                             );
+                            // 0 = the driver didn't fill the legacy header
+                            // min/max (live V100: clocks live in an opaque
+                            // 68 B-stride sub-table instead) — keep the V4
+                            // convention of None over a fake 0.
                             PStateClockRange {
                                 pstate,
-                                min_khz: Some(min),
-                                max_khz: Some(max),
+                                min_khz: (min > 0).then_some(min),
+                                max_khz: (max > 0).then_some(max),
                             }
                         })
                         .collect();
