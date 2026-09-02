@@ -1873,6 +1873,36 @@ pub mod undocumented {
         /// Blackwell: default frequency (u32 MHz — UNVERIFIED slot; Ada
         /// evidence says the modern +0x68 slot is the current voltage)
         pub const BW_FREQ_DEFAULT_MHZ: usize = 0x68;
+
+        // Record model (Turing + Ampere live-verified 2026-09-02): each
+        // record = a BASE section — +0x00 type, +0x24 default freq,
+        // +0x58 default voltage, +0x64 current freq, +0x68 current volt —
+        // optionally followed by an EXTENDED section: up to FOUR slots at
+        // 0x10 stride (freq MHz @ +0x74+0x10*k, volt µV @ +4), packing
+        // the NON-OWNER domains in ascending ClkDomains order from the
+        // roster [XBAR(d1), SYS(d3), MSD(d5), HOST(d9)]:
+        //   Turing — only GPC as main records (single block #0..126):
+        //   4 slots = XBAR @0x74/78, SYS @0x84/88, MSD @0x94/98, HOST
+        //   @0xA4/A8.
+        //   Ampere — XBAR promoted to a second main block (#127..253):
+        //   #0..126 are base-only, and the XBAR block fills only THREE
+        //   slots = SYS @0x74/78, MSD @0x84/88, HOST @0x94/98 (user
+        //   domain-id A/B).
+        // Extension presence marker: NON-ZERO dwords at +0x2C and/or
+        // +0x40 generally mean the extended section follows (base-only
+        // records keep them zero). The decoder stays POSITIONAL (slot
+        // k = roster-minus-owner[k], resolved by the consumer from the
+        // record's segment owner) — never a generation table.
+        /// extension-presence marker dword A (non-zero ⇒ extended section)
+        pub const DOMAIN_EXT_MARKER_A: usize = 0x2C;
+        /// extension-presence marker dword B (non-zero ⇒ extended section)
+        pub const DOMAIN_EXT_MARKER_B: usize = 0x40;
+        /// first ext slot's freq dword (k=0)
+        pub const DOMAIN_CURRENT_BASE: usize = 0x74;
+        /// stride per ext slot (freq@+0, volt@+4; +8..+16 unused)
+        pub const DOMAIN_CURRENT_STRIDE: usize = 0x10;
+        /// slots decoded (k=0..3 → +0x74/+0x84/+0x94/+0xA4)
+        pub const DOMAIN_CURRENT_SLOTS: usize = 4;
     }
 
     nvstruct! {

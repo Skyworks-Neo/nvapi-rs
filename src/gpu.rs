@@ -2260,6 +2260,9 @@ impl PhysicalGpu {
                     volt_current_uV: 0,
                     // no per-point voltage-offset term in the legacy layout
                     volt_offset_uV: 0,
+                    // the legacy 0x4C record has no ext-section slots
+                    domain_freqs_mhz: [0; 4],
+                    domain_volts_uV: [0; 4],
                 });
                 if include_raw {
                     // legacy records are 0x4C (76) bytes at rest[0x60 + i*0x4C]
@@ -2346,6 +2349,39 @@ impl PhysicalGpu {
                                 .unwrap_or(0),
                         )
                     };
+                    // EXTENDED-section per-domain CURRENT slots at
+                    // +0x74+0x10*k (freq MHz / volt µV), k=0..3 — the
+                    // roster-minus-owner packing (see clk_vfp_status).
+                    // Per-record gate: the extended section only follows
+                    // when the +0x2C/+0x40 markers are non-zero, so
+                    // base-only records (Ampere #0..126) decode as all-
+                    // zero. Blackwell excluded entirely (layout beyond
+                    // +0x68 unverified).
+                    let mut domain_freqs = [0u32; 4];
+                    let mut domain_volts = [0u32; 4];
+                    if !blackwell_layout {
+                        use clock::undocumented::clk_vfp_status as dc;
+                        let extended = status
+                            .raw_dword(bank, idx, dc::DOMAIN_EXT_MARKER_A)
+                            .unwrap_or(0)
+                            != 0
+                            || status
+                                .raw_dword(bank, idx, dc::DOMAIN_EXT_MARKER_B)
+                                .unwrap_or(0)
+                                != 0;
+                        if extended {
+                            for k in 0..dc::DOMAIN_CURRENT_SLOTS {
+                                let base =
+                                    dc::DOMAIN_CURRENT_BASE + dc::DOMAIN_CURRENT_STRIDE * k;
+                                if let Some(f) = status.raw_dword(bank, idx, base) {
+                                    domain_freqs[k] = f / div;
+                                }
+                                if let Some(v) = status.raw_dword(bank, idx, base + 4) {
+                                    domain_volts[k] = v;
+                                }
+                            }
+                        }
+                    }
                     points.push(crate::clock::ClkVfPointPrivate {
                         bank: bank as u8,
                         index: idx as u16,
@@ -2355,6 +2391,8 @@ impl PhysicalGpu {
                         freq_current_mhz: cur_mhz,
                         volt_current_uV: volt_cur_uv,
                         volt_offset_uV: volt_offset_uv,
+                        domain_freqs_mhz: domain_freqs,
+                        domain_volts_uV: domain_volts,
                     });
                     if include_raw {
                         if let Some(bytes) = status.raw_record(bank, idx) {

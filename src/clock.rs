@@ -572,6 +572,18 @@ pub struct ClkVfPointPrivate {
     /// 0x4C-record layout exposes no current term, 0 = not reported (the
     /// renderer keeps the single-voltage form).
     pub volt_current_uV: u32,
+    /// EXTENDED-section per-domain current frequency (MHz), POSITIONAL
+    /// slot 0..=3 (record+0x74+0x10*k). Present only when the record's
+    /// +0x2C/+0x40 extension markers are non-zero. Attribution is
+    /// ROSTER-MINUS-OWNER, resolved by the consumer from the record's
+    /// segment: roster [XBAR, SYS, MSD, HOST] ascending minus the block
+    /// owner's domain — Turing (owner gpc): slots = XBAR/SYS/MSD/HOST;
+    /// Ampere (owner xbar on its #127..253 block): slots = SYS/MSD/HOST
+    /// (the gpc block there is base-only). Never a generation table.
+    pub domain_freqs_mhz: [u32; 4],
+    /// EXTENDED-section per-domain current voltage (µV), same indexing
+    /// and presence rule as domain_freqs_mhz (record+0x78+0x10*k).
+    pub domain_volts_uV: [u32; 4],
     /// per-point V/F-curve voltage offset (µV, signed). Blackwell only
     /// (+0x64 as i32); 0 on every generation whose +0x64 slot is the
     /// current-frequency term.
