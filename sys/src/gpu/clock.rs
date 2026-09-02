@@ -1977,6 +1977,14 @@ pub mod undocumented {
             let base = Self::rec_base(bank, idx)?;
             self.u32_at(base + offset)
         }
+
+        /// The full 488-byte record for point (bank, idx) — diagnostic
+        /// escape hatch for per-offset slot maps (--dump-records).
+        pub fn raw_record(&self, bank: usize, idx: usize) -> Option<&[u8]> {
+            let base = Self::rec_base(bank, idx)?;
+            let off = self.off(base, clk_vfp_status::STRIDE)?;
+            self.rest.get(off..off + clk_vfp_status::STRIDE)
+        }
     }
 
     nvapi! {

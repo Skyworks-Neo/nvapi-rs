@@ -1329,6 +1329,26 @@ impl Gpu {
         }
     }
 
+    /// Same read with the raw 488B GetStatus records attached (diagnostic
+    /// per-offset slot-map dumps — `get-private-vftable --dump-records`).
+    /// `Ok(None)` where the driver doesn't expose the private interface.
+    pub fn clk_vf_points_private_raw(
+        &self,
+    ) -> crate::Result<Option<crate::ClkVfPointsPrivate>> {
+        match self.gpu.clk_vf_points_private_raw() {
+            Ok(v) => Ok(Some(v)),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported | crate::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Raw mode/value CONTROL override table from the private ClockClient
     /// V/F-POINTS GetControl (0xDA025C3E) — the direct readback of what
     /// SetControl 0xFEC00D04 writes. All-zero at stock. `Ok(None)` where the

@@ -569,6 +569,17 @@ pub struct ClkVfPointPrivate {
     pub volt_offset_uV: i32,
 }
 
+/// Raw 488B GetStatus record bytes for one present point (diagnostic —
+/// 1:1 with a [`ClkVfPointPrivate`] entry; see
+/// [`ClkVfPointsPrivate::raw_records`]).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkVfRawRecord {
+    pub bank: u8,
+    pub index: u16,
+    pub bytes: Vec<u8>,
+}
+
 /// Read-only snapshot of the private ClockClient V/F-POINTS read path:
 /// GetInfo (0x8895B510) point masks + GetStatus (0x7FEE9032) records.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -588,6 +599,14 @@ pub struct ClkVfPointsPrivate {
     /// domains back-to-back, so segmentation is what makes the table
     /// plottable (one curve per type-8 segment)
     pub segments: Vec<ClkVfSegment>,
+    /// raw 488B GetStatus records, 1:1 with [`points`] (same order) —
+    /// diagnostic only, filled solely by `clk_vf_points_private_raw`
+    /// (~64KB per 132-point table); the normal read leaves it empty.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub raw_records: Vec<ClkVfRawRecord>,
 }
 
 /// One record from the private ClockClient V/F-POINTS GetControl override
@@ -1086,12 +1105,14 @@ pub const CLK_VF_FABRIC_OVERRIDES: &[ClkVfGPrior] = &[
 /// Look up the universal mode-1 prior (C, D0) for a point with this
 /// default frequency. Pure — no driver IO. Measured bands first; def
 /// values outside the table fall back to the first-order rule
-/// **C ≈ def/4000** (live-observed across Pascal–Ada: 999 MHz → 0.25,
-/// 1822 → 0.4587, 1890 → 0.4526; the k/400 grid implies k ≈ def/10),
-/// accurate to ~±10% — refine with a sparse sweep. D0 prior is 0: at
-/// stock it measures ≈0 on every generation; a large fitted |D0| means
-/// the curve already carried offsets when calibrated (calibrate from
-/// stock). For XBAR/HOST points prefer [`clk_vf_g_prior_class`] with
+/// **C ≈ def/4096** (Q12 fixed-point divide — 1/4096 = 0.000244; the
+/// original /4000 fit over live Pascal–Ada observations, 999 MHz → 0.25,
+/// 1822 → 0.4587, 1890 → 0.4526, is the same line to within the ~±10%
+/// fit noise and the driver-side constant is almost certainly the 2¹²
+/// shift) — refine with a sparse sweep. D0 prior is 0: at stock it
+/// measures ≈0 on every generation; a large fitted |D0| means the curve
+/// already carried offsets when calibrated (calibrate from stock). For
+/// XBAR/HOST points prefer [`clk_vf_g_prior_class`] with
 /// [`ClkVfDomainClass::Fabric`].
 pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
     if def_mhz < 200 {
@@ -1104,16 +1125,16 @@ pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
             .map(|e| (e.c_mhz_per_delta, e.d0_delta))
             .unwrap_or_else(|| {
                 // piecewise refinement of the rule (fit over all exact
-                // bands): K = def − 4000C flips sign near def 1250 —
-                // high band (def−72)/4000 (≈0.96·def/4000), low band
-                // (def+30)/4000, mid zone plain def/4000 (the def≈1200
-                // dip sits inside measured bands anyway)
+                // bands, expressed on the Q12 base): K = def − 4096C
+                // flips sign near def 1250 — high band (def−72)/4096,
+                // low band (def+30)/4096, mid zone plain def/4096 (the
+                // def≈1200 dip sits inside measured bands anyway)
                 if def_mhz >= 1450 {
-                    ((def_mhz - 72) as f64 / 4000.0, 0.0)
+                    ((def_mhz - 72) as f64 / 4096.0, 0.0)
                 } else if def_mhz <= 1100 {
-                    ((def_mhz + 30) as f64 / 4000.0, 0.0)
+                    ((def_mhz + 30) as f64 / 4096.0, 0.0)
                 } else {
-                    (def_mhz as f64 / 4000.0, 0.0)
+                    (def_mhz as f64 / 4096.0, 0.0)
                 }
             }),
     )
@@ -1121,9 +1142,10 @@ pub fn clk_vf_g_prior(def_mhz: u32) -> Option<(f64, f64)> {
 
 /// Class-aware prior: fabric domains (XBAR/HOST) take overrides from
 /// [`CLK_VF_FABRIC_OVERRIDES`] first, then the base table, then the same
-/// piecewise first-order rule as Graphics (fabric C ≈ def/4000 too —
-/// verified: 2285 MHz fabric → 0.570 vs rule 0.571, near-exact at high
-/// def; the low band runs hot but that region is override-covered).
+/// piecewise first-order rule as Graphics (fabric C ≈ def/4096 too —
+/// verified: 2285 MHz fabric → 0.570 vs rule 0.557, within the band-fit
+/// noise at high def; the low band runs hot but that region is
+/// override-covered).
 pub fn clk_vf_g_prior_class(def_mhz: u32, class: ClkVfDomainClass) -> Option<(f64, f64)> {
     match class {
         ClkVfDomainClass::Graphics => clk_vf_g_prior(def_mhz),
@@ -1954,9 +1976,9 @@ mod tests {
         assert!((c - 0.3375).abs() < 1e-9);
         let (c, _) = clk_vf_g_prior(1050).unwrap();
         assert!((c - 0.30).abs() < 1e-9);
-        // outside the measured table: piecewise first-order rule
+        // outside the measured table: piecewise first-order rule (Q12 base)
         let (c, d0) = clk_vf_g_prior(340).unwrap();
-        assert!((c - 0.0925).abs() < 1e-9); // (340+30)/4000
+        assert!((c - 370.0 / 4096.0).abs() < 1e-9); // (340+30)/4096
         assert!(d0.abs() < 1e-9);
         assert!(clk_vf_g_prior(100).is_none()); // below any real curve
 
@@ -1971,7 +1993,7 @@ mod tests {
         // outside BOTH tables (e.g. 50-series fabric >2700) fabric takes the
         // same piecewise rule as Graphics — no None asymmetry
         let (f, _) = clk_vf_g_prior_class(2800, ClkVfDomainClass::Fabric).unwrap();
-        assert!((f - (2800.0 - 72.0) / 4000.0).abs() < 1e-9);
+        assert!((f - (2800.0 - 72.0) / 4096.0).abs() < 1e-9);
         assert!(clk_vf_g_prior_class(100, ClkVfDomainClass::Fabric).is_none());
 
         let d = clk_vf_delta_for_target(1300, 90.0, ClkVfDomainClass::Graphics).unwrap();

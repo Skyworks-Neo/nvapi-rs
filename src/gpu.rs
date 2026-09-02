@@ -2104,6 +2104,19 @@ impl PhysicalGpu {
     /// returns no records, garbage returns -1). Units live-calibrated against
     /// the public GPC VFP curve; see [`crate::clock::ClkVfPointPrivate`].
     pub fn clk_vf_points_private(&self) -> crate::Result<crate::clock::ClkVfPointsPrivate> {
+        Self::clk_vf_points_private_ex(self, false)
+    }
+
+    /// Same read with the raw 488B GetStatus records attached (diagnostic —
+    /// the `--dump-records` per-offset slot map; ~64KB per 132-point table).
+    pub fn clk_vf_points_private_raw(&self) -> crate::Result<crate::clock::ClkVfPointsPrivate> {
+        Self::clk_vf_points_private_ex(self, true)
+    }
+
+    fn clk_vf_points_private_ex(
+        &self,
+        include_raw: bool,
+    ) -> crate::Result<crate::clock::ClkVfPointsPrivate> {
         #![allow(non_snake_case)]
         trace!("gpu.clk_vf_points_private()");
         use crate::sys::api::{
@@ -2198,6 +2211,9 @@ impl PhysicalGpu {
         let words_per_bank = clock::undocumented::clk_vfp_info::POINTS.div_ceil(64);
         let mut masks = vec![0u64; 2 * words_per_bank];
         let mut points = Vec::new();
+        // raw 488B records, 1:1 with `points` (same push order) — only when
+        // the caller asked (the dump path); empty otherwise
+        let mut raw_records: Vec<crate::clock::ClkVfRawRecord> = Vec::new();
         if legacy_layout {
             // Volta/R391-generation LEGACY small-table decode (live-RE'd on
             // V100/GV100, 582.41, 2026-08-31 — the R610 stamp 0x78604 is
@@ -2241,6 +2257,19 @@ impl PhysicalGpu {
                     // no per-point voltage-offset term in the legacy layout
                     volt_offset_uV: 0,
                 });
+                if include_raw {
+                    // legacy records are 0x4C (76) bytes at rest[0x60 + i*0x4C]
+                    // (rest-indexed — the GetStatus buffer, same slice the
+                    // decoder reads above)
+                    let rec = 0x60 + idx * 0x4C;
+                    if let Some(bytes) = status.rest.get(rec..rec + 0x4C) {
+                        raw_records.push(crate::clock::ClkVfRawRecord {
+                            bank: 0,
+                            index: idx as u16,
+                            bytes: bytes.to_vec(),
+                        });
+                    }
+                }
             }
         } else {
             // Blackwell (50-series) codename gate for the record-slot
@@ -2312,6 +2341,15 @@ impl PhysicalGpu {
                         freq_current_mhz: cur_mhz,
                         volt_offset_uV: volt_offset_uv,
                     });
+                    if include_raw {
+                        if let Some(bytes) = status.raw_record(bank, idx) {
+                            raw_records.push(crate::clock::ClkVfRawRecord {
+                                bank: bank as u8,
+                                index: idx as u16,
+                                bytes: bytes.to_vec(),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -2451,6 +2489,7 @@ impl PhysicalGpu {
             masks,
             points,
             segments,
+            raw_records,
         })
     }
 
