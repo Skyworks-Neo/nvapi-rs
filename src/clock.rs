@@ -541,7 +541,9 @@ pub struct ClockDomainFreqDirect {
 /// curve (`get-vfp`) on R610.74: voltage µV @rec+0x58 (450000 = 450 mV =
 /// public point #0), default MHz @rec+0x24, current MHz @rec+0x64
 /// (= default + applied offset — 300 = 210 + 90 matched a live +90 MHz
-/// public OC).
+/// public OC), current voltage µV @rec+0x68 (live 40-series probe with a
+/// −45 mV offset: 1240000 → 1195000 — NOT a voltage mirror as earlier
+/// suspected; at stock current == default which read like a mirror).
 ///
 /// **Blackwell (50系) variant** (live user probe 2026-09-02): +0x64 is a
 /// SIGNED per-point voltage offset in µV, not the current frequency — a
@@ -557,12 +559,19 @@ pub struct ClkVfPointPrivate {
     pub index: u16,
     /// record type byte (live 0x08 = V/F curve point on R610.74)
     pub record_type: u8,
-    /// point voltage (µV — the V/F grid axis)
+    /// stock/default voltage for this point (µV — the V/F grid axis)
     pub voltage_uV: u32,
     /// default frequency at this voltage (MHz)
     pub freq_default_mhz: u32,
     /// current/effective frequency (MHz; = default + applied offset)
     pub freq_current_mhz: u32,
+    /// current/effective voltage (µV; = stock voltage + applied offset).
+    /// Modern (R610) records @rec+0x68 — Ada-verified live (−45 mV moved
+    /// 1240000 → 1195000). Blackwell +0x68 is an unverified slot (may be
+    /// the default frequency instead) so it is left 0 there. The LEGACY
+    /// 0x4C-record layout exposes no current term, 0 = not reported (the
+    /// renderer keeps the single-voltage form).
+    pub volt_current_uV: u32,
     /// per-point V/F-curve voltage offset (µV, signed). Blackwell only
     /// (+0x64 as i32); 0 on every generation whose +0x64 slot is the
     /// current-frequency term.

@@ -1847,24 +1847,31 @@ pub mod undocumented {
         pub const TYPE: usize = 0;
         /// default frequency (u32 MHz) for the point's voltage
         pub const FREQ_DEFAULT_MHZ: usize = 0x24;
-        /// point voltage (u32 µV; the V/F grid axis), mirrored @+0x68
+        /// stock/default voltage (u32 µV; the V/F grid axis)
         pub const VOLTAGE_UV: usize = 0x58;
         /// current/effective frequency (u32 MHz; = default + applied delta)
         pub const FREQ_CURRENT_MHZ: usize = 0x64;
+        /// current/effective voltage (u32 µV; = stock voltage + applied
+        /// offset). Live 40-series probe with −45 mV: 1240000 → 1195000 —
+        /// at stock it EQUALS +0x58, which is why it was once misread as a
+        /// "voltage mirror".
+        pub const VOLT_CURRENT_UV: usize = 0x68;
 
         // Blackwell (50-series) slot overrides. The +0x64 dword is a SIGNED
         // per-point voltage offset in µV instead of the current frequency
         // (live user probe 2026-09-02: a −45 mV experiment read back as
-        // 4294922296 = 2³² + (−45000)); the current term moves to +0x24
-        // (the 180 the 3-slot decoder displayed as "default"), and +0x68 —
-        // a voltage MIRROR on pre-Blackwell records — is hypothesized as
-        // the default-frequency term (stock current == default, so only a
-        // live freq-offset A/B on a 50-series card can separate them).
+        // 4294922296 = 2³² + (−45000)); the frequency term moves to +0x24
+        // (the 180 the 3-slot decoder displayed as "default"). NOTE: on
+        // Ada, +0x68 is the CURRENT VOLTAGE (µV) — the Blackwell +0x68
+        // default-frequency decode below follows the V|VO|C|D hypothesis
+        // and is UNVERIFIED; a 50-series --dump-records under an active
+        // offset settles it (405000-ish values ⇒ current voltage).
         /// Blackwell: signed per-point voltage offset (i32 µV)
         pub const BW_VOLT_OFFSET_UV: usize = 0x64;
         /// Blackwell: current frequency (u32 MHz)
         pub const BW_FREQ_CURRENT_MHZ: usize = 0x24;
-        /// Blackwell: default frequency (u32 MHz — UNVERIFIED slot)
+        /// Blackwell: default frequency (u32 MHz — UNVERIFIED slot; Ada
+        /// evidence says the modern +0x68 slot is the current voltage)
         pub const BW_FREQ_DEFAULT_MHZ: usize = 0x68;
     }
 

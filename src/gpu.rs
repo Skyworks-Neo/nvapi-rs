@@ -2254,6 +2254,10 @@ impl PhysicalGpu {
                     freq_default_mhz: rd(8),
                     // the legacy record exposes no separate current term
                     freq_current_mhz: rd(8),
+                    // no separate current-voltage term either — the single
+                    // +4 voltage is left as the stock reading (0 = not
+                    // reported, the renderer keeps the single-voltage form)
+                    volt_current_uV: 0,
                     // no per-point voltage-offset term in the legacy layout
                     volt_offset_uV: 0,
                 });
@@ -2310,15 +2314,15 @@ impl PhysicalGpu {
                     // frequency (live probe 2026-09-02: a −45 mV experiment
                     // read back as 4294922296 = 2³² + (−45000)). Field order
                     // 电压|电压偏置|当前|默认 maps to slots: current ← +0x24,
-                    // offset ← +0x64 (i32), default ← +0x68 (UNVERIFIED — on
-                    // pre-Blackwell records that slot mirrors the voltage; at
-                    // stock current == default so only a live freq-offset A/B
-                    // can separate them, and a still-mirroring +0x68 shows up
-                    // as a default column numerically equal to the voltage).
+                    // offset ← +0x64 (i32), default ← +0x68 (UNVERIFIED —
+                    // the Ada-verified +0x68 semantic is CURRENT VOLTAGE;
+                    // a 50-series --dump-records under an active offset
+                    // settles which one Blackwell uses; volt_current stays
+                    // unreported on BW until then).
                     // Codename gate: GB* covers desktop/laptop/workstation/
                     // server Blackwell; Volta GV100 and Pascal GP* don't
                     // collide with the prefix.
-                    let (volt_offset_uv, def_mhz, cur_mhz) = if blackwell_layout {
+                    let (volt_offset_uv, def_mhz, cur_mhz, volt_cur_uv) = if blackwell_layout {
                         use clock::undocumented::clk_vfp_status as bw;
                         (
                             status
@@ -2330,12 +2334,16 @@ impl PhysicalGpu {
                             status
                                 .raw_dword(bank, idx, bw::BW_FREQ_CURRENT_MHZ)
                                 .unwrap_or(0),
+                            0,
                         )
                     } else {
                         (
                             0,
                             status.freq_default_mhz(bank, idx).unwrap_or(0) / div,
                             status.freq_current_mhz(bank, idx).unwrap_or(0) / div,
+                            status
+                                .raw_dword(bank, idx, clock::undocumented::clk_vfp_status::VOLT_CURRENT_UV)
+                                .unwrap_or(0),
                         )
                     };
                     points.push(crate::clock::ClkVfPointPrivate {
@@ -2345,6 +2353,7 @@ impl PhysicalGpu {
                         voltage_uV: status.voltage_uv(bank, idx).unwrap_or(0),
                         freq_default_mhz: def_mhz,
                         freq_current_mhz: cur_mhz,
+                        volt_current_uV: volt_cur_uv,
                         volt_offset_uV: volt_offset_uv,
                     });
                     if include_raw {
