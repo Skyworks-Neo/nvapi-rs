@@ -2274,8 +2274,10 @@ impl PhysicalGpu {
         } else {
             // Blackwell (50-series) codename gate for the record-slot
             // overrides below (computed once — short_name is an NVAPI call)
-            let blackwell_layout =
-                self.short_name().map(|c| c.starts_with("GB")).unwrap_or(false);
+            let blackwell_layout = self
+                .short_name()
+                .map(|c| c.starts_with("GB"))
+                .unwrap_or(false);
             for bank in 0..2usize {
                 for idx in 0..clock::undocumented::clk_vfp_info::POINTS {
                     if info.point_present(bank, idx) == Some(true) {
@@ -2322,8 +2324,12 @@ impl PhysicalGpu {
                             status
                                 .raw_dword(bank, idx, bw::BW_VOLT_OFFSET_UV)
                                 .unwrap_or(0) as i32,
-                            status.raw_dword(bank, idx, bw::BW_FREQ_DEFAULT_MHZ).unwrap_or(0),
-                            status.raw_dword(bank, idx, bw::BW_FREQ_CURRENT_MHZ).unwrap_or(0),
+                            status
+                                .raw_dword(bank, idx, bw::BW_FREQ_DEFAULT_MHZ)
+                                .unwrap_or(0),
+                            status
+                                .raw_dword(bank, idx, bw::BW_FREQ_CURRENT_MHZ)
+                                .unwrap_or(0),
                         )
                     } else {
                         (
@@ -4070,8 +4076,7 @@ impl PhysicalGpu {
                             // +16 the ladder-anchored max (1530 == NVML
                             // boost). Header fields take precedence when a
                             // driver does fill them.
-                            let clocks =
-                                perf_pstates_legacy_domain_clock(&buf, b, domain);
+                            let clocks = perf_pstates_legacy_domain_clock(&buf, b, domain);
                             let min = if min > 0 {
                                 Some(min)
                             } else {

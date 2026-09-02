@@ -1332,9 +1332,7 @@ impl Gpu {
     /// Same read with the raw 488B GetStatus records attached (diagnostic
     /// per-offset slot-map dumps — `get-private-vftable --dump-records`).
     /// `Ok(None)` where the driver doesn't expose the private interface.
-    pub fn clk_vf_points_private_raw(
-        &self,
-    ) -> crate::Result<Option<crate::ClkVfPointsPrivate>> {
+    pub fn clk_vf_points_private_raw(&self) -> crate::Result<Option<crate::ClkVfPointsPrivate>> {
         match self.gpu.clk_vf_points_private_raw() {
             Ok(v) => Ok(Some(v)),
             Err(crate::Error::Nvapi(e))
