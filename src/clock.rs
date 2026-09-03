@@ -107,6 +107,53 @@ pub type EffectiveClocks = BTreeMap<ClockDomain, Kilohertz>;
 /// MSD label as advisory.
 pub type AllClocks = BTreeMap<ClockDomainId, Kilohertz>;
 
+/// One GetAllClocks V2 `extendedDomain[]` entry, unfiltered: the effective
+/// frequency plus the driver's own `ratio_domain`/`ratio` declaration and the
+/// four reserved dwords, verbatim (research — semantics not yet pinned).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AllClockEntry {
+    pub frequency_khz: u32,
+    /// Domain the `ratio` field is expressed against
+    /// (`NV_GPU_CLOCK_INFO_EXTENDED_DOMAIN.ratio_domain`). `None` when the raw
+    /// discriminant is out of enum range. Semantics research-only — this is
+    /// the driver-side parent/ratio declaration, a second encoding face of the
+    /// clock-tree topology the private V/F EXT sections encode.
+    pub ratio_domain: Option<ClockDomainId>,
+    pub ratio: u32,
+    /// The struct's four reserved dwords, verbatim.
+    pub reserved: [u32; 4],
+}
+
+/// All present GetAllClocks V2 domains with their full extended-domain
+/// entries — the ratio/reserved fields [`AllClocks`] drops.
+pub type AllClocksDetailed = BTreeMap<ClockDomainId, AllClockEntry>;
+
+/// Extract all 32 domains from a raw GetAllClocks V2 result, keeping each
+/// entry's ratio/ratio_domain/reserved words. Same filtering as
+/// [`all_clocks_from_raw`] (skip Pciegen, skip non-present/zero).
+pub fn all_clocks_detailed_from_raw(
+    raw: &clock::undocumented::NV_GPU_CLOCK_INFO_V2,
+) -> AllClocksDetailed {
+    ClockDomainId::values()
+        .filter(|id| *id != ClockDomainId::Pciegen)
+        .filter(|id| raw.extended_domain[id.repr() as usize].effective_frequency != 0)
+        .map(|id| {
+            let d = &raw.extended_domain[id.repr() as usize];
+            (
+                id,
+                AllClockEntry {
+                    frequency_khz: d.effective_frequency,
+                    ratio_domain: ClockDomainId::values()
+                        .find(|c| c.repr() == d.ratio_domain.repr()),
+                    ratio: d.ratio,
+                    reserved: d.reserved.data,
+                },
+            )
+        })
+        .collect()
+}
+
 /// Extract all 32 clock domains from a raw GetAllClocks V2 result (companion
 /// to `NV_GPU_CLOCK_INFO_V2`'s `EffectiveClocks` conversion, which only reads
 /// the 4 public domains). Returns every present domain keyed by

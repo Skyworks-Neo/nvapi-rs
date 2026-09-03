@@ -16,7 +16,8 @@ fn collect_domain<T: Copy, U: From<T>>(
 }
 
 pub use crate::{
-    AllClocks, ArchInfo, Bus, BusInfo, BusType, Celsius, ClockDomain, ClockFrequencies,
+    AllClockEntry, AllClocks, AllClocksDetailed, ArchInfo, Bus, BusInfo, BusType, Celsius,
+    ClockDomain, ClockFrequencies,
     ClockLockEntry, ClockLockValue, ComputeCapabilities, ConnectedIdsFlags, CoolerControl,
     CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings, CoolerStatus, CoolerTarget,
     CoolerType, DisplayId, DriverModel, EccErrors, EffectiveClocks, FanArbiterControl,
@@ -134,6 +135,11 @@ pub struct GpuStatus {
     /// **Xbar (crossbar)**, Sys, Hub, Host, Disp, Hotclk, Gpc2/Xbar2/Sys2/Hub2,
     /// Pciegen, etc. `None` where the driver doesn't support the V2 layout.
     pub all_clocks: Option<AllClocks>,
+    /// [`all_clocks`] with each entry's full GetAllClocks V2 extended-domain
+    /// record: the driver's own `ratio_domain`/`ratio` declaration plus the
+    /// four reserved dwords. `None` where the driver doesn't support the V2
+    /// layout.
+    pub all_clocks_detailed: Option<AllClocksDetailed>,
     /// Per-channel / per-rail power from PowerMonitor v4 GetInfo + v1 GetStatus
     /// (IDs 0xC12EB19E / 0xF40238EF). `None` where the GPU/driver doesn't
     /// expose PowerMonitor. **Pre-wrap / research: raw values, units
@@ -460,6 +466,7 @@ impl Gpu {
             clocks: self.gpu.clock_frequencies(ClockFrequencyType::Current)?,
             effective_clocks: self.gpu.effective_clocks().ok(),
             all_clocks: self.gpu.all_clocks().ok(),
+            all_clocks_detailed: self.gpu.all_clocks_detailed().ok(),
             power_monitor: self.gpu.power_monitor_v4().ok(),
             power_rails: self.gpu.power_rails().ok(),
             memory: allowable_result(self.gpu.memory_info())?.ok(),
