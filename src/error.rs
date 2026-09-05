@@ -97,8 +97,13 @@ impl StdError for NvapiError {
 impl fmt::Display for NvapiError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?} failed: {}", self.nvid, self.status)?;
-        if let Some(raw) = self.raw_status {
-            write!(f, " (raw status {} / {:#x})", raw, raw)?;
+        match self.raw_status {
+            // status carries no numeric value — append the raw code verbatim
+            Some(raw) => write!(f, " (raw status {} / {:#x})", raw, raw)?,
+            // known status: annotate the numeric code so log lines and the
+            // CLI carry the same information as `get-pmgr-arbiter`-style
+            // structured output (e.g. "NVAPI_NOT_SUPPORTED (-104)")
+            None => write!(f, " ({})", self.status.raw())?,
         }
         Ok(())
     }
