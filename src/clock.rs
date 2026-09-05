@@ -353,7 +353,7 @@ impl RawConversion for clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO
 
 // --- Blackwell XBar ClockClient clock-domain family -----------------------
 // (reverse/melonvolt/xbar.txt — Loong0x00 LACT #1147). The 4 NV2080 RM
-// commands wrapped via private NVAPI IDs (escape 0x07000109, same 0x0700_01xx
+// commands wrapped via private NVAPI IDs (escape 0x07000049, same 0x0700_00xx
 // family as VoltRails). All live-verified on Ada 4060 Laptop / R575.74.
 
 /// One controllable clock-domain entry from the private ClockClient
@@ -583,7 +583,7 @@ pub struct ClockDomainFreqDirect {
 }
 
 /// One V/F curve point from the private ClockClient V/F-POINTS GetStatus
-/// (RM 0x20809062, ID 0x7FEE9032, 488B type-08 records). Records are
+/// (RM 0x20809022, ID 0x7FEE9032, 488B type-08 records). Records are
 /// INDEXED BY VOLTAGE; units live-calibrated against the public GPC VFP
 /// curve (`get-vfp`) on R610.74: voltage µV @rec+0x58 (450000 = 450 mV =
 /// public point #0), default MHz @rec+0x24, current MHz @rec+0x64
@@ -678,7 +678,7 @@ pub struct ClkVfPointsPrivate {
 }
 
 /// One record from the private ClockClient V/F-POINTS GetControl override
-/// table (RM 0x20809062, ID 0xDA025C3E, 1060B records). This is the readback
+/// table (RM 0x20809023, ID 0xDA025C3E, 1060B records). This is the readback
 /// surface for SetControl 0xFEC00D04: mode 0 = absolute kHz frequency offset
 /// (`value` = u32 kHz, same semantics as the public freqDeltaKHz), mode 1 =
 /// reverse-volt delta (`value`'s low i16 is the raw f-offset control the

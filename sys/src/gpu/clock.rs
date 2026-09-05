@@ -153,7 +153,11 @@ pub mod undocumented {
 
     // undocumented constants
     pub const NVAPI_MAX_USAGES_PER_GPU: usize = 8;
-    pub const NVAPI_MAX_CLOCKS_PER_GPU: usize = 288;
+    /// GetAllClocks V1 slot count: the driver stamps the 260-byte V1 layout
+    /// (`4 + 64*4`) as `0x10104` — IDA-verified identical on 391.35 / 538.78 /
+    /// 560.94 / 582.41 / 610.88. (288 was the V2 `extendedDomain` count; V2
+    /// uses its own `NVAPI_MAX_GPU_CLOCKS`.)
+    pub const NVAPI_MAX_CLOCKS_PER_GPU: usize = 64;
 
     nvstruct! {
         pub struct NV_USAGES_INFO_USAGE {
@@ -208,6 +212,29 @@ pub mod undocumented {
         /// }
         /// ```
         pub unsafe fn NvAPI_GPU_GetAllClocks;
+    }
+
+    #[cfg(test)]
+    mod get_all_clocks_layout_tests {
+        /// GetAllClocks (0x1bd69f49) accepted stamps, IDA-verified identical
+        /// on 391.35 / 538.78 / 560.94 / 582.41 / 610.88: the V1 260-byte
+        /// layout (`0x10104`) and the V2 1156-byte effective-clocks layout
+        /// (`0x20484`). Keep both pinned so the `effective_clocks` V2→V1
+        /// fallback cannot silently drift off the driver's accepted set.
+        #[test]
+        fn get_all_clocks_layout_sizes() {
+            use crate::api::{NV_CLOCKS_INFO, NV_GPU_CLOCK_EFFECTIVE_INFO};
+            assert_eq!(std::mem::size_of::<NV_CLOCKS_INFO>(), 260);
+            assert_eq!(
+                1u32 << 16 | std::mem::size_of::<NV_CLOCKS_INFO>() as u32,
+                0x10104
+            );
+            assert_eq!(std::mem::size_of::<NV_GPU_CLOCK_EFFECTIVE_INFO>(), 1156);
+            assert_eq!(
+                2u32 << 16 | std::mem::size_of::<NV_GPU_CLOCK_EFFECTIVE_INFO>() as u32,
+                0x20484
+            );
+        }
     }
 
     // ------------------------------------------------------------------
@@ -954,10 +981,11 @@ pub mod undocumented {
     // PerfPstatesGetInfoPrivate LEGACY fallback layouts (pre-V4 drivers).
     //
     // IDA nvapi64.dll 538.78, handler sub_1802E4570 (IID 0x7B30AE0D, escape
-    // 0x07000048): the version check accepts EXACTLY three caller magic
-    // dwords — 0x379C8 (native V3, 227784 B), 0x31A38 (V3, 203208 B) and
-    // 0x119C8 (V1, 72136 B); anything else (incl. the V4 0x432D0/0x832D0
-    // the R610-era ref tool and our V4 path send) → -9
+    // 0x07000048); re-verified across 391.35/538.78/560.94/582.41/610.88
+    // (version-coverage-audit): the version check accepts EXACTLY three
+    // caller magic dwords — 0x379C8 (native V3, 227784 B), 0x319C8 (V3,
+    // 203208 B) and 0x119C8 (V1, 72136 B); anything else (incl. the V4
+    // 0x432D0/0x832D0 the R610-era ref tool and our V4 path send) → -9
     // INCOMPATIBLE_STRUCT_VERSION. So V4 is R610-only; older drivers speak
     // the legacy layouts and the caller degrades V4 → V3 → V1.
     //
@@ -980,8 +1008,11 @@ pub mod undocumented {
     //  record. Iterating set bits and reading record.pstate decodes BOTH.)
     // ------------------------------------------------------------------
 
-    /// V3 legacy version magic (= struct size 203208, high nibble = v3).
-    pub const PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC: u32 = 0x31A38;
+    /// V3 legacy version magic — driver-accepted value 0x319C8 (= the
+    /// 203208-byte buffer's `size | 3<<16` truncated encoding; the historic
+    /// 0x31A38 here was a hex typo for 203208 and every V3-legacy call -9'd
+    /// into the V1 fallback).
+    pub const PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC: u32 = 0x319C8;
     /// V3 legacy buffer size (bytes).
     pub const PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN: usize = 203208;
     /// V1 legacy version magic (= struct size 72136, high nibble = v1).
@@ -1746,6 +1777,25 @@ pub mod undocumented {
         /// the R610 0x78604 with IncompatibleStructVersion. Live-verified on
         /// GT730/391.35: status=0 (escape succeeds) where 0x78604 → -9.
         pub const MAGIC_LEGACY: u32 = 83996; // 0x1481C
+        /// Widest R535-era stamp (369796 = 0x5A484): its response carries a
+        /// 64B (512-bit) bank-1 mask window — the seed the canonical STATUS
+        /// read needs to reach points ≥256 (e.g. the 4th/5th mem pstate
+        /// bins at 256..258, unreachable through the gen-1 INFO's 32B
+        /// 256-bit window). Ladder: modern → WIDE → LEGACY.
+        pub const MAGIC_R535_WIDE: u32 = 369_796; // 0x5A484
+        /// Full GetInfo stamp whitelist per branch, from IDA (the stamps are
+        /// STRUCT SIZES in bytes, and the whitelist IS the ABI — anything
+        /// outside it is rejected with IncompatibleStructVersion):
+        /// - R391.35: `{83996}` only (sub_180124460, single compare → -9)
+        /// - R535.78: `{83996, 157692, 249844, 369796}` (sub_1802702E0) —
+        ///   the 475.14 (R47x) whitelist is IDENTICAL (sub_1802444E0)
+        /// - R582.41/R610: the R535 set + `{493060}` (this MAGIC)
+        ///
+        /// The mid sizes are only needed to DECODE responses stamped with
+        /// them; readers that just need the point-mask seed can send
+        /// MAGIC_R535_WIDE (512-bit windows) or MAGIC_LEGACY everywhere the
+        /// modern stamp is rejected.
+        pub const MAGIC_R535_MID: [u32; 2] = [157_692, 249_844];
     }
 
     impl Default for NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1 {
@@ -1908,6 +1958,154 @@ pub mod undocumented {
         pub const DOMAIN_CURRENT_SLOTS: usize = 4;
     }
 
+    /// Byte offsets into the R535-era CANONICAL GetStatus layout (stamp
+    /// 300164 = 0x49484). IDA sub_180270EA0 (nvapi64_53878.dll): when the
+    /// caller stamps 300164, marshal-in (sub_180258B20) zero-copies the
+    /// USER buffer as the handler's internal image, so the response carries
+    /// the FULL 292B per-point payload — unlike the gen-1 compaction
+    /// (sub_18025A5A0 case 0x14C18) which only round-trips the +4/+8 value
+    /// pair for record types 0/1 and silently DROPS the V/F fields of
+    /// curve-typed records (types 3/4/7/8/12/13) — the mechanism behind
+    /// 538.78's all-zero `get-private-vftable` curve output.
+    ///
+    /// Layout (absolute offsets): 512-bit present mask per bank @+4 /
+    /// +150084 (the caller must SEED these — with stamp==300164 the driver
+    /// never rewrites them), records @+580 / +150660, 292B stride, 512
+    /// points per bank; 580+512*292 = 150660 and 150660+512*292 = 300164 =
+    /// the stamp itself.
+    ///
+    /// **The 292B record is the gen7 (488B) record TRUNCATED** — the base
+    /// and extended-section slots sit at the SAME offsets with the same
+    /// semantics (LIVE-VERIFIED RTX A4000 / 538.78 2026-09-04: +0x24
+    /// 210..1950 MHz and +0x58 450000..1237500 µV ascending V/F grids
+    /// matching the public GPC VFP curve point-for-point; +0x64/+0x68
+    /// mirror them at stock like gen7's current pair; ext ranges
+    /// +0x74..+0xA8 populate like gen7's). Types 0/1/2 records were not
+    /// exercised live on R535 — the +0x24/+0x58 read is presumed to hold
+    /// for them too (it does on every gen7 generation).
+    pub mod clk_vfp_status_canonical {
+        /// canonical struct size = the stamp the handler accepts
+        pub const SIZE: usize = 300_164;
+        /// bank-1 present mask (64B = 512 bits, dword-LSB) — CALLER-SEEDED
+        pub const MASK1: usize = 4;
+        /// bank-1 records base (type dword @+0)
+        pub const REC1: usize = 580;
+        /// bank-2 present mask (64B) — CALLER-SEEDED
+        pub const MASK2: usize = 150_084;
+        /// bank-2 records base
+        pub const REC2: usize = 150_660;
+        /// per-record stride (gen7 488B record truncated at +0x124)
+        pub const STRIDE: usize = 292;
+        /// points per bank (mask window width)
+        pub const POINTS: usize = 512;
+        /// type dword @rec+0 (7/8 = curve points, same encoding as gen7)
+        pub const TYPE: usize = 0;
+        /// default frequency (u32 MHz @rec+0x24 — gen7 slot)
+        pub const FREQ_DEFAULT_MHZ: usize = 0x24;
+        /// small-typed record voltage (u32 µV @rec+0x28 — types 0/1/2,
+        /// where +0x24 holds a u16 frequency)
+        pub const GEN2_VOLT_UV: usize = 0x28;
+        /// stock/default voltage (u32 µV @rec+0x58 — gen7 slot)
+        pub const VOLTAGE_UV: usize = 0x58;
+        /// current/effective frequency (u32 MHz @rec+0x64 — gen7 slot;
+        /// == default at stock)
+        pub const FREQ_CURRENT_MHZ: usize = 0x64;
+        /// current/effective voltage (u32 µV @rec+0x68 — gen7 slot; ==
+        /// default at stock)
+        pub const VOLT_CURRENT_UV: usize = 0x68;
+        /// extension-presence marker dword A (non-zero ⇒ extended section)
+        pub const DOMAIN_EXT_MARKER_A: usize = 0x2C;
+        /// extension-presence marker dword B (non-zero ⇒ extended section)
+        pub const DOMAIN_EXT_MARKER_B: usize = 0x40;
+        /// first ext slot's freq dword (k=0)
+        pub const DOMAIN_CURRENT_BASE: usize = 0x74;
+        /// stride per ext slot (freq@+0, volt@+4; +8..+16 unused)
+        pub const DOMAIN_CURRENT_STRIDE: usize = 0x10;
+        /// slots decoded (k=0..3 → +0x74/+0x84/+0x94/+0xA4)
+        pub const DOMAIN_CURRENT_SLOTS: usize = 4;
+
+        /// 292B-record geometry: the gen7-aligned record slots
+        /// (+0x24/+0x58/+0x64/+0x68 + ext section) tile identically in the
+        /// gen3 and gen23 compactions — only the record bases, mask
+        /// windows and point counts move (R582.41 sub_1801E8310 and
+        /// R535.78 sub_18025A5A0 case 0x3467C agree on gen3).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct ClkVfpGeo {
+            pub rec1: usize,
+            pub rec2: usize,
+            pub mask1: usize,
+            pub mask2: usize,
+            pub points: usize,
+            pub stride: usize,
+        }
+
+        /// stamp 300164 canonical — LIVE-VERIFIED (A4000/538.78)
+        pub const GEO_CANONICAL: ClkVfpGeo = ClkVfpGeo {
+            rec1: 580,
+            rec2: 150_660,
+            mask1: 4,
+            mask2: 150_084,
+            points: 512,
+            stride: 292,
+        };
+        /// stamp 214652 (gen3) — IDA-derived (both branches), no live
+        /// binary seen accepting it exclusively
+        pub const GEO_GEN3: ClkVfpGeo = ClkVfpGeo {
+            rec1: 100,
+            rec2: 74_656,
+            mask1: 4,
+            mask2: 74_560,
+            points: 255,
+            stride: 292,
+        };
+        /// stamp 1525252 (gen23, R582-only rung) — the seed only covers the
+        /// first 512 points (no wide-mask INFO below gen7 on those
+        /// branches), so points 512.. decode as absent
+        pub const GEO_GEN23: ClkVfpGeo = ClkVfpGeo {
+            rec1: 772,
+            rec2: 599_556,
+            mask1: 4,
+            mask2: 598_788,
+            points: 2_048,
+            stride: 292,
+        };
+    }
+
+    /// Stamp 158200 (gen2) layout: 255 × 620B records @+100, bank-0 only
+    /// (100 + 255×620 = 158200 = the stamp). Lossy like gen-1 — type 0/1
+    /// records keep freq u16 @+0x24 + volt u32 @+0x28, types 3/4 a partial
+    /// payload at +0x58.., and curve-typed records (7/8) are DROPPED by
+    /// the driver's compaction (R582.41 sub_1801E8310 case 0x269F8).
+    pub mod clk_vfp_status_gen2 {
+        pub const SIZE: usize = 158_200;
+        /// present mask (32B = 256 bits used of the 64B window) — CALLER-SEEDED
+        pub const MASK1: usize = 4;
+        /// records base (type dword @+0)
+        pub const REC1: usize = 100;
+        /// per-record stride
+        pub const STRIDE: usize = 620;
+        /// points per bank (single bank)
+        pub const POINTS: usize = 255;
+        /// type dword @rec+0
+        pub const TYPE: usize = 0;
+        /// freq u16 MHz @rec+0x24 — types 0/1
+        pub const FREQ_MHZ: usize = 0x24;
+        /// volt u32 µV @rec+0x28 — types 0/1
+        pub const VOLT_UV: usize = 0x28;
+
+        /// geometry for the shared geo accessors (stride 620, bank-0 only
+        /// — mask2 = 0 skips the second window in seed_geo_header)
+        pub const GEO: super::clk_vfp_status_canonical::ClkVfpGeo =
+            super::clk_vfp_status_canonical::ClkVfpGeo {
+                rec1: 100,
+                rec2: 0,
+                mask1: 4,
+                mask2: 0,
+                points: 255,
+                stride: 620,
+            };
+    }
+
     nvstruct! {
         /// Private ClockClient V/F-POINTS GET_STATUS (ID 0x7FEE9032). Magic
         /// 2000388 (0x1E8604) bytes. Records at +772 / +1000964, 488B stride.
@@ -1925,11 +2123,48 @@ pub mod undocumented {
     impl NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1 {
         /// Literal magic dword the GetStatus handler accepts: the largest of
         /// {85016, 158200, 214652, 300164, 1525252, 2000388} — the full
-        /// 2×2048-record layout (live-verified).
+        /// 2×2048-record layout (live-verified). As everywhere in this
+        /// family the stamp is the STRUCT SIZE in bytes, and the accepted
+        /// whitelist per branch (IDA) is the ABI:
+        /// - R391.35: `{85016}` only (sub_180124A40, single compare → -9)
+        /// - R535.78: `{85016, 158200, 214652, 300164}` (sub_180270EA0)
+        /// - R582.41: the R535 set + `{2000388}` (this MAGIC)
+        ///
+        /// Era map (driver-generation taxonomy: R391 / R471 / R53x / R560+):
+        /// era-1 R391 anchors on gen-1 alone, era-3 R53x accepts the four
+        /// sizes below, era-4 R560+ adds this 488B gen7 layout. **Era-2
+        /// R471 is UNSCANNED** (no binary on hand) — the reader degrades to
+        /// MAGIC_LEGACY there, which era-1 and era-3 both anchor on; before
+        /// trusting any non-legacy decode on a 471 install, run
+        /// `cargo test -p nvapi --test r535_stamp_probe -- --nocapture
+        /// --ignored` (the probe walks every stamp in this set) and pin the
+        /// whitelist from its output.
         pub const MAGIC: u32 = 2000388;
+        /// R535-era CANONICAL stamp (300164 = 0x49484): marshal-in
+        /// (sub_180258B20) zero-copies the user buffer as the handler's
+        /// internal image, so the response keeps the FULL 292B per-point
+        /// payload — the gen-1 compaction (MAGIC_LEGACY) silently drops the
+        /// V/F fields of curve-typed records (types ≥ 2), which is why
+        /// 538.78 `get-private-vftable` rendered an all-zero curve. Prefer
+        /// this over MAGIC_LEGACY whenever the modern stamp is rejected.
+        /// Layout: `clk_vfp_status_canonical`.
+        pub const MAGIC_R535_CANONICAL: u32 = 300_164; // 0x49484
+        /// gen23 mid stamp (1525252 = 0x174604, R582-only): 2048-pt, 292B
+        /// records at the gen7-aligned slots (bases +772/+599556, masks
+        /// +4/+598788). Decodable via GEO_GEN23.
+        pub const MAGIC_R582_MID: u32 = 1_525_252; // 0x174604
+        /// Mid sizes accepted by R535/R582 GetStatus alongside
+        /// MAGIC_LEGACY/MAGIC_R535_CANONICAL (each expands through the same
+        /// lossy per-gen compaction; only needed to DECODE responses
+        /// stamped with them, which this reader never sends).
+        pub const MAGIC_R535_MID: [u32; 2] = [158_200, 214_652]; // 0x269F8 / 0x3467C
         /// Legacy magic (R391.35): smallest of the accepted set, 85016B.
         /// Old drivers reject the R610 2000388 stamp with -9; this one
-        /// succeeds (live-verified GT730/391.35: status=0).
+        /// succeeds (live-verified GT730/391.35: status=0). WARNING: the
+        /// gen-1 wire format only carries +4/+8 value pairs for record
+        /// types 0/1 — on drivers whose kernel emits curve-typed (type 8)
+        /// records the values are lost in the driver's own compaction; use
+        /// MAGIC_R535_CANONICAL there.
         pub const MAGIC_LEGACY: u32 = 85016; // 0x14C18
     }
 
@@ -2025,6 +2260,466 @@ pub mod undocumented {
             let off = self.off(base, clk_vfp_status::STRIDE)?;
             self.rest.get(off..off + clk_vfp_status::STRIDE)
         }
+
+        // ---- R535-era canonical layout (stamp 300164, see
+        // `clk_vfp_status_canonical`) — the buffers are SMALLER than this
+        // struct's modern size, so every accessor is bounds-checked through
+        // `off()` and simply returns None past the canonical end. ----
+
+        fn canonical_rec_base(bank: usize, idx: usize) -> Option<usize> {
+            if bank > 1 || idx >= clk_vfp_status_canonical::POINTS {
+                return None;
+            }
+            Some(
+                if bank == 0 {
+                    clk_vfp_status_canonical::REC1
+                } else {
+                    clk_vfp_status_canonical::REC2
+                } + clk_vfp_status_canonical::STRIDE * idx,
+            )
+        }
+
+        /// Canonical present-bit test over the caller-seeded 512-bit mask
+        /// windows (@+4 / +150084). With stamp 300164 the driver never
+        /// rewrites the masks, so this reads back exactly what was seeded.
+        pub fn canonical_point_present(&self, bank: usize, idx: usize) -> Option<bool> {
+            if bank > 1 || idx >= clk_vfp_status_canonical::POINTS {
+                return None;
+            }
+            let mask_base = if bank == 0 {
+                clk_vfp_status_canonical::MASK1
+            } else {
+                clk_vfp_status_canonical::MASK2
+            };
+            let dword = self.u32_at(mask_base + 4 * (idx >> 5))?;
+            Some(dword & (1 << (idx & 31)) != 0)
+        }
+
+        /// Canonical record type dword (u32 @rec+0).
+        pub fn canonical_type(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::canonical_rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::TYPE)
+        }
+
+        /// Canonical default frequency (u32 MHz @rec+0x24 — the gen7 slot;
+        /// LIVE-VERIFIED A4000/538.78 against the public GPC VFP curve).
+        pub fn canonical_freq_default_mhz(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::canonical_rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::FREQ_DEFAULT_MHZ)
+        }
+
+        /// Canonical current/effective frequency (u32 MHz @rec+0x64 — the
+        /// gen7 slot; equals the default at stock).
+        pub fn canonical_freq_current_mhz(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::canonical_rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::FREQ_CURRENT_MHZ)
+        }
+
+        /// Canonical voltage (u32 µV @rec+0x58 — the gen7 slot;
+        /// LIVE-VERIFIED A4000/538.78: the 6.25 mV public grid).
+        pub fn canonical_volt_uv(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::canonical_rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::VOLTAGE_UV)
+        }
+
+        /// Canonical current/effective voltage (u32 µV @rec+0x68 — the
+        /// gen7 slot; equals the default at stock).
+        pub fn canonical_volt_current_uv(&self, bank: usize, idx: usize) -> Option<u32> {
+            let base = Self::canonical_rec_base(bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::VOLT_CURRENT_UV)
+        }
+
+        /// Raw u32 at `offset` inside the canonical record — used for the
+        /// gen7-aligned ext-section markers (+0x2C/+0x40) and per-domain
+        /// current slots (+0x74+0x10*k).
+        pub fn canonical_raw_dword(&self, bank: usize, idx: usize, offset: usize) -> Option<u32> {
+            let base = Self::canonical_rec_base(bank, idx)?;
+            self.u32_at(base + offset)
+        }
+
+        /// The full 292-byte canonical record for point (bank, idx) —
+        /// diagnostic (--dump-records) and live-calibration source.
+        pub fn canonical_raw_record(&self, bank: usize, idx: usize) -> Option<&[u8]> {
+            let base = Self::canonical_rec_base(bank, idx)?;
+            let off = self.off(base, clk_vfp_status_canonical::STRIDE)?;
+            self.rest.get(off..off + clk_vfp_status_canonical::STRIDE)
+        }
+
+        /// Seed the canonical 512-bit mask windows (+4/+150084, 64B each)
+        /// from a GetInfo block's point masks. The modern INFO mask regions
+        /// are 256B/bank; the canonical window is their first 64B (512
+        /// points) — every generation so far lives inside that. With the
+        /// LEGACY GetInfo stamp the response only guarantees a 160-bit
+        /// window at +4; the tail bytes are typically zero there, which
+        /// simply reports those points as absent.
+        pub fn seed_canonical_header(
+            &mut self,
+            info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1,
+        ) {
+            for (dst_abs, src_abs) in [
+                (clk_vfp_status_canonical::MASK1, clk_vfp_info::MASK1),
+                (clk_vfp_status_canonical::MASK2, clk_vfp_info::MASK2),
+            ] {
+                let dst = self.off_mut(dst_abs, 64).unwrap_or(0);
+                let src = info.off(src_abs, 64).unwrap_or(0);
+                let n = 64.min(self.rest.len() - dst).min(info.rest.len() - src);
+                self.rest[dst..dst + n].copy_from_slice(&info.rest[src..src + n]);
+            }
+        }
+
+        // ---- geometry-parameterized 292B-record accessors (canonical /
+        // gen3 / gen23 share the gen7-aligned field slots) ----
+
+        fn geo_rec_base(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+        ) -> Option<usize> {
+            if bank > 1 || idx >= geo.points {
+                return None;
+            }
+            Some((if bank == 0 { geo.rec1 } else { geo.rec2 }) + geo.stride * idx)
+        }
+
+        /// Present-bit test over the geometry's caller-seeded mask windows.
+        pub fn geo_point_present(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+        ) -> Option<bool> {
+            if bank > 1 || idx >= geo.points {
+                return None;
+            }
+            let mask_base = if bank == 0 { geo.mask1 } else { geo.mask2 };
+            let dword = self.u32_at(mask_base + 4 * (idx >> 5))?;
+            Some(dword & (1 << (idx & 31)) != 0)
+        }
+
+        /// Record type dword (u32 @rec+0).
+        pub fn geo_type(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+        ) -> Option<u32> {
+            let base = self.geo_rec_base(geo, bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::TYPE)
+        }
+
+        /// Default frequency (u32 MHz @rec+0x24 — curve-typed records).
+        pub fn geo_freq_default_mhz(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+        ) -> Option<u32> {
+            let base = self.geo_rec_base(geo, bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::FREQ_DEFAULT_MHZ)
+        }
+
+        /// Frequency for SMALL-typed records (u16 MHz @rec+0x24 — the
+        /// adjacent +0x28 dword is the voltage, so a u32 read here would
+        /// be contaminated).
+        pub fn geo_freq_small_mhz(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+        ) -> Option<u32> {
+            let base = self.geo_rec_base(geo, bank, idx)?;
+            let off = self.off(base + clk_vfp_status_canonical::FREQ_DEFAULT_MHZ, 2)?;
+            self.rest
+                .get(off..off + 2)
+                .and_then(|s| s.try_into().ok())
+                .map(u16::from_le_bytes)
+                .map(u32::from)
+        }
+
+        /// Voltage for SMALL-typed records (u32 µV @rec+0x28).
+        pub fn geo_volt_small_uv(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+        ) -> Option<u32> {
+            let base = self.geo_rec_base(geo, bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::GEN2_VOLT_UV)
+        }
+
+        /// Current/effective frequency (u32 MHz @rec+0x64 — curve types).
+        pub fn geo_freq_current_mhz(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+        ) -> Option<u32> {
+            let base = self.geo_rec_base(geo, bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::FREQ_CURRENT_MHZ)
+        }
+
+        /// Current/effective voltage (u32 µV @rec+0x68 — curve types).
+        pub fn geo_volt_current_uv(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+        ) -> Option<u32> {
+            let base = self.geo_rec_base(geo, bank, idx)?;
+            self.u32_at(base + clk_vfp_status_canonical::VOLT_CURRENT_UV)
+        }
+
+        /// Raw u32 at `offset` inside the geometry's record (curve voltage
+        /// +0x58, ext markers +0x2C/+0x40, per-domain slots +0x74+0x10*k).
+        pub fn geo_raw_dword(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+            offset: usize,
+        ) -> Option<u32> {
+            let base = self.geo_rec_base(geo, bank, idx)?;
+            self.u32_at(base + offset)
+        }
+
+        /// The full 292-byte record for point (bank, idx).
+        pub fn geo_raw_record(
+            &self,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+            bank: usize,
+            idx: usize,
+        ) -> Option<&[u8]> {
+            let base = self.geo_rec_base(geo, bank, idx)?;
+            let off = self.off(base, geo.stride)?;
+            self.rest.get(off..off + geo.stride)
+        }
+
+        /// Seed a geometry's mask windows (64B each) from a GetInfo block.
+        /// Windows at offset 0 are skipped (single-bank geometries).
+        pub fn seed_geo_header(
+            &mut self,
+            info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1,
+            geo: &clk_vfp_status_canonical::ClkVfpGeo,
+        ) {
+            for (dst_abs, src_abs) in [
+                (geo.mask1, clk_vfp_info::MASK1),
+                (geo.mask2, clk_vfp_info::MASK2),
+            ] {
+                if dst_abs == 0 {
+                    continue;
+                }
+                let dst = self.off_mut(dst_abs, 64).unwrap_or(0);
+                let src = info.off(src_abs, 64).unwrap_or(0);
+                let n = 64.min(self.rest.len() - dst).min(info.rest.len() - src);
+                self.rest[dst..dst + n].copy_from_slice(&info.rest[src..src + n]);
+            }
+        }
+    }
+
+    /// Layout canaries (compile-time): the canonical region must tile
+    /// exactly — bank-1 records end where the bank-2 mask begins, bank-2
+    /// records end at the stamp size, and the whole region fits inside the
+    /// modern-sized STATUS buffer it is read through.
+    const _: () = assert!(
+        clk_vfp_status_canonical::REC1
+            + clk_vfp_status_canonical::POINTS * clk_vfp_status_canonical::STRIDE
+            == clk_vfp_status_canonical::MASK2
+    );
+    const _: () = assert!(
+        clk_vfp_status_canonical::REC2
+            + clk_vfp_status_canonical::POINTS * clk_vfp_status_canonical::STRIDE
+            == clk_vfp_status_canonical::SIZE
+    );
+    const _: () = assert!(clk_vfp_status_canonical::SIZE <= 2_000_388 + 4);
+
+    #[cfg(test)]
+    mod clk_vfp_canonical_tests {
+        use super::*;
+
+        fn put_u32(
+            status: &mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1,
+            abs: usize,
+            v: u32,
+        ) {
+            let o = abs - 4;
+            status.rest[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+
+        /// The nvstruct buffer this reader allocates is the gen7/modern
+        /// size — pin it so a struct change cannot silently shrink the
+        /// canonical window below the accessor bounds.
+        #[test]
+        fn canonical_fits_modern_buffer() {
+            assert_eq!(
+                size_of::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1>(),
+                2_000_388
+            );
+            assert!(
+                clk_vfp_status_canonical::SIZE
+                    <= size_of::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1>()
+            );
+        }
+
+        /// Synthetic type-8 (curve) + type-1 (small) record decode at the
+        /// R535 canonical slots (gen7-aligned: +0x24/+0x58/+0x64/+0x68),
+        /// plus present-bit and absence behavior.
+        #[test]
+        fn canonical_record_decode() {
+            let mut s = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1>::new_zeroed();
+                let mut b = b.assume_init();
+                b.version = NvVersion::with_version(
+                    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1::MAGIC_R535_CANONICAL,
+                );
+                b
+            };
+            // present bits 0 (curve) and 1 (small) in bank 0; bit 0 in bank 1
+            put_u32(&mut s, clk_vfp_status_canonical::MASK1, 0b11);
+            put_u32(&mut s, clk_vfp_status_canonical::MASK2, 1);
+            // point 0: curve record
+            let r0 = clk_vfp_status_canonical::REC1;
+            put_u32(&mut s, r0, 8);
+            put_u32(&mut s, r0 + clk_vfp_status_canonical::FREQ_DEFAULT_MHZ, 405);
+            put_u32(&mut s, r0 + clk_vfp_status_canonical::VOLTAGE_UV, 450_000);
+            put_u32(&mut s, r0 + clk_vfp_status_canonical::FREQ_CURRENT_MHZ, 435);
+            put_u32(
+                &mut s,
+                r0 + clk_vfp_status_canonical::VOLT_CURRENT_UV,
+                450_000,
+            );
+            // point 1: small record — same gen7-aligned slots
+            let r1 = clk_vfp_status_canonical::REC1 + clk_vfp_status_canonical::STRIDE;
+            put_u32(&mut s, r1, 1);
+            put_u32(&mut s, r1 + clk_vfp_status_canonical::FREQ_DEFAULT_MHZ, 648);
+            put_u32(&mut s, r1 + clk_vfp_status_canonical::VOLTAGE_UV, 810_000);
+            // bank-2 point 0
+            let r2 = clk_vfp_status_canonical::REC2;
+            put_u32(&mut s, r2, 7);
+            put_u32(&mut s, r2 + clk_vfp_status_canonical::FREQ_DEFAULT_MHZ, 210);
+
+            assert!(s.canonical_point_present(0, 0).unwrap());
+            assert!(s.canonical_point_present(0, 1).unwrap());
+            assert!(!s.canonical_point_present(0, 2).unwrap());
+            assert_eq!(s.canonical_type(0, 0), Some(8));
+            assert_eq!(s.canonical_type(0, 1), Some(1));
+            // default and current pairs read independently
+            assert_eq!(s.canonical_volt_uv(0, 0), Some(450_000));
+            assert_eq!(s.canonical_volt_uv(0, 1), Some(810_000));
+            assert_eq!(s.canonical_volt_current_uv(0, 0), Some(450_000));
+            assert_eq!(s.canonical_freq_default_mhz(0, 0), Some(405));
+            assert_eq!(s.canonical_freq_current_mhz(0, 0), Some(435));
+            assert_eq!(s.canonical_freq_default_mhz(0, 1), Some(648));
+            // bank 2 window and records are independent
+            assert!(s.canonical_point_present(1, 0).unwrap());
+            assert_eq!(s.canonical_freq_default_mhz(1, 0), Some(210));
+            assert_eq!(s.canonical_raw_record(0, 0).unwrap().len(), 292);
+            // past the 512-point canonical window → None (bounds-checked)
+            assert_eq!(s.canonical_point_present(0, 512), None);
+        }
+
+        /// gen3 geometry (214652): 292B records @+100/+74656 decode with
+        /// the same gen7-aligned slots as the canonical geometry.
+        #[test]
+        fn gen3_geo_record_decode() {
+            let mut s = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1>::new_zeroed();
+                let mut b = b.assume_init();
+                b.version = NvVersion::with_version(214_652);
+                b
+            };
+            let geo = clk_vfp_status_canonical::GEO_GEN3;
+            put_u32(&mut s, geo.mask1, 0b11);
+            // record 0: curve type at the gen3 base
+            let r0 = geo.rec1;
+            put_u32(&mut s, r0, 8);
+            put_u32(&mut s, r0 + clk_vfp_status_canonical::FREQ_DEFAULT_MHZ, 405);
+            put_u32(&mut s, r0 + clk_vfp_status_canonical::VOLTAGE_UV, 450_000);
+            assert!(s.geo_point_present(&geo, 0, 0).unwrap());
+            assert_eq!(s.geo_type(&geo, 0, 0), Some(8));
+            assert_eq!(s.geo_freq_default_mhz(&geo, 0, 0), Some(405));
+            assert_eq!(
+                s.geo_raw_dword(&geo, 0, 0, clk_vfp_status_canonical::VOLTAGE_UV),
+                Some(450_000)
+            );
+            assert_eq!(s.geo_raw_record(&geo, 0, 0).unwrap().len(), 292);
+            // record region must tile into the bank-2 mask
+            assert_eq!(geo.rec1 + geo.points * geo.stride, geo.mask2);
+        }
+
+        /// gen2 (158200): 620B records @+100; small types keep the
+        /// +0x24 u16 freq / +0x28 u32 volt pair and the region tiles to
+        /// the stamp size.
+        #[test]
+        fn gen2_lossy_record_decode() {
+            let mut s = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1>::new_zeroed();
+                let mut b = b.assume_init();
+                b.version = NvVersion::with_version(158_200);
+                b
+            };
+            let geo = clk_vfp_status_gen2::GEO;
+            put_u32(&mut s, geo.mask1, 0b11);
+            let r0 = geo.rec1;
+            put_u32(&mut s, r0, 1);
+            let f = r0 + clk_vfp_status_gen2::FREQ_MHZ;
+            s.rest[f - 4..f - 2].copy_from_slice(&405u16.to_le_bytes());
+            put_u32(&mut s, r0 + clk_vfp_status_gen2::VOLT_UV, 450_000);
+            assert!(s.geo_point_present(&geo, 0, 0).unwrap());
+            assert_eq!(s.geo_type(&geo, 0, 0), Some(1));
+            assert_eq!(s.geo_freq_small_mhz(&geo, 0, 0), Some(405));
+            assert_eq!(s.geo_volt_small_uv(&geo, 0, 0), Some(450_000));
+            // 100 + 255*620 == 158200 (the stamp IS the region span)
+            assert_eq!(
+                geo.rec1 + geo.points * geo.stride,
+                clk_vfp_status_gen2::SIZE
+            );
+        }
+
+        /// seed_canonical_header copies the first 64B of each GetInfo bank
+        /// mask into the canonical windows; the driver's dword-LSB mask
+        /// convention means the byte copy preserves bit semantics.
+        #[test]
+        fn canonical_seed_from_info() {
+            // NB: never construct the big structs by value in a test — the
+            // literal materializes ~2 MB on the (1 MB) test-thread stack.
+            // Zeroed heap allocation + a version stamp, as in production.
+            let mut info = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1>::new_zeroed();
+                let mut b = b.assume_init();
+                b.version = NvVersion::with_version(
+                    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1::MAGIC,
+                );
+                b
+            };
+            let put = |info: &mut NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1,
+                       abs: usize,
+                       v: u32| {
+                let o = abs - 4;
+                info.rest[o..o + 4].copy_from_slice(&v.to_le_bytes());
+            };
+            put(&mut info, clk_vfp_info::MASK1, 0x8000_0001);
+            put(&mut info, clk_vfp_info::MASK1 + 4, 0x0000_00FF);
+            put(&mut info, clk_vfp_info::MASK2, 0x0000_0001);
+
+            let mut status = unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1>::new_zeroed();
+                let mut b = b.assume_init();
+                b.version = NvVersion::with_version(
+                    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS_PRIVATE_V1::MAGIC_R535_CANONICAL,
+                );
+                b
+            };
+            status.seed_canonical_header(&info);
+            assert!(status.canonical_point_present(0, 0).unwrap());
+            assert!(!status.canonical_point_present(0, 1).unwrap());
+            assert!(status.canonical_point_present(0, 31).unwrap());
+            // second mask dword (0x0000_00FF) covers bits 32..39 only
+            assert!(status.canonical_point_present(0, 39).unwrap());
+            assert!(!status.canonical_point_present(0, 63).unwrap());
+            assert!(!status.canonical_point_present(0, 64).unwrap());
+            assert!(status.canonical_point_present(1, 0).unwrap());
+        }
     }
 
     nvapi! {
@@ -2076,6 +2771,13 @@ pub mod undocumented {
         /// Legacy magic (R391.35): the GetControl/SetControl handlers on old
         /// drivers accept this small stamp (90116B) and reject the R610
         /// 4670980 with -9. Live-verified on GT730/391.35.
+        /// CONFLICT (IDA 2026-09-04): the 391.35 binary's GetControl
+        /// whitelist is `{82976}` ONLY (sub_180123E50: `*a2 != 82976 → -9`)
+        /// — 90116 should never pass there. The live note above may have
+        /// observed a different 391.xx build or the snapshot fallback;
+        /// re-verify on hardware before relying on this stamp. The
+        /// reader's legacy branch already prefers MAGIC_SNAPSHOT (accepted
+        /// by R391 AND R535 per IDA), so nothing depends on this stamp.
         pub const MAGIC_LEGACY: u32 = 90116; // 0x16004
         /// Volta/GV100: BOTH stamps above are rejected (-9) — but the R610
         /// snapshot magics are accepted for GetControl and (per the RMW
@@ -2092,7 +2794,11 @@ pub mod undocumented {
         pub const LEGACY_MASK: usize = 0x00; // 17 bytes = 136 bits
         pub const LEGACY_REC_BASE: usize = 0x60;
         pub const LEGACY_STRIDE: usize = 0x44;
-        pub const LEGACY_POINTS: usize = 136;
+        /// Present-extent observed on V100 (132 points); the gen1 control
+        /// REQUEST mask window is 16 dwords (64B = 512 bits) on every
+        /// branch, so the bound is widened to the window — enumeration
+        /// loops still bound by the actual present bits.
+        pub const LEGACY_POINTS: usize = 512;
         /// driver-owned flags dword: 1 = curve point, 0 = bin (mirrors
         /// the legacy GetStatus flags)
         pub const LEGACY_TYPE: usize = 0x00;
@@ -2326,16 +3032,21 @@ pub mod undocumented {
             Some(())
         }
 
-        /// Volta legacy: seed the control mask from the legacy GetInfo
-        /// mask (rest[0..0x14], same LE-bitfield format, truncated to the
-        /// control's 136-bit space).
+        /// Legacy control request mask, seeded from the GetInfo mask
+        /// window (same LE-bitfield format). Width 64B: the gen1 control
+        /// REQUEST carries a 16-dword bitmap on every branch (R582.41
+        /// sub_1801E61C0 marshal-in; R535.78 scratch packing), and the
+        /// seed always lands on a zeroed buffer — bits beyond a kernel's
+        /// present extent are zero, and zero bits are no-ops in the
+        /// driver's per-bit processing, so widening past the V100-observed
+        /// 17B present extent (132 points) changes nothing there.
         pub fn legacy_seed_masks_from_info(
             &mut self,
             info: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE_V1,
         ) {
-            let src = info.off(clk_vfp_info::MASK1, 17).unwrap_or(0);
-            let dst = self.off_mut(clk_vfp_control::LEGACY_MASK, 17).unwrap_or(0);
-            let n = 17.min(self.rest.len() - dst).min(info.rest.len() - src);
+            let src = info.off(clk_vfp_info::MASK1, 64).unwrap_or(0);
+            let dst = self.off_mut(clk_vfp_control::LEGACY_MASK, 64).unwrap_or(0);
+            let n = 64.min(self.rest.len() - dst).min(info.rest.len() - src);
             self.rest[dst..dst + n].copy_from_slice(&info.rest[src..src + n]);
         }
     }

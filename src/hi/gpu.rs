@@ -17,18 +17,17 @@ fn collect_domain<T: Copy, U: From<T>>(
 
 pub use crate::{
     AllClockEntry, AllClocks, AllClocksDetailed, ArchInfo, Bus, BusInfo, BusType, Celsius,
-    ClockDomain, ClockFrequencies,
-    ClockLockEntry, ClockLockValue, ComputeCapabilities, ConnectedIdsFlags, CoolerControl,
-    CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings, CoolerStatus, CoolerTarget,
-    CoolerType, DisplayId, DriverModel, EccErrors, EffectiveClocks, FanArbiterControl,
-    FanArbiterStatus, FanCoolerId, FanCurve, FanCurvePoint, Foundry, GpuType, Kibibytes, Kilohertz,
-    KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState, PStateNativeLock,
-    PciIdentifiers, Percentage, PerfFreqCap, PerfFreqCapEntry, PerfInfo, PerfLimitId, PerfStatus,
-    PerformanceDecreaseReason, PffCurve, PffPoint, PhysicalGpu, PowerMonitor, PowerRails,
-    PowerTopologyChannelId, PrivateCoolerInfo, RamMaker, RamType, Range, Rpm, SetFanRpmResult,
-    SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController, ThermalTarget,
-    UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain, VoltageStatus,
-    VoltageTable,
+    ClockDomain, ClockFrequencies, ClockLockEntry, ClockLockValue, ComputeCapabilities,
+    ConnectedIdsFlags, CoolerControl, CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings,
+    CoolerStatus, CoolerTarget, CoolerType, DisplayId, DriverModel, EccErrors, EffectiveClocks,
+    FanArbiterControl, FanArbiterStatus, FanCoolerId, FanCurve, FanCurvePoint, Foundry, GpuType,
+    Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
+    PStateNativeLock, PciIdentifiers, Percentage, PerfFreqCap, PerfFreqCapEntry, PerfInfo,
+    PerfLimitId, PerfStatus, PerformanceDecreaseReason, PffCurve, PffPoint, PhysicalGpu,
+    PowerMonitor, PowerRails, PowerTopologyChannelId, PrivateCoolerInfo, RamMaker, RamType, Range,
+    Rpm, SetFanRpmResult, SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController,
+    ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain,
+    VoltageStatus, VoltageTable,
 };
 use crate::{
     BaseVoltage, ClockEntry, ClockFrequencyType, ClockRange, ClockTable, PStates, PffStatus,
@@ -716,7 +715,7 @@ impl Gpu {
 
     // --- Blackwell XBar ClockClient clock-domain family ---------------------
     // (reverse/melonvolt/xbar.txt — Loong0x00 LACT #1147). The 4 NV2080 RM
-    // commands wrapped via private NVAPI IDs (escape 0x07000109).
+    // commands wrapped via private NVAPI IDs (escape 0x07000049).
 
     /// Controllable clock-domain block from the private ClockClient
     /// GetControl (RM 0x2080901b, ID 0xF58938F5). `Ok(None)` where the driver
@@ -1318,7 +1317,7 @@ impl Gpu {
     }
 
     /// V/F curve points from the private ClockClient V/F-POINTS read path
-    /// (GetInfo 0x8895B510 → GetStatus 0x7FEE9032, RM 0x20809061/0x20809062).
+    /// (GetInfo 0x8895B510 → GetStatus 0x7FEE9032, RM 0x20809021/0x20809022).
     /// Units live-calibrated vs the public GPC VFP curve. `Ok(None)` where
     /// the driver doesn't expose the private interface.
     pub fn clk_vf_points_private(&self) -> crate::Result<Option<crate::ClkVfPointsPrivate>> {

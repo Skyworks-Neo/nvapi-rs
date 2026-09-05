@@ -1007,6 +1007,80 @@ pub mod undocumented {
 
     nvversion! { @=NV_GPU_CLIENT_TGP_WATT_STATUS NV_GPU_CLIENT_TGP_WATT_STATUS_V1(1) = 10016 }
 
+    // Pre-R538 TGP-watts GET variants (ID 0x8B3E7343). RE'd from
+    // nvapi64_46296.dll (R465, handler 0x180266850): the version switch
+    // accepts {0x10298, 0x106DC, 0x10A4C, 0x11F10} — the modern 0x12720 stamp
+    // is 538+ only (diff-matrix-confirmed on 391.35/538.78/560.94/582.41/
+    // 610.88impl: {0x10298, 0x106DC, 0x10A4C} are the universal stamps).
+    // Geometry from the R465 fill code, all variants share the 136-byte entry
+    // stride; they differ in header size and entry capacity:
+    //   0x11F10 (v1|7952): 32 entries, entry table at buffer byte 3536
+    //     (fill writes `dword[884 + 34*idx]`; per-entry: +0 status code,
+    //     +4 u16 state, +72 power mW);
+    //   0x10A4C (v1|2636): 6 entries, entry table at buffer byte 1756
+    //     (fill writes `dword[439 + 34*idx]`, same per-entry layout);
+    //   0x106DC (v1|1756): header-only in the 1756-byte struct — the fill
+    //     path for it indexes past its end, so it is header-equivalent to
+    //     0x10A4C's table base; not a useful GET target;
+    //   0x10298 (v1|664): same-generation header view (no entry capacity).
+    nvstruct! {
+        /// 0x11F10 GET buffer: v1|7952, 32 × 136B entries @ +3536.
+        pub struct NV_GPU_CLIENT_TGP_WATT_STATUS_11F10_V1 {
+            pub version: NvVersion,
+            pub mask: u32,
+            /// Opaque header + entry table (raw; GET-filled).
+            pub payload: Array<[u8; 7952 - 8]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_TGP_WATT_STATUS_11F10_V1 {
+        const ENTRY_STRIDE: usize = 136;
+        const ENTRY_BASE: usize = 3536;
+        const ENTRY_MW_OFF: usize = 72;
+        const ENTRIES: usize = 32;
+
+        /// Power-mW of entry `index` (None = sentinel 0xFFFFFFFF / OOB).
+        pub fn power_mw(&self, index: usize) -> Option<u32> {
+            if index >= Self::ENTRIES {
+                return None;
+            }
+            let off = Self::ENTRY_BASE + Self::ENTRY_STRIDE * index + Self::ENTRY_MW_OFF;
+            self.payload
+                .get(off - 8..off - 8 + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .filter(|mw| *mw != 0xFFFF_FFFF)
+        }
+    }
+
+    nvstruct! {
+        /// 0x10A4C GET buffer: v1|2636, 6 × 136B entries @ +1756.
+        pub struct NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 {
+            pub version: NvVersion,
+            pub mask: u32,
+            /// Opaque header + entry table (raw; GET-filled).
+            pub payload: Array<[u8; 2636 - 8]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 {
+        const ENTRY_STRIDE: usize = 136;
+        const ENTRY_BASE: usize = 1756;
+        const ENTRY_MW_OFF: usize = 72;
+        const ENTRIES: usize = 6;
+
+        /// Power-mW of entry `index` (None = sentinel 0xFFFFFFFF / OOB).
+        pub fn power_mw(&self, index: usize) -> Option<u32> {
+            if index >= Self::ENTRIES {
+                return None;
+            }
+            let off = Self::ENTRY_BASE + Self::ENTRY_STRIDE * index + Self::ENTRY_MW_OFF;
+            self.payload
+                .get(off - 8..off - 8 + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .filter(|mw| *mw != 0xFFFF_FFFF)
+        }
+    }
+
     nvapi! {
         /// Undocumented (NDA, ID 0x8B3E7343). Fills the TGP-watts control buffer
         /// (the GET half of setTgpWatt). Pair with SetStatus.
@@ -1173,6 +1247,31 @@ pub mod undocumented {
     }
 
     nvversion! { @=NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_V1(15) = 347124 }
+
+    nvstruct! {
+        /// Private ClientPowerPoliciesGetInfo SMALL-V1 (ID 0x67F31384, stamp
+        /// `0x612E4` = v6|4836). RE'd from nvapi64_46296.dll (R465): the
+        /// handler (0x1802670A0) accepts {0x10628, 0x10828, 0x10A3C, 0x40A70,
+        /// 0x50DE4, 0x612E4} — the ver-15 347KB stamp (0xF4BF4) is R560+ only
+        /// (first accepted in nvapi64_56094.dll; 538.78 rejects it too, with
+        /// INCOMPATIBLE_STRUCT_VERSION (-9)). 0x612E4 is the universal
+        /// pre-R560 stamp (391.35/462.96/538.78 all take it). Layout beyond
+        /// the version dword is opaque research territory: the handler fills
+        /// a per-policy {flag byte, dword} quad at +656..+704 (8-byte stride
+        /// × 4 from the internal escape buffer at +5240) plus scattered bytes
+        /// at +30..36/+362 — min/default/max mW offsets not yet pinned. Field
+        /// semantics pending live calibration.
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_SMALL_V1 {
+            pub version: NvVersion,
+            /// opaque driver-filled payload (4832 bytes)
+            pub payload: Array<[u8; 4836 - 4]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_SMALL_V1 {
+        /// The ver-6 stamp 0x612E4 (v6|4836) every pre-R560 branch accepts.
+        pub const STAMP: u32 = 0x612E4;
+    }
 
     nvapi! {
         /// Undocumented (NDA, ID 0x67F31384). Private ClientPowerPoliciesGetInfo

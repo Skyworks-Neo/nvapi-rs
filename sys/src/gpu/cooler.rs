@@ -774,6 +774,105 @@ pub mod undocumented {
         pub unsafe fn NvAPI_GPU_ClientFanPoliciesSetControl;
     }
 
+    /// `ClientFanPolicies{Get,Set}Control` SMALL-V2 variant (structure magic
+    /// `0x2004C` = v2|76, the same stamp the GetInfo block uses). RE'd from
+    /// nvapi64_46296.dll (R465): the GetControl handler (0x18021F070) gates on
+    /// `stamp == 0x10038 || stamp == 0x2004C` and the SetControl handler
+    /// (0x180220980) identically — the 4-slot `0x200DC` table is R538+ only,
+    /// rejected with INCOMPATIBLE_STRUCT_VERSION (-9) on R465. Geometry (from
+    /// the R465 fill code): count byte at +4, ONE 52-byte curve slot at +20
+    /// with the same layout as the `0x200DC` table's per-slot stride (index
+    /// byte at slot+0, three 12-byte (temp_q8, reserved, rpm_q16) points,
+    /// 12-byte tail), then 4 trailing bytes to 76. The driver fills/reads only
+    /// slot 0 — the single-curve surface of pre-R538 generations.
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
+    pub struct NV_GPU_CLIENT_FAN_POLICIES_CONTROL_SMALL_V2 {
+        /// structure magic — `0x2004C`
+        pub version: u32,
+        /// curve count (byte at +4; the small variant driver-fills 0 or 1)
+        pub count: u8,
+        pub header: Padding<[u8; 15]>,
+        /// the single curve slot at +20
+        pub curve: NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1,
+        pub tail: Padding<[u8; 4]>,
+    }
+
+    unsafe impl zerocopy::IntoBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_SMALL_V2 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::Immutable for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_SMALL_V2 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::FromBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_SMALL_V2 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::TryFromBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_SMALL_V2 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+        fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+        where
+            A: zerocopy::invariant::Alignment,
+        {
+            let _ = candidate;
+            true
+        }
+    }
+    unsafe impl zerocopy::FromZeros for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_SMALL_V2 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+
+    impl NV_GPU_CLIENT_FAN_POLICIES_CONTROL_SMALL_V2 {
+        /// The `0x2004C` structure magic for the small {Get,Set}Control table.
+        pub const MAGIC: u32 = 0x2004C;
+
+        pub fn new() -> Self {
+            Self {
+                version: Self::MAGIC,
+                count: 0,
+                header: Padding { data: [0u8; 15] },
+                curve: NV_GPU_CLIENT_FAN_POLICIES_CURVE_V1 {
+                    index: 0,
+                    padding: Padding { data: [0u8; 3] },
+                    points: Padding {
+                        data: [NV_GPU_CLIENT_FAN_POLICIES_POINT_V1 {
+                            temp_q8: 0,
+                            reserved: 0,
+                            rpm_q16: 0,
+                        }; 3],
+                    },
+                    tail: Padding { data: [0u8; 12] },
+                },
+                tail: Padding { data: [0u8; 4] },
+            }
+        }
+    }
+
+    impl Default for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_SMALL_V2 {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     /// ClientFanPolicies GetInfo capabilities block (structure magic
     /// `0x2004C`, 76 bytes). Size/magic corroborated by EVGA Precision X1
     /// 1.3.7 (ManagedNvApi.dll `getFanCurve` GetInfo path); field layout
