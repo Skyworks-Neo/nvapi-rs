@@ -82,8 +82,10 @@ fn v100_public_vfp_raw_dump() {
     eprintln!("mask words: {:08X?}", mask.mask);
 
     // GetStatus V3
-    let mut status = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS::default();
-    status.mask = mask;
+    let mut status = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_STATUS {
+        mask,
+        ..Default::default()
+    };
     let st = unsafe {
         NvAPI_GPU_ClockClientClkVfPointsGetStatus(*gpu.handle(), ptr::from_mut(&mut status).cast())
     };
@@ -99,8 +101,10 @@ fn v100_public_vfp_raw_dump() {
     }
 
     // GetControl (ver2 family)
-    let mut ctrl = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-    ctrl.mask = mask;
+    let mut ctrl = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
+        mask,
+        ..Default::default()
+    };
     let st = unsafe {
         NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut ctrl).cast())
     };

@@ -42,16 +42,13 @@ fn probe(tag: &str, len: usize, magic: u32) -> bool {
         let (ty, min, max, pstate) = perf_pstates_legacy_record(&buf, bit);
         eprintln!("{tag}: record bit {bit}: P{pstate} type {ty} header min {min} max {max} kHz");
         eprintln!("{tag}:   sub-table (ClkDomains bit → nominal/live/max kHz):");
-        for domain in 0..DOMAIN_NAMES.len() {
+        for (domain, name) in DOMAIN_NAMES.iter().enumerate() {
             match perf_pstates_legacy_domain_clock(&buf, bit, domain) {
                 Some((nominal, live, mx)) => eprintln!(
                     "{tag}:     bit{domain:<2} {:<7} {nominal:>7} / {live:>7} / {mx:>7} kHz",
-                    DOMAIN_NAMES[domain]
+                    name
                 ),
-                None => eprintln!(
-                    "{tag}:     bit{domain:<2} {:<7} — absent —",
-                    DOMAIN_NAMES[domain]
-                ),
+                None => eprintln!("{tag}:     bit{domain:<2} {:<7} — absent —", name),
             }
         }
     }

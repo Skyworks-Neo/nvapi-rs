@@ -28,20 +28,24 @@ fn power_monitor_probe() {
 
     // GetInfo cascade exactly as nvoc sends it (v4 -> v3|3240 -> v1|2728)
     let v4 = {
-        let mut info = NV_GPU_POWER_MONITOR_GET_INFO_V4::default();
-        info.version = NvVersion::new(
-            std::mem::size_of::<NV_GPU_POWER_MONITOR_GET_INFO_V4>() as usize,
-            4,
-        );
+        let mut info = NV_GPU_POWER_MONITOR_GET_INFO_V4 {
+            version: NvVersion::new(
+                std::mem::size_of::<NV_GPU_POWER_MONITOR_GET_INFO_V4>() as usize,
+                4,
+            ),
+            ..Default::default()
+        };
         unsafe { NvAPI_GPU_PowerMonitorGetInfo(*gpu.handle(), &mut info as *mut _ as *mut _) }
     };
     eprintln!("GetInfo v4|6312 : status={:#x}", v4 as i32);
 
-    let mut info3 = NV_GPU_POWER_MONITOR_GET_INFO_V3_3240::default();
-    info3.version = NvVersion::new(
-        std::mem::size_of::<NV_GPU_POWER_MONITOR_GET_INFO_V3_3240>() as usize,
-        3,
-    );
+    let mut info3 = NV_GPU_POWER_MONITOR_GET_INFO_V3_3240 {
+        version: NvVersion::new(
+            std::mem::size_of::<NV_GPU_POWER_MONITOR_GET_INFO_V3_3240>() as usize,
+            3,
+        ),
+        ..Default::default()
+    };
     let st3 =
         unsafe { NvAPI_GPU_PowerMonitorGetInfo(*gpu.handle(), &mut info3 as *mut _ as *mut _) };
     eprintln!("GetInfo v3|3240 : status={:#x}", st3 as i32);
@@ -54,11 +58,13 @@ fn power_monitor_probe() {
         );
     }
 
-    let mut info1 = NV_GPU_POWER_MONITOR_GET_INFO_V1_2728::default();
-    info1.version = NvVersion::new(
-        std::mem::size_of::<NV_GPU_POWER_MONITOR_GET_INFO_V1_2728>() as usize,
-        1,
-    );
+    let mut info1 = NV_GPU_POWER_MONITOR_GET_INFO_V1_2728 {
+        version: NvVersion::new(
+            std::mem::size_of::<NV_GPU_POWER_MONITOR_GET_INFO_V1_2728>() as usize,
+            1,
+        ),
+        ..Default::default()
+    };
     let st1 =
         unsafe { NvAPI_GPU_PowerMonitorGetInfo(*gpu.handle(), &mut info1 as *mut _ as *mut _) };
     eprintln!("GetInfo v1|2728 : status={:#x}", st1 as i32);

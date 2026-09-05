@@ -130,7 +130,7 @@ fn p100_private_vfp_dump() {
         match gpu.vfp_info() {
             Ok(vi) => match gpu.vfp_curve(&vi) {
                 Ok(c) => {
-                    let total: usize = c.points.iter().map(|(_, v)| v.len()).sum();
+                    let total: usize = c.points.values().map(|v| v.len()).sum();
                     eprintln!("public vfp_curve: {total} points");
                     for (domain, entries) in &c.points {
                         eprintln!("  domain {domain:?}: {} points", entries.len());

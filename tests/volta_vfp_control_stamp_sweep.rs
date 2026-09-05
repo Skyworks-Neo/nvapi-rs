@@ -28,7 +28,7 @@ fn volta_vfp_control_stamp_sweep() {
         (737404, "R610 snapshot 0xB407C"),
         (1348740, "R610 snapshot 0x149104"),
         ((1 << 16) | 0x6004, "legacy (1<<16)|0x6004"),
-        ((1 << 16) | 0x474604 % 0x10000, "hybrid nonsense guard"),
+        ((1 << 16) | (0x474604 % 0x10000), "hybrid nonsense guard"),
     ];
     for &(stamp, tag) in stamps {
         let mut ctrl = unsafe {
