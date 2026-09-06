@@ -4289,7 +4289,11 @@ pub mod undocumented {
     /// the mask seed source for GetStatus. Records @0x50+bit*0x4C.
     pub mod adc_devices_info_entry {
         pub const MASK: usize = 4;
+        /// V1 record base (10 slots). V2 (0x209F0) has a larger header —
+        /// records start at [`V2_BASE`] 0x70 instead.
         pub const BASE: usize = 0x50;
+        /// V2 record base (32 slots; IDA R610.88 closure 0x70+32×0x4C=0x9F0)
+        pub const V2_BASE: usize = 0x70;
         pub const STRIDE: usize = 0x4C;
         /// rec+0: u32 device type (probe saw small ints)
         pub const REC_TYPE: usize = 0x04;
@@ -4346,7 +4350,8 @@ pub mod undocumented {
             if field >= adc_devices_info_entry::STRIDE {
                 return None;
             }
-            let abs = adc_devices_info_entry::BASE
+            // V2 header is 0x20 larger — records start at 0x70
+            let abs = adc_devices_info_entry::V2_BASE
                 .checked_add(bit as usize * adc_devices_info_entry::STRIDE)?
                 .checked_add(field)?;
             Some(u32::from_le_bytes(
@@ -4355,7 +4360,7 @@ pub mod undocumented {
         }
 
         pub fn rec_name(&self, bit: u32) -> Option<&[u8]> {
-            let abs = adc_devices_info_entry::BASE
+            let abs = adc_devices_info_entry::V2_BASE
                 .checked_add(bit as usize * adc_devices_info_entry::STRIDE)?
                 .checked_add(adc_devices_info_entry::REC_NAME)?;
             self.rest.get(abs - 4..abs + 12)
