@@ -284,6 +284,53 @@ pub mod undocumented {
         pub unsafe fn NvAPI_GPU_VoltVoltRailsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pRailInfo: *mut NV_GPU_VOLT_RAILS_INFO) -> NvAPI_Status;
     }
 
+    // ------------------------------------------------------------------
+    // VoltVoltDevicesGetInfo (0xA38ACF9D, R465 handler @0x180202600) — the
+    // melonVolt VOLTAGE-DOMAIN ("device") enumerator, sibling of the rail
+    // builder above but a different RM surface (escape id 117440913 =
+    // 0x07000091 family, 2264B internal buffer). Stamp: 0x10F48 (v1|3912)
+    // on ALL branches 391→610 (610 adds a v15|41240 stamp 0x7A118); plain
+    // equality gate (IDA 538: `*a2 != 69448`).
+    // Caller layout: version dword + present-mask dword (@+4) + 32 entries
+    // of 30 dwords (120 B) + a 64-byte trailing block (unwritten by the
+    // 538 handler; part of the stamped size) = 3912 B total. The driver
+    // walks its internal 56 B/device records (14 dwords) against the mask
+    // bits:
+    //   entry dword[18] ← device TYPE byte (@internal+64): only type 1
+    //     (voltage rail) and type 3 (monitor) are valid — anything else →
+    //     -5 with entry[18] = -1;
+    //   type 3 additionally fills dword[23]/[24]/[26] + bytes 100/108;
+    //   type 1 fills three 12-byte (u8 triplets) groups @92..127 — the
+    //     min/max/current voltage triplet lanes;
+    //   every valid entry: dwords[20..22] ← internal[18..20], bytes
+    //     76..78 ← internal[66..68]; present bit `1 << k` ORed into +4.
+    // ------------------------------------------------------------------
+    nvapi! {
+        /// melonVolt voltage-domain enumerator (NDA, ID 0xA38ACF9D): fills
+        /// the device present mask + per-device descriptor table (see the
+        /// layout comment above). Stamp 0x10F48 universal 391→610.
+        pub unsafe fn NvAPI_GPU_VoltVoltDevicesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_VOLT_DEVICES_INFO) -> NvAPI_Status;
+    }
+
+    nvstruct! {
+        /// Caller buffer for [`NvAPI_GPU_VoltVoltDevicesGetInfo`]: version
+        /// 0x10F48 (v1|3912) + present mask + 32 × 120 B device entries +
+        /// 64 B trailer. Fields beyond the mask are opaque raw (see the
+        /// handler comment for the per-entry dword map); decode lives in
+        /// the consumer.
+        pub struct NV_GPU_VOLT_DEVICES_INFO_V1 {
+            pub version: NvVersion,
+            /// present-device bitmask (driver ORs `1 << k` per valid entry)
+            pub present_mask: u32,
+            /// per-device descriptor table, 30 dwords (120 B) each
+            pub devices: Array<[[u32; 30]; 32]>,
+            /// stamped tail block (unwritten by the R538 handler)
+            pub tail: Array<[u8; 64]>,
+        }
+    }
+
+    nvversion! { @=NV_GPU_VOLT_DEVICES_INFO NV_GPU_VOLT_DEVICES_INFO_V1(1) = 3912 }
+
     nvapi! {
         /// Private VoltRails control-object GET (per-rail offset entries).
         /// The struct must be seeded from a prior GetInfo call.

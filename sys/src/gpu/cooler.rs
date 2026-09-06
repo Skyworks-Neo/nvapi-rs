@@ -873,6 +873,123 @@ pub mod undocumented {
         }
     }
 
+    // One per-fan-policy slot of the LEGACY V1 (`0x10038`) control table.
+    // Same 52-byte slot stride as the `0x200DC`/`0x2004C` tables, but the
+    // V1 path uses only two fields per slot (nvapi64_46296.dll, R465):
+    //   +0  policy-id dword — GET fills it from the internal GetInfo table
+    //       (`dword[52*k + 12] = dword[16*(k+1)]`); SET resolves it back to
+    //       an internal index via the id→index helper (unknown id → -5
+    //       InvalidArgument);
+    //   +4  flag byte — SET consumes `byte & 1` into the per-policy enable
+    //       flag (`internal[23*idx + 33] = byte & 1`) and ORs the policy
+    //       into its selected-mask (`internal[14] |= 1 << idx`).
+    // GET does not fill the flag byte — it echoes only the id list.
+    nvstruct! {
+        pub struct NV_GPU_CLIENT_FAN_POLICIES_SLOT_LEGACY_V1 {
+            // policy-id dword (slot +0 / table +12)
+            pub policy_id: u32,
+            /// enable flag (slot +4 / table +16; SET consumes bit 0)
+            pub flag: u8,
+            pub tail: Padding<[u8; 47]>,
+        }
+    }
+
+    /// `ClientFanPolicies{Get,Set}Control` LEGACY V1 table (structure magic
+    /// `0x10038` = v1|56). The ONLY control surface generations before the
+    /// 0x2004C/0x200DC tables serve on some boards — on the R465 reference
+    /// card (GTX 1650 SUPER) the internal policy state (`v13 == 2` in the
+    /// handler) makes every other stamp fail, so this is the only writable
+    /// fan-policy surface there. The stamp's size field (56) does NOT bound
+    /// the buffer: the handler fills/reads 52-byte slots at table +12 for
+    /// up to `count` (≤ 4) entries — same table geometry as the `0x200DC`
+    /// table, 220 bytes total (precedent: ClientPStateLimitStatus sends a
+    /// 164-byte buffer under the 136-byte 0x10088 stamp). Fields:
+    ///   +0   version magic 0x10038
+    ///   +4   slot count (byte; > 4 → -116 InvalidArgument)
+    ///   +12  4 × 52-byte slots (see the slot struct)
+    /// Verdict: a per-fan-policy ENABLE-FLAG table, not a temperature→RPM
+    /// curve table — curve-point writes have no V1 surface.
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
+    pub struct NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1 {
+        /// structure magic — `0x10038`
+        pub version: u32,
+        /// slot count (byte at +4; 0 on GET = driver refreshes via GetInfo)
+        pub count: u8,
+        pub header: Padding<[u8; 7]>,
+        /// up to 4 policy slots at +12
+        pub slots: Array<[NV_GPU_CLIENT_FAN_POLICIES_SLOT_LEGACY_V1; 4]>,
+    }
+
+    unsafe impl zerocopy::IntoBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::Immutable for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::FromBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+    unsafe impl zerocopy::TryFromBytes for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+        fn is_bit_valid<A>(candidate: zerocopy::Maybe<'_, Self, A>) -> bool
+        where
+            A: zerocopy::invariant::Alignment,
+        {
+            let _ = candidate;
+            true
+        }
+    }
+    unsafe impl zerocopy::FromZeros for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1 {
+        fn only_derive_is_allowed_to_implement_this_trait()
+        where
+            Self: Sized,
+        {
+        }
+    }
+
+    impl NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1 {
+        /// The `0x10038` structure magic for the legacy {Get,Set}Control table.
+        pub const MAGIC: u32 = 0x10038;
+
+        pub fn new() -> Self {
+            Self {
+                version: Self::MAGIC,
+                count: 0,
+                header: Padding { data: [0u8; 7] },
+                slots: Padding {
+                    data: [NV_GPU_CLIENT_FAN_POLICIES_SLOT_LEGACY_V1 {
+                        policy_id: 0,
+                        flag: 0,
+                        tail: Padding { data: [0u8; 47] },
+                    }; 4],
+                },
+            }
+        }
+    }
+
+    impl Default for NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1 {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     /// ClientFanPolicies GetInfo capabilities block (structure magic
     /// `0x2004C`, 76 bytes). Size/magic corroborated by EVGA Precision X1
     /// 1.3.7 (ManagedNvApi.dll `getFanCurve` GetInfo path); field layout

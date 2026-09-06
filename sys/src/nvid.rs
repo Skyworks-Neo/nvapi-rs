@@ -42,9 +42,10 @@ NvAPI_Initialize = 0x0150e828,
 NvAPI_Unload = 0xd22bdd7e,
 NvAPI_GetErrorMessage = 0x6c2d048c,
 NvAPI_GetInterfaceVersionString = 0x01053fa5,
-// Note: declared in nvapi.h but not present in nvapi_interface.h table.
-// Not in the interface table, so no known ID for NvAPI_QueryInterface.
-// NvAPI_GetInterfaceVersionStringEx = <unknown>,
+// NvAPI_GetInterfaceVersionStringEx: ID later identified as 0x15f64d53
+// (YOFOO/nvCommon.spec below) but NOT resolvable on 64-bit NVAPI — see the
+// annotated enum entry there. The non-Ex call above is the only interface
+// version string surface on nvapi64.
 //
 // NOTE — `nvapi_pepQueryInterface` is NOT an IID and is deliberately NOT wrapped
 // here. It is a SEPARATE exported SYMBOL of nvapi.dll (resolved by name via
@@ -1621,6 +1622,14 @@ Unknown_593E8644_LifecycleInit = 0x593e8644,
 
 // --- nvCommon.spec (6 IDs) ---
     NvAPI_InitializeEx = 0x0a935ff0,
+    /// Empirically ABSENT from every 64-bit nvapi64 dispatch table in the
+    /// nvoc envelope (R391.35/R462.96/R47x/R538.78/R560.94/R582.41/impl-610.88:
+    /// zero byte-hits for this ID vs 1-4 hits for non-Ex 0x01053fa5) —
+    /// `nvapi_QueryInterface(0x15f64d53)` returns `NoImplementation` (live
+    /// R462.96). nvCommon.spec is the CPL-side/32-bit surface; keep it
+    /// registered (full-ID-registry policy) but do NOT declare a `sys::api`
+    /// wrapper for it. Evidence: reverse/version-audit/
+    /// interface-version-ex-probe/ + version-coverage-audit.md §8.
     NvAPI_GetInterfaceVersionStringEx = 0x15f64d53,
     NvAPI_GPU_GetTvEncoderType = 0x4fcb326e,
     NvAPI_GPU_GetConnectorInfoEx = 0x9f473113,
@@ -1696,6 +1705,21 @@ Unknown_593E8644_LifecycleInit = 0x593e8644,
     NvAPI_NVPM_ReleasePerfmonHW = 0x8682711b,
     NvAPI_NVPM_DestroyGPUMapping = 0x8ae4b4ca,
     NvAPI_GPU_GetUEFIInfo = 0x8c294330,
+    /// LIVE-PROBED (2026-09-06, R462.96/TU116) — implemented on every
+    /// 64-bit build in the envelope (R391→impl-610.88 all hit this ID).
+    /// Signature `(NvPhysicalGpuHandle, *mut V1)` with a HARD-CODED stamp:
+    /// the handler does `cmp dword[buf], 0x1021C` (v1, 540 B) — NOT the
+    /// derived `size|ver<<16`, so stamp sweeps under 540 B all bounce -9.
+    /// Backed by RM escape 0x070001A1 (588 B internal block, GPU handle
+    /// @+0x30); copies out: enum u32 @+0x04 (jump-table translator
+    /// internal-byte→1..9), SIX 88 B Pascal-style short-string slots
+    /// (+0x08/+0x60/+0xB8/+0x110/+0x168/+0x1C0, len-byte prefix), and a
+    /// tail u32 @+0x218. Read-only. On TU116/R462.96 the slots hold only
+    /// sparse fragments ("0"/"2"/"4"/"x") — no VBIOS version, no image
+    /// size, no BIT/security data, i.e. nothing get-vbios doesn't already
+    /// surface; unwrapped pending a use case. Evidence:
+    /// reverse/version-audit/interface-version-ex-probe/ (vbios_extraction_probe)
+    /// + version-coverage-audit.md §10.
     NvAPI_GPU_GetVbiosExtractionInfo = 0x8c3a58c3,
     NvAPI_GPU_FbSetWriteLimit = 0x8d1a4910,
     NvAPI_GPU_GetVbiosSecurityInfo = 0x8d3ac6b9,
@@ -1949,8 +1973,41 @@ Unknown_593E8644_LifecycleInit = 0x593e8644,
     NvAPI_GPU_LpwrPexFeatureEnableSet = 0xfcfafaba,
 
 // --- power.spec (3 IDs) ---
+    /// Family fully RE'd (2026-09-06, 4-way parallel RE on R462.96 + 47x,
+    /// static only — no live calls). CORRECTED analysis: the first pass
+    /// misparsed the dispatch entry as {id, pad, fn}; the real layout is
+    /// **{u64 fn @+0; u32 id @+8; u32 pad}** (proven by the table scanners
+    /// at 0x145CD0/0x145D10: `cmp dword [entry+8], id` / `mov rax,
+    /// [entry+0]`, fn==0 sentinel), which dissolves the earlier
+    /// "sibling-key / NULL SetLowestPowerState" claims — YOFOO's names are
+    /// TRUSTWORTHY and each thunk looks up the service by its OWN id.
+    ///
+    /// Facts: NARROW-WINDOW family — present only in R460s+R47x builds
+    /// (absent from R391.35 and every 538.78/560.94/582.41/impl-610.88
+    /// archive). Each ID maps to a thin thunk that forwards into a
+    /// tag-keyed `std::map<u32, fnptr>` service registry (map operator[]
+    /// at 0x1433E0 — find-or-insert, value slot NULL when the owning
+    /// driver component never registered the service → callers return -3
+    /// NoImplementation; interface-down guard returns -221). None of the
+    /// three has a STATIC impl-table entry (unlike most exports), so
+    /// availability is runtime-conditional on top of the window. Thunk
+    /// signatures: GetClockInfo(rcx, rdx, r8d:u32) — the only one with
+    /// pointer-ish args; EnableDVFS(u8 enable) and SetLowestPowerState(
+    /// u32 level) are single-argument WRITES into the unreversed DVFS
+    /// power-management service (which sits behind a lazily-initialized,
+    /// registry-gated subsystem — "EnableRID74954" under
+    /// HKLM\CurrentControlSet). A fourth family member, unnamed in YOFOO,
+    /// is 0x2acfea19 (thunk 0x114600/0x107540-era, 4-arg, the only one
+    /// with a static impl handler). Verdict: do NOT wrap — sliver version
+    /// window outside both nvoc's 391 legacy base and every modern driver,
+    /// runtime-conditional availability, and two of three are unverified
+    /// writes. Evidence: version-coverage-audit.md §11.
     NvAPI_SYS_GetClockInfo = 0x087f5f36,
+    /// Live in-window u32 thunk (0x114840/47x 0x1075d0) — see family note;
+    /// an unverified write, not wrapped.
     NvAPI_SYS_SetLowestPowerState = 0x34532b04,
+    /// Live in-window u8 thunk (0x1146a0/47x 0x107440) — see family note;
+    /// an unverified DVFS write, not wrapped.
     NvAPI_SYS_EnableDVFS = 0x9b13dfc2,
 
 // --- power.spe (1 IDs) ---

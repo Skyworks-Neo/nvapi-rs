@@ -1085,3 +1085,70 @@ impl Default for NV_GPU_UUID_V1 {
         }
     }
 }
+
+// ------------------------------------------------------------------
+// PCI-e link control + BAR topology (R465 IDA, nvapi64_46296.dll).
+// All three handlers live behind RM escapes in the 0x070000xx family;
+// none carries a version stamp.
+// ------------------------------------------------------------------
+//
+// GetBarInfo (ID 0xE4B701E3, handler @0x1801C9910): `fn(hGpu, pInfo)` —
+// escape 0x0700004E, 192-byte scratch (gpu handle at +0x30, BAR table at
+// +0x40). Caller struct has NO version dword; the handler writes count at
+// +4 (guarded ≤ 8) and 16-byte records at +8: {u32 tag, u32 size-or-flags,
+// u64 base}. Read-only, no capability gate (only the NVAPI-initialized
+// check).
+//
+// SetCurrentPCIEWidth (ID 0x3F28E1B9, @0x1801EE360) and
+// SetCurrentPCIESpeed (ID 0x3BD32008, @0x1801EE1F0): `fn(hGpu, value)` —
+// escapes 0x07000053 / 0x0700006D respectively, 56-byte buffer with the
+// (gpu, value) pair at +0x30. BOTH are gated by the driver-global
+// capability bit 12 (`(dword >> 12) & 1` @0x18037BD10) — the same gate
+// that makes the public SetCoolerLevels return -104 on boards whose
+// fan/PCIe surfaces are owned elsewhere (e.g. 1650 SUPER). On gated
+// boards the refuse path runs before any escape.
+nvstruct! {
+    /// Caller buffer for [`NvAPI_GPU_GetBarInfo`] (136 B, unstamped): the
+    /// handler writes the BAR count at +4 and up to 8 sixteen-byte records
+    /// at +8. Fields are raw pending live decode; on any PCIe part the
+    /// 64-bit lane reads as the BAR base address.
+    pub struct NV_GPU_BAR_INFO {
+        /// unused by the R465 handler (leave zeroed)
+        pub reserved: u32,
+        /// number of valid records in `bars` (driver-written, ≤ 8)
+        pub bar_count: u8,
+        pub padding: Padding<[u8; 3]>,
+        /// per-BAR records: {tag u32, size/flags u32, base u64} — 16 B each,
+        /// stored as four u32 lanes (lanes 2..3 form the little-endian u64 base).
+        pub bars: Array<[[u32; 4]; 8]>,
+    }
+}
+
+impl NV_GPU_BAR_INFO {
+    /// The (tag, size, base) triple of record `index`.
+    pub fn record(&self, index: usize) -> Option<(u32, u32, u64)> {
+        let r = self.bars.data.get(index)?;
+        let base = (r[2] as u64) | ((r[3] as u64) << 32);
+        Some((r[0], r[1], base))
+    }
+}
+
+nvapi! {
+    /// Undocumented (ID 0xE4B701E3, escape 0x0700004E): read the GPU's PCI
+    /// BAR topology — count + per-BAR {tag, size/flags, base} records.
+    pub unsafe fn NvAPI_GPU_GetBarInfo(hPhysicalGPU: NvPhysicalGpuHandle, pBarInfo: *mut NV_GPU_BAR_INFO) -> NvAPI_Status;
+}
+
+nvapi! {
+    /// Undocumented (ID 0x3F28E1B9, escape 0x07000053): set the current
+    /// PCIe link width. Capability-gated (bit 12) — returns -104-class
+    /// refusal on boards where the surface is disabled.
+    pub unsafe fn NvAPI_GPU_SetCurrentPCIEWidth(hPhysicalGPU: NvPhysicalGpuHandle, width: u32) -> NvAPI_Status;
+}
+
+nvapi! {
+    /// Undocumented (ID 0x3BD32008, escape 0x0700006D): set the current
+    /// PCIe link speed (gen). Capability-gated (bit 12) — same refusal
+    /// class as [`NvAPI_GPU_SetCurrentPCIEWidth`].
+    pub unsafe fn NvAPI_GPU_SetCurrentPCIESpeed(hPhysicalGPU: NvPhysicalGpuHandle, speed: u32) -> NvAPI_Status;
+}
