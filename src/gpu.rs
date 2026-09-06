@@ -167,6 +167,51 @@ pub struct P0VoltageBounds {
     pub min_hold_uV: i32,
 }
 
+/// One melonVolt voltage-domain ("VRM device") descriptor from
+/// [`PhysicalGpu::volt_devices`] — `VoltVoltDevicesGetInfo` (0xA38ACF9D).
+/// R465-measured dword map (GTX 1650 SUPER @ 462.96, two devices, values
+/// cross-checked against the V/F curve envelope): dword[17] = packed id,
+/// [19] = max µV, [20] = step µV, [21] = min µV, [22] = default µV,
+/// [23] = sibling rail index into the VoltRails mask.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[allow(nonstandard_style)] // uV suffix matches the sys-layer field naming
+pub struct VoltDevice {
+    /// device slot index (the present-mask bit position)
+    pub index: u32,
+    /// packed domain id (R465 live: 0x0001ff01 core rail, 0x0004ff01 second)
+    pub id: u32,
+    /// minimum controllable voltage, µV (live: 300000 = 300 mV)
+    pub min_uV: u32,
+    /// voltage step, µV (live: 6250 = 6.25 mV)
+    pub step_uV: u32,
+    /// maximum controllable voltage, µV (live: 1300000 = 1300 mV)
+    pub max_uV: u32,
+    /// default (boot) voltage, µV (live: 1000000 = 1000 mV)
+    pub default_uV: u32,
+    /// sibling rail index (VoltRails mask bit space)
+    pub rail_index: u32,
+}
+
+/// One PCI BAR from [`PhysicalGpu::bar_info`] — `GetBarInfo`
+/// (0xE4B701E3, escape 0x0700004E, unstamped 136-byte struct). Live on the
+/// 1650 SUPER @ 462.96 (bases match lspci exactly): `size_mib` is the BAR
+/// size in MiB units (0x10=16 MB MMIO, 0x100=256 MB VRAM aperture,
+/// 0x20=32 MB, I/O BAR reports 0).
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct BarRecord {
+    /// BAR slot index (0..count)
+    pub index: u32,
+    /// raw first dword of the record (0 on all live-observed BARs)
+    pub tag: u32,
+    /// BAR size in MiB units (I/O BARs read 0)
+    pub size_mib: u32,
+    /// BAR physical base address (matches lspci; 64-bit BARs carry the
+    /// full high address, e.g. 0x383fe0000000)
+    pub base: u64,
+}
+
 impl VoltRails {
     /// Extract P0 voltage bounds for one rail from its status entry (matched
     /// by `rail_bit` — the status list holds one entry per rail in the mask,
@@ -1497,6 +1542,94 @@ impl PhysicalGpu {
         } else {
             Ok((info, false))
         }
+    }
+
+    /// Enumerate the melonVolt voltage domains ("VRM devices") —
+    /// `VoltVoltDevicesGetInfo` (NDA 0xA38ACF9D, stamp 0x10F48, universal
+    /// 391→610). Sibling surface of [`Self::volt_rails`] (same escape
+    /// family, different RM endpoint): where VoltRails reports the live
+    /// per-rail walls, this reports each domain's CONTROLLABLE WINDOW —
+    /// min/step/max/default µV (R465 live on the 1650 SUPER: 300 mV /
+    /// 6.25 mV / 1300 mV / 1000 mV, matching the rail clamp floor). The
+    /// dword map is R465-measured; a differently-laid-out driver yields
+    /// garbage values but no unsafety (read-only surface).
+    pub fn volt_devices(&self) -> crate::NvapiResult<Vec<VoltDevice>> {
+        trace!("gpu.volt_devices()");
+        use crate::sys::nvapi::StructVersion;
+        let mut info = power::undocumented::NV_GPU_VOLT_DEVICES_INFO::default();
+        info.version =
+            <power::undocumented::NV_GPU_VOLT_DEVICES_INFO as StructVersion>::NVAPI_VERSION;
+        let st = unsafe { sys::api::NvAPI_GPU_VoltVoltDevicesGetInfo(self.0, &mut info) };
+        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltDevicesGetInfo, st)?;
+        let mut out = Vec::new();
+        for k in 0..32u32 {
+            if info.present_mask & (1 << k) == 0 {
+                continue;
+            }
+            let e = &info.devices[k as usize];
+            out.push(VoltDevice {
+                index: k,
+                id: e[17],
+                min_uV: e[21],
+                step_uV: e[20],
+                max_uV: e[19],
+                default_uV: e[22],
+                rail_index: e[23],
+            });
+        }
+        Ok(out)
+    }
+
+    /// Read the PCI BAR topology — `GetBarInfo` (0xE4B701E3, escape
+    /// 0x0700004E, unstamped). Read-only, no capability gate, no elevation.
+    /// Records decode as (tag, size-in-MiB, physical base) — see
+    /// [`BarRecord`] for the live-verified semantics.
+    pub fn bar_info(&self) -> crate::NvapiResult<Vec<BarRecord>> {
+        trace!("gpu.bar_info()");
+        let mut bar = crate::sys::gpu::NV_GPU_BAR_INFO {
+            reserved: 0,
+            bar_count: 0,
+            padding: crate::sys::types::Padding { data: [0u8; 3] },
+            bars: crate::sys::types::Padding {
+                data: [[0u32; 4]; 8],
+            },
+        };
+        let st = unsafe { sys::api::NvAPI_GPU_GetBarInfo(self.0, &mut bar) };
+        crate::status_result(sys::Api::NvAPI_GPU_GetBarInfo, st)?;
+        let count = (bar.bar_count as usize).min(8);
+        let mut out = Vec::with_capacity(count);
+        for (k, record) in bar.bars.data.iter().enumerate().take(count) {
+            out.push(BarRecord {
+                index: k as u32,
+                tag: record[0],
+                size_mib: record[1],
+                base: (record[2] as u64) | ((record[3] as u64) << 32),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Set the current PCIe link width — `SetCurrentPCIEWidth` (0x3F28E1B9,
+    /// escape 0x07000053, `fn(hGpu, width)`).
+    ///
+    /// ⚠ TWO live hazards (1650 SUPER @ 462.96, R465 IDA): the handler sits
+    /// behind the driver-global capability bit 12 (same gate as the public
+    /// SetCoolerLevels — non-elevated calls return -137 here), and the
+    /// ELEVATED escape BLOCKS in-kernel (observed >8 min, aborted) — never
+    /// call this on the display GPU. Kept for headless/dedicated parts
+    /// where the gate is open.
+    pub fn set_current_pcie_width(&self, width: u32) -> crate::NvapiResult<()> {
+        trace!("gpu.set_current_pcie_width({width})");
+        unsafe { nvcall!(NvAPI_GPU_SetCurrentPCIEWidth(self.0, width)) }
+    }
+
+    /// Set the current PCIe link speed (gen) — `SetCurrentPCIESpeed`
+    /// (0x3BD32008, escape 0x0700006D). Same hazard profile as
+    /// [`Self::set_current_pcie_width`]: bit-12 gate (-137 non-elevated)
+    /// and an in-kernel block when elevated — never call on the display GPU.
+    pub fn set_current_pcie_speed(&self, speed: u32) -> crate::NvapiResult<()> {
+        trace!("gpu.set_current_pcie_speed({speed})");
+        unsafe { nvcall!(NvAPI_GPU_SetCurrentPCIESpeed(self.0, speed)) }
     }
 
     pub fn volt_rails(&self) -> crate::Result<VoltRails> {
