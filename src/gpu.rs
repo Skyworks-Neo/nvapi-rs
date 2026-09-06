@@ -7415,6 +7415,507 @@ impl PhysicalGpu {
 
         unsafe { nvcall!(NvAPI_I2CWrite(self.0, &mut data)) }
     }
+
+    // --- ClockClkVoltController(s) family -----------------------------------
+    // Per-clock-domain VOLTAGE controller object tree (IDs 0xEC6FCD0B /
+    // 0x8506C02E / 0xDD41633C / 0xF9833206; sys/gpu/clock.rs carries the
+    // full RE record). Layouts verified byte-level on R610.88 + R462.96;
+    // live 462.96 GTX 1650 SUPER exposes NO voltage controllers (INFO mask
+    // 0, STATUS -1) — the freq sibling DOES return records there, so the
+    // object tree works and these getters simply return Ok(None) on such
+    // parts. Field semantics await a laptop 610 A/B.
+
+    /// Voltage-controller descriptor read. `Ok(None)` = this part exposes
+    /// no voltage controllers (driver-filled mask is 0).
+    pub fn clk_volt_controllers_info(
+        &self,
+    ) -> crate::Result<Option<crate::clock::ClkVoltControllersInfo>> {
+        trace!("gpu.clk_volt_controllers_info()");
+        use clock::undocumented::NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO;
+
+        let mut raw = NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO::default();
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkVoltControllerGetInfo(
+                self.0,
+                ptr::from_mut(&mut raw).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVoltControllerGetInfo, st)
+            .map_err(crate::Error::from)?;
+        let mask = raw.mask();
+        if mask == 0 {
+            return Ok(None);
+        }
+        let entries = (0..32)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .filter(|&bit| {
+                raw.rec_u32(bit, clock::undocumented::clk_volt_info_entry::ACTIVE) == Some(1)
+            })
+            .map(|bit| crate::clock::ClkVoltControllerInfoEntry {
+                bit,
+                b04: raw
+                    .rec_u32(bit, clock::undocumented::clk_volt_info_entry::B04)
+                    .unwrap_or(0) as u8,
+                b05: raw
+                    .rec_u32(bit, clock::undocumented::clk_volt_info_entry::B05)
+                    .unwrap_or(0) as u8,
+                b06: raw
+                    .rec_u32(bit, clock::undocumented::clk_volt_info_entry::B06)
+                    .unwrap_or(0) as u8,
+                u16_08: raw
+                    .rec_u32(bit, clock::undocumented::clk_volt_info_entry::U16_08)
+                    .unwrap_or(0) as u16,
+                u32_0c: raw
+                    .rec_u32(bit, clock::undocumented::clk_volt_info_entry::U32_0C)
+                    .unwrap_or(0),
+                u32_10: raw
+                    .rec_u32(bit, clock::undocumented::clk_volt_info_entry::U32_10)
+                    .unwrap_or(0),
+                u32_14: raw
+                    .rec_u32(bit, clock::undocumented::clk_volt_info_entry::U32_14)
+                    .unwrap_or(0),
+                i32_38: raw.rec_i32_38(bit).unwrap_or(0),
+                i32_3c: raw.rec_i32_3c(bit).unwrap_or(0),
+                u32_40: raw
+                    .rec_u32(bit, clock::undocumented::clk_volt_info_entry::U32_40)
+                    .unwrap_or(0),
+            })
+            .collect();
+        Ok(Some(crate::clock::ClkVoltControllersInfo { mask, entries }))
+    }
+
+    /// Voltage-controller live-status read (mask-seeded). Seeded from
+    /// [`Self::clk_volt_controllers_info`]; `Ok(None)` when this part
+    /// exposes no voltage controllers (INFO empty) — otherwise driver
+    /// errors propagate (empty-table parts return NVAPI_ERROR(-1) here).
+    pub fn clk_volt_controllers_status(
+        &self,
+    ) -> crate::Result<Option<crate::clock::ClkVoltControllersStatus>> {
+        trace!("gpu.clk_volt_controllers_status()");
+        use clock::undocumented::{
+            NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS, clk_volt_status_entry,
+        };
+
+        let Some(info) = self.clk_volt_controllers_info()? else {
+            return Ok(None);
+        };
+        let mut raw = NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS::default();
+        raw.set_mask(info.mask);
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkVoltControllerGetStatus(
+                self.0,
+                ptr::from_mut(&mut raw).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVoltControllerGetStatus, st)
+            .map_err(crate::Error::from)?;
+        let entries = (0..32)
+            .filter(|bit| info.mask & (1 << bit) != 0)
+            .filter(|&bit| raw.rec_u32(bit, clk_volt_status_entry::ACTIVE) == Some(1))
+            .map(|bit| crate::clock::ClkVoltControllerStatusEntry {
+                bit,
+                u32_04: raw.rec_u32(bit, clk_volt_status_entry::U32_04).unwrap_or(0),
+                u32_28: raw.rec_u32(bit, clk_volt_status_entry::U32_28).unwrap_or(0),
+                u32_2c: raw.rec_u32(bit, clk_volt_status_entry::U32_2C).unwrap_or(0),
+                u32_30: raw.rec_u32(bit, clk_volt_status_entry::U32_30).unwrap_or(0),
+            })
+            .collect();
+        Ok(Some(crate::clock::ClkVoltControllersStatus {
+            mask: info.mask,
+            entries,
+        }))
+    }
+
+    /// Raw GET_CONTROL snapshot of the voltage-controller block, seeded
+    /// from the descriptor mask. `Ok(None)` when the part exposes no
+    /// voltage controllers.
+    pub fn clk_volt_controllers_control(
+        &self,
+    ) -> crate::Result<Option<crate::clock::ClkVoltControllersControl>> {
+        trace!("gpu.clk_volt_controllers_control()");
+        use clock::undocumented::NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL;
+
+        let Some(info) = self.clk_volt_controllers_info()? else {
+            return Ok(None);
+        };
+        let mut raw = NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL::default();
+        raw.set_mask(info.mask);
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkVoltControllersGetControl(
+                self.0,
+                ptr::from_mut(&mut raw).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVoltControllersGetControl, st)
+            .map_err(crate::Error::from)?;
+        let entries = (0..32)
+            .filter(|bit| info.mask & (1 << bit) != 0)
+            .filter_map(|bit| {
+                let vals = raw.record_full(bit)?;
+                (vals[0] != 0).then(|| crate::clock::ClkVoltControllerControlEntry {
+                    bit,
+                    active: vals[0],
+                    b04: vals[1] as u8,
+                    u16_06: vals[2] as u16,
+                    u32_08: vals[3],
+                    u32_0c: vals[4],
+                    u32_10: vals[5],
+                    u32_34: vals[6],
+                    u32_38: vals[7],
+                    u32_3c: vals[8],
+                })
+            })
+            .collect();
+        Ok(Some(crate::clock::ClkVoltControllersControl {
+            mask: info.mask,
+            entries,
+        }))
+    }
+
+    /// Write ONE voltage-controller record via SET_CONTROL with the
+    /// mandated safety recipe (snapshot → patch a copy → SET → read back →
+    /// verify → restore the snapshot on mismatch). Refuses records whose
+    /// snapshot is not `active == 1` — the driver commits only active
+    /// records and fabricating/activating controllers synthetically is
+    /// untested territory. Elevation-gated by the driver (-104 without
+    /// admin). **Field semantics are UNCONFIRMED (no laptop 610 A/B yet):
+    /// pass only values snapshotted via
+    /// [`Self::clk_volt_controllers_control`].** Returns the re-read
+    /// record on success.
+    pub fn set_clk_volt_controller_record(
+        &self,
+        record: &crate::clock::ClkVoltControllerControlEntry,
+    ) -> crate::Result<crate::clock::ClkVoltControllerControlEntry> {
+        trace!("gpu.set_clk_volt_controller_record(bit={})", record.bit);
+        use clock::undocumented::NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL;
+
+        if record.bit >= 32 {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        // snapshot (single-bit seed; the record must already be active)
+        let mut snap = NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL::default();
+        snap.set_mask(1 << record.bit);
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkVoltControllersGetControl(
+                self.0,
+                ptr::from_mut(&mut snap).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVoltControllersGetControl, st)
+            .map_err(crate::Error::from)?;
+        let existing = snap
+            .record_full(record.bit)
+            .ok_or(crate::Error::ArgumentRange(Default::default()))?;
+        if existing[0] != 1 {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+
+        // patch a copy of the snapshot
+        let mut patch = NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL::default();
+        patch.set_mask(1 << record.bit);
+        patch.rest.copy_from_slice(&snap.rest);
+        let vals: [u32; 9] = [
+            record.active,
+            record.b04 as u32,
+            record.u16_06 as u32,
+            record.u32_08,
+            record.u32_0c,
+            record.u32_10,
+            record.u32_34,
+            record.u32_38,
+            record.u32_3c,
+        ];
+        patch
+            .set_record_full(record.bit, vals)
+            .ok_or(crate::Error::ArgumentRange(Default::default()))?;
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkVoltControllersSetControl(
+                self.0,
+                ptr::from_ref(&patch).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVoltControllersSetControl, st)
+            .map_err(crate::Error::from)?;
+
+        // read back + verify (the driver may partially accept)
+        let mut verify = NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL::default();
+        verify.set_mask(1 << record.bit);
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkVoltControllersGetControl(
+                self.0,
+                ptr::from_mut(&mut verify).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVoltControllersGetControl, st)
+            .map_err(crate::Error::from)?;
+        let retained = verify
+            .record_full(record.bit)
+            .ok_or(crate::Error::ArgumentRange(Default::default()))?;
+        if retained != vals {
+            // restore the snapshot; the restore status is secondary to the
+            // mismatch report but must still be attempted
+            let st = unsafe {
+                sys::api::NvAPI_GPU_ClockClkVoltControllersSetControl(
+                    self.0,
+                    ptr::from_ref(&snap).cast(),
+                )
+            };
+            let _ = crate::status_result(sys::Api::NvAPI_GPU_ClockClkVoltControllersSetControl, st);
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        Ok(crate::clock::ClkVoltControllerControlEntry {
+            bit: record.bit,
+            ..*record
+        })
+    }
+
+    // --- nvClocks.spec P1 batch (2026-09-06 audit) --------------------------
+    // Six read surfaces + the ADC-info seed source. sys/gpu/clock.rs
+    // carries the layouts; reverse/version-audit/nvclocks-audit/ carries
+    // the RE evidence. Read-only — none of these has a wired SET in this
+    // crate (audit verdicts: the SET siblings stay unwired by design until
+    // write semantics are proven on hardware that exposes the objects).
+
+    /// ADC device directory (ID 0x68789E2A) — the mask seed source for
+    /// [`Self::adc_devices_status`]. `Ok(None)` when the part exposes no
+    /// ADC devices.
+    pub fn adc_devices_info(&self) -> crate::Result<Option<crate::clock::AdcDevicesInfo>> {
+        trace!("gpu.adc_devices_info()");
+        use clock::undocumented::{NV_GPU_CLOCK_ADC_DEVICES_INFO, adc_devices_info_entry};
+
+        let mut raw = NV_GPU_CLOCK_ADC_DEVICES_INFO::default();
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockAdcDevicesGetInfo(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockAdcDevicesGetInfo, st)
+            .map_err(crate::Error::from)?;
+        let mask = raw.mask();
+        if mask == 0 {
+            return Ok(None);
+        }
+        let entries = (0..10)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .map(|bit| crate::clock::AdcDeviceInfo {
+                bit,
+                device_type: raw
+                    .rec_u32(bit, adc_devices_info_entry::REC_TYPE)
+                    .unwrap_or(0),
+                channel: raw
+                    .rec_u32(bit, adc_devices_info_entry::REC_CHANNEL)
+                    .unwrap_or(0),
+                name: raw
+                    .rec_name(bit)
+                    .and_then(|s| <[u8; 16]>::try_from(s).ok())
+                    .unwrap_or([0; 16]),
+            })
+            .collect();
+        Ok(Some(crate::clock::AdcDevicesInfo { mask, entries }))
+    }
+
+    /// ADC live status (ID 0x43D9B26A) — ★P1: per-rail voltage µV +
+    /// temperature-hypothesis bytes, the only dynamic telemetry in the
+    /// nvClocks audit. Mask-seeded from [`Self::adc_devices_info`];
+    /// `Ok(None)` when the part exposes no ADC devices.
+    pub fn adc_devices_status(&self) -> crate::Result<Option<crate::clock::AdcDevicesStatus>> {
+        trace!("gpu.adc_devices_status()");
+        use clock::undocumented::{NV_GPU_CLOCK_ADC_DEVICES_STATUS, adc_devices_status_entry};
+
+        let Some(info) = self.adc_devices_info()? else {
+            return Ok(None);
+        };
+        let mut raw = NV_GPU_CLOCK_ADC_DEVICES_STATUS::default();
+        raw.set_mask(info.mask);
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockAdcDevicesGetStatus(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockAdcDevicesGetStatus, st)
+            .map_err(crate::Error::from)?;
+        let entries = (0..10)
+            .filter(|bit| info.mask & (1 << bit) != 0)
+            .map(|bit| crate::clock::AdcDeviceStatusEntry {
+                bit,
+                state: raw
+                    .rec_u32(bit, adc_devices_status_entry::REC_STATE)
+                    .unwrap_or(0),
+                value_uv: raw
+                    .rec_u32(bit, adc_devices_status_entry::REC_VALUE_UV)
+                    .unwrap_or(0),
+                vf_point_id_a: raw
+                    .rec_u32(bit, adc_devices_status_entry::REC_VFPID_A)
+                    .unwrap_or(0) as u8,
+                reserved: raw
+                    .rec_u32(bit, adc_devices_status_entry::REC_ZERO)
+                    .unwrap_or(0) as u8,
+                vf_point_id_b: raw
+                    .rec_u32(bit, adc_devices_status_entry::REC_VFPID_B)
+                    .unwrap_or(0) as u8,
+                value_format: raw
+                    .rec_u32(bit, adc_devices_status_entry::REC_TYPE)
+                    .unwrap_or(0) as u8,
+                value2: raw
+                    .rec_u32(bit, adc_devices_status_entry::REC_VALUE2)
+                    .unwrap_or(0),
+            })
+            .collect();
+        Ok(Some(crate::clock::AdcDevicesStatus {
+            mask: info.mask,
+            entries,
+        }))
+    }
+
+    /// ClkPropRegimes directory (ID 0xCF08E934) — P1; the regime table
+    /// behind the archived "scaling-sibling" mystery ID. `Ok(None)` when
+    /// the driver reports an empty regime mask.
+    pub fn clk_prop_regimes_info(&self) -> crate::Result<Option<crate::clock::ClkPropRegimesInfo>> {
+        trace!("gpu.clk_prop_regimes_info()");
+        use clock::undocumented::{
+            NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO, clk_prop_regimes_info_entry,
+        };
+
+        let mut raw = NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO::default();
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkPropRegimesGetInfo(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropRegimesGetInfo, st)
+            .map_err(crate::Error::from)?;
+        let mask = raw.mask();
+        if mask == 0 {
+            return Ok(None);
+        }
+        let entries = (0..32)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .map(|bit| crate::clock::ClkPropRegimeInfoEntry {
+                bit,
+                status: raw
+                    .rec_u32(bit, clk_prop_regimes_info_entry::REC_STATUS)
+                    .unwrap_or(0),
+                regime_type: raw
+                    .rec_u32(bit, clk_prop_regimes_info_entry::REC_TYPE)
+                    .unwrap_or(0),
+                value: raw
+                    .rec_u32(bit, clk_prop_regimes_info_entry::REC_VALUE)
+                    .unwrap_or(0),
+            })
+            .collect();
+        Ok(Some(crate::clock::ClkPropRegimesInfo {
+            availability: raw.status(),
+            mask,
+            entries,
+        }))
+    }
+
+    /// ClkPropRegimes control snapshot (ID 0x4F11EAA4) — mask-seeded from
+    /// [`Self::clk_prop_regimes_info`]. `Ok(None)` when there is nothing
+    /// to seed.
+    pub fn clk_prop_regimes_control(
+        &self,
+    ) -> crate::Result<Option<crate::clock::ClkPropRegimesControl>> {
+        trace!("gpu.clk_prop_regimes_control()");
+        use clock::undocumented::{
+            NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL, clk_prop_regimes_ctrl_entry,
+        };
+
+        let Some(info) = self.clk_prop_regimes_info()? else {
+            return Ok(None);
+        };
+        let mut raw = NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL::default();
+        raw.set_mask(info.mask);
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkPropRegimesGetControl(
+                self.0,
+                ptr::from_mut(&mut raw).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropRegimesGetControl, st)
+            .map_err(crate::Error::from)?;
+        let entries = (0..32)
+            .filter(|bit| info.mask & (1 << bit) != 0)
+            .map(|bit| crate::clock::ClkPropRegimeControlEntry {
+                bit,
+                status: raw
+                    .rec_u32(bit, clk_prop_regimes_ctrl_entry::REC_STATUS)
+                    .unwrap_or(0),
+                value: raw
+                    .rec_u32(bit, clk_prop_regimes_ctrl_entry::REC_VALUE)
+                    .unwrap_or(0),
+            })
+            .collect();
+        Ok(Some(crate::clock::ClkPropRegimesControl {
+            mask: info.mask,
+            entries,
+        }))
+    }
+
+    /// Per-domain legal frequency enumeration (ID 0x40BDDDB36) — **MHz**
+    /// table (the family's only non-kHz unit, magnitude-verified live).
+    /// Known selectors on TU116/462.96: 0 = core (141 pts 30..2130 step
+    /// 15), 2 = memory [405, 810, 5001, 5751, 6001], 4 = [147, 324, 405,
+    /// 540, 648, 810]; 0xFF rejected.
+    pub fn clk_domain_freqs_enum(
+        &self,
+        selector: u8,
+    ) -> crate::Result<crate::clock::ClkDomainFreqsEnum> {
+        trace!("gpu.clk_domain_freqs_enum(selector={selector})");
+        use clock::undocumented::NV_GPU_CLOCK_CLK_DOMAIN_FREQS_ENUM;
+
+        let mut raw = NV_GPU_CLOCK_CLK_DOMAIN_FREQS_ENUM::default();
+        raw.set_selector(selector);
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkDomainFreqsEnum(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainFreqsEnum, st)
+            .map_err(crate::Error::from)?;
+        Ok(crate::clock::ClkDomainFreqsEnum {
+            selector,
+            freqs_mhz: raw.freqs_mhz(),
+        })
+    }
+
+    /// Public clock info (ID 0x1B46D4CC) — per-domain {value, flag, max}
+    /// triples at type-dependent slots, over a {32, 0, 100} preset.
+    pub fn public_clock_info(&self) -> crate::Result<crate::clock::PublicClockInfo> {
+        trace!("gpu.public_clock_info()");
+        use clock::undocumented::NV_GPU_PUBLIC_CLOCK_INFO;
+
+        let mut raw = NV_GPU_PUBLIC_CLOCK_INFO::default();
+        raw.preset_defaults();
+        let st = unsafe {
+            sys::api::NvAPI_GPU_GetPublicClockInfo(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetPublicClockInfo, st)
+            .map_err(crate::Error::from)?;
+        let count = raw.count();
+        let slots = (0..32usize)
+            .map(|k| {
+                let base = 8 + k * 12;
+                crate::clock::PublicClockInfoSlot {
+                    index: k,
+                    value: raw.u32_at(base).unwrap_or(0),
+                    flag: raw.u32_at(base + 4).unwrap_or(0),
+                    max: raw.u32_at(base + 8).unwrap_or(0),
+                }
+            })
+            .collect();
+        Ok(crate::clock::PublicClockInfo { count, slots })
+    }
+
+    /// Locked-clock mode status (ID 0xC4733F19) — NOT a readback of the
+    /// PerfClientLimits/NVML lock planes (live 0 with both lock types
+    /// active); the mirrored control surface is unidentified.
+    pub fn locked_clock_mode_status(&self) -> crate::Result<crate::clock::LockedClockModeStatus> {
+        trace!("gpu.locked_clock_mode_status()");
+        use clock::undocumented::NV_GPU_LOCKED_CLOCK_MODE_STATUS;
+
+        let mut raw = NV_GPU_LOCKED_CLOCK_MODE_STATUS::default();
+        let st = unsafe {
+            sys::api::NvAPI_GPU_GetLockedClockModeStatus(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetLockedClockModeStatus, st)
+            .map_err(crate::Error::from)?;
+        Ok(crate::clock::LockedClockModeStatus {
+            mode_mask: raw.mode_mask,
+        })
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

@@ -693,6 +693,49 @@ impl Gpu {
         }
     }
 
+    /// Enumerate the melonVolt voltage domains (0xA38ACF9D): per-domain
+    /// min/step/max/default µV window (`crate::VoltDevice`). `Ok(None)`
+    /// where the driver doesn't expose the private family — same refusal
+    /// mapping as [`Self::volt_rails`].
+    pub fn volt_devices(&self) -> crate::Result<Option<Vec<crate::VoltDevice>>> {
+        match self.gpu.volt_devices().map_err(crate::Error::from) {
+            Ok(v) => Ok(Some(v)),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// PCI BAR topology (`GetBarInfo` 0xE4B701E3): count + per-BAR
+    /// {tag, size-MiB, base} records (live-verified semantics on
+    /// [`crate::BarRecord`]). Read-only, no capability gate, no elevation —
+    /// `Ok(None)` keeps the refusal mapping uniform with the other
+    /// enrichments.
+    pub fn bar_info(&self) -> crate::Result<Option<Vec<crate::BarRecord>>> {
+        match self.gpu.bar_info().map_err(crate::Error::from) {
+            Ok(v) => Ok(Some(v)),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Write one rail's control-entry value (payload index 0; µV offset on
     /// type-3 entries) with the full melonVolt write protocol. `Ok(None)`
     /// where the driver doesn't expose the private family. Policy (type
@@ -730,6 +773,84 @@ impl Gpu {
                     crate::Status::NotSupported
                         | crate::Status::NoImplementation
                         | crate::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Voltage-controller descriptor read (ID 0xEC6FCD0B). `Ok(None)` when
+    /// the part exposes no voltage controllers (INFO mask 0 — live 462.96
+    /// desktop behaviour) or the driver doesn't implement the family.
+    pub fn clk_volt_controllers_info(
+        &self,
+    ) -> crate::Result<Option<crate::ClkVoltControllersInfo>> {
+        match self.gpu.clk_volt_controllers_info() {
+            Ok(v) => Ok(v),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported | crate::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Voltage-controller live status (ID 0x8506C02E, mask-seeded).
+    /// `Ok(None)` on parts without the family.
+    pub fn clk_volt_controllers_status(
+        &self,
+    ) -> crate::Result<Option<crate::ClkVoltControllersStatus>> {
+        match self.gpu.clk_volt_controllers_status() {
+            Ok(v) => Ok(v),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported | crate::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Voltage-controller GET_CONTROL snapshot (ID 0xDD41633C). `Ok(None)`
+    /// on parts without the family.
+    pub fn clk_volt_controllers_control(
+        &self,
+    ) -> crate::Result<Option<crate::ClkVoltControllersControl>> {
+        match self.gpu.clk_volt_controllers_control() {
+            Ok(v) => Ok(v),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported | crate::Status::NoImplementation
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Per-domain legal frequency enumeration (ID 0x40BDDDB36, MHz).
+    /// `Ok(None)` when the selector is unsupported on this part.
+    pub fn clk_domain_freqs_enum(
+        &self,
+        selector: u8,
+    ) -> crate::Result<Option<crate::ClkDomainFreqsEnum>> {
+        match self.gpu.clk_domain_freqs_enum(selector) {
+            Ok(v) => Ok(Some(v)),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported | crate::Status::NoImplementation
                 ) =>
             {
                 Ok(None)

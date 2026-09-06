@@ -3796,4 +3796,1052 @@ pub mod undocumented {
         /// medium layer.
         pub unsafe fn NvAPI_GPU_PerfVfeVarSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_PERF_VFE_VAR_CONTROL) -> NvAPI_Status;
     }
+
+    // ------------------------------------------------------------------
+    // ClockClkVoltController(s) family — per-clock-domain VOLTAGE controller
+    // object tree (the freq sibling 0x58F4F4C1/0x45C064D5/0xFD7C0AC3/
+    // 0xD9BE5BF9 reads the same tree shape for FREQUENCY controllers).
+    // RE'd 2026-09-06 from reverse/version-audit/nvapi64_impl_61088.dll
+    // (R610.88; handler VAs identical to the archive's R610.74 evidence
+    // table) with an R462.96 cross-check:
+    //
+    //   ID          handler(610)    magic   size(B) RM(610)      462.96
+    //   GetInfo     0xEC6FCD0B  0x18021C330 0x10CD4 3284 0x20809033  0x20801033 esc 0x070004A
+    //   GetStatus   0x8506C02E  0x18021C9A0 0x10BC8 3016 0x20809034
+    //   GetControl  0xDD41633C  0x18021D010 0x10C48 3144 0x20809035  (esc 610 = 0x0700049)
+    //   SetControl  0xF9833206  0x18021D640 0x10C48 3144 0x2080D036
+    //
+    // Single version magic per call, PLAIN equality (`cmp dword [user],imm`
+    // → -9): all three are (1<<16)|size — the first private clock structs
+    // whose size exceeds 0x0B00, so the magic's low half IS the size and the
+    // gate is exact. Escape 0x0700049 (same family as VfPoints); 462.96
+    // shifts to 0x070004A + RM 0x208010xx inside the handler — the USER
+    // layouts are byte-identical across both generations, so one set of
+    // structs serves both. SetControl passes the elevation gate
+    // (sub_18038FE40) FIRST: -104 (0xFFFFFF98) without admin, before any
+    // validation. GET_STATUS / GET_CONTROL are MASK-SEEDED at +4 (ClkDomains
+    // GetControl seeds at +8; this family at +4); records are BIT-SPARSE by
+    // bit index. GetInfo takes no input mask — the driver fills it at +4.
+    //
+    // User-buffer layouts (record-relative; GET unpack / SET pack mirrored,
+    // byte-for-byte cross-checked between the two handlers):
+    //   INFO    rec@0x54 + bit*0x64: active u32@0 · u8@4 · u8@5 · u8@6 ·
+    //           u16@8 · u32@0xC · u32@0x10 · u32@0x14 · i32@0x38 (wire i16
+    //           sign-extended) · i32@0x3C (wire i16 sign-extended) · u32@0x40
+    //   STATUS  rec@0x148 + bit*0x54: active u32@0 · u32@4 · u32@0x28 ·
+    //           u32@0x2C · u32@0x30 (header echoes 4×u32 @+8..+0x14 and
+    //           4×u32 @+0x88..+0x94 from the escape reply)
+    //   CONTROL rec@0x48 + bit*0x60: active u32@0 · u8@4 · u16@6 · u32@8 ·
+    //           u32@0xC · u32@0x10 · u32@0x34 · u32@0x38 · u32@0x3C
+    //   (Closure: BASE + 32*stride + 4 == magic size field for all three.)
+    //
+    // Live 462.96 (GTX 1650 SUPER): all four QI-resolve; INFO and CONTROL
+    // ACCEPT the 610 magics and return OK — but the VOLTAGE controller table
+    // is EMPTY on that part (INFO mask 0 with zeroed records; CONTROL with a
+    // broadcast seed → -1; STATUS → -1). The freq sibling DOES return
+    // records there (mask 0x7, rec0 {u16@6:15, u32@8:327680 ≈ idle-GPC kHz,
+    // i32@0x3C:−18750 dynamic}), so the object tree works — this GPU just
+    // exposes no voltage controllers. Laptop 610 parts are the real
+    // verification surface for non-empty data and field semantics.
+    // ------------------------------------------------------------------
+
+    /// Byte offsets into [`NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL`] —
+    /// the mask-seeded GET/SET block. All constants are START-biased
+    /// ABSOLUTE struct offsets (the field occupies `[c, c+width)`;
+    /// `rest[c-4..c]` addresses it because `rest` begins at struct +4) —
+    /// the same convention as the ClkDomains `clk_ctrl_entry` above.
+    pub mod clk_volt_ctrl_entry {
+        /// input/echoed controller mask (u32 @+4)
+        pub const MASK: usize = 4;
+        /// first bit-sparse record base (absolute)
+        pub const BASE: usize = 0x48;
+        /// per-bit record stride
+        pub const STRIDE: usize = 0x60;
+        /// rec+0x00: active flag (u32; SET only commits records with ==1
+        /// and stamps the wire type byte to 1 for them)
+        pub const ACTIVE: usize = 0x00;
+        /// rec+0x04: u8 field
+        pub const B04: usize = 0x04;
+        /// rec+0x06: u16 field
+        pub const U16_06: usize = 0x06;
+        /// rec+0x08: u32 field
+        pub const U32_08: usize = 0x08;
+        /// rec+0x0C: u32 field
+        pub const U32_0C: usize = 0x0C;
+        /// rec+0x10: u32 field
+        pub const U32_10: usize = 0x10;
+        /// rec+0x34: extended u32 (wire-packed ONLY when active==1)
+        pub const U32_34: usize = 0x34;
+        /// rec+0x38: extended u32 (packed only when active==1)
+        pub const U32_38: usize = 0x38;
+        /// rec+0x3C: extended u32 (packed only when active==1; on the freq
+        /// sibling this slot is DYNAMIC — hypothesis: live offset value)
+        pub const U32_3C: usize = 0x3C;
+    }
+
+    /// (START-biased record-relative offset, byte width) of every CONTROL
+    /// record field, in the canonical nine-field order used by
+    /// [`NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL::record_full`] /
+    /// [`NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL::set_record_full`]:
+    /// `[active u32, b04 u8, u16_06, u32_08, u32_0C, u32_10, u32_34, u32_38, u32_3C]`.
+    const CLK_VOLT_CTRL_FIELDS: [(usize, usize); 9] = [
+        (clk_volt_ctrl_entry::ACTIVE, 4),
+        (clk_volt_ctrl_entry::B04, 1),
+        (clk_volt_ctrl_entry::U16_06, 2),
+        (clk_volt_ctrl_entry::U32_08, 4),
+        (clk_volt_ctrl_entry::U32_0C, 4),
+        (clk_volt_ctrl_entry::U32_10, 4),
+        (clk_volt_ctrl_entry::U32_34, 4),
+        (clk_volt_ctrl_entry::U32_38, 4),
+        (clk_volt_ctrl_entry::U32_3C, 4),
+    ];
+
+    nvstruct! {
+        /// GET/SET block for the private voltage-controller family
+        /// (RM 0x20809035 / 0x2080D036, IDs 0xDD41633C / 0xF9833206).
+        /// Seed [`clk_volt_ctrl_entry::MASK`] at +4 before GET_CONTROL;
+        /// derive the REAL controller set from records with a nonzero
+        /// `active` u32 (the driver echoes the seed, not the populated
+        /// set). Total 0x10C48 = (1<<16)|3144.
+        pub struct NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL_V1 {
+            pub version: NvVersion,
+            /// +4 .. +3144: mask@+4, opaque header, 32×0x60 records @0x48
+            pub rest: [u8; 3140],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL_V1(1) = 0xc48 }
+
+    /// Byte offsets into [`NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO`] — the
+    /// descriptor read (driver fills the mask; no input seeding). Constants
+    /// are START-biased absolute struct offsets.
+    pub mod clk_volt_info_entry {
+        pub const MASK: usize = 4;
+        pub const BASE: usize = 0x54;
+        pub const STRIDE: usize = 0x64;
+        pub const ACTIVE: usize = 0x00;
+        pub const B04: usize = 0x04;
+        pub const B05: usize = 0x05;
+        pub const B06: usize = 0x06;
+        pub const U16_08: usize = 0x08;
+        pub const U32_0C: usize = 0x0C;
+        pub const U32_10: usize = 0x10;
+        pub const U32_14: usize = 0x14;
+        /// wire i16 @rec+0x38, sign-extended by the handler
+        pub const I32_38: usize = 0x38;
+        /// wire i16 @rec+0x3C, sign-extended by the handler
+        pub const I32_3C: usize = 0x3C;
+        pub const U32_40: usize = 0x40;
+    }
+
+    nvstruct! {
+        /// GET_INFO descriptor block (RM 0x20809033, ID 0xEC6FCD0B).
+        /// Magic 0x10CD4 = (1<<16)|3284; the driver fills mask@+4 and the
+        /// per-bit records (record gate: u32@rec == 1).
+        pub struct NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO_V1 {
+            pub version: NvVersion,
+            /// +4 .. +3284: mask@+4, header, 32×0x64 records @0x54
+            pub rest: [u8; 3280],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO_V1(1) = 0xcd4 }
+
+    /// Byte offsets into [`NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS`] — the
+    /// live-status read (MASK-SEEDED at +4, like CONTROL). Constants are
+    /// START-biased absolute struct offsets.
+    pub mod clk_volt_status_entry {
+        pub const MASK: usize = 4;
+        pub const BASE: usize = 0x148;
+        pub const STRIDE: usize = 0x54;
+        pub const ACTIVE: usize = 0x00;
+        pub const U32_04: usize = 0x04;
+        pub const U32_28: usize = 0x28;
+        pub const U32_2C: usize = 0x2C;
+        pub const U32_30: usize = 0x30;
+    }
+
+    nvstruct! {
+        /// GET_STATUS block (RM 0x20809034, ID 0x8506C02E).
+        /// Magic 0x10BC8 = (1<<16)|3016; seed mask@+4. On a part with no
+        /// voltage controllers (live 462.96) this call returns
+        /// NVAPI_ERROR(-1) regardless of seed.
+        pub struct NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS_V1 {
+            pub version: NvVersion,
+            /// +4 .. +3016: mask@+4, header echo, 32×0x54 records @0x148
+            pub rest: [u8; 3012],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS_V1(1) = 0xbc8 }
+
+    impl NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL {
+        /// Seed the input mask at +4 (call before GET_CONTROL).
+        pub fn set_mask(&mut self, mask: u32) {
+            let o = clk_volt_ctrl_entry::MASK - 4;
+            self.rest[o..o + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+
+        /// Read the mask at +4 (echoed on GET).
+        pub fn mask(&self) -> u32 {
+            let o = clk_volt_ctrl_entry::MASK - 4;
+            u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            let abs = clk_volt_ctrl_entry::BASE
+                .checked_add(bit as usize * clk_volt_ctrl_entry::STRIDE)?
+                .checked_add(field)?;
+            let s = self.rest.get(abs - 4..abs)?;
+            Some(u32::from_le_bytes(s.try_into().ok()?))
+        }
+
+        /// Record active flag (u32 @rec+0) for `bit` — the driver-side
+        /// "this controller exists" gate (SET commits only ==1 records).
+        pub fn record_active(&self, bit: u32) -> Option<u32> {
+            self.rec_u32(bit, clk_volt_ctrl_entry::ACTIVE)
+        }
+
+        /// u8 field @rec+4.
+        pub fn record_b04(&self, bit: u32) -> Option<u8> {
+            let abs = clk_volt_ctrl_entry::BASE
+                .checked_add(bit as usize * clk_volt_ctrl_entry::STRIDE)?
+                .checked_add(clk_volt_ctrl_entry::B04)?;
+            self.rest.get(abs - 4).copied()
+        }
+
+        /// u16 field @rec+6.
+        pub fn record_u16_06(&self, bit: u32) -> Option<u16> {
+            let abs = clk_volt_ctrl_entry::BASE
+                .checked_add(bit as usize * clk_volt_ctrl_entry::STRIDE)?
+                .checked_add(clk_volt_ctrl_entry::U16_06)?;
+            Some(u16::from_le_bytes(
+                self.rest.get(abs - 4..abs - 2)?.try_into().ok()?,
+            ))
+        }
+
+        /// u32 field @rec+`which` for `which` ∈ {8, 0xC, 0x10}.
+        pub fn record_u32(&self, bit: u32, which: usize) -> Option<u32> {
+            match which {
+                clk_volt_ctrl_entry::U32_08
+                | clk_volt_ctrl_entry::U32_0C
+                | clk_volt_ctrl_entry::U32_10 => self.rec_u32(bit, which),
+                _ => None,
+            }
+        }
+
+        /// Extended u32 @rec+`which` for `which` ∈ {0x34, 0x38, 0x3C}
+        /// (wire-packed only when active==1).
+        pub fn record_ext_u32(&self, bit: u32, which: usize) -> Option<u32> {
+            match which {
+                clk_volt_ctrl_entry::U32_34
+                | clk_volt_ctrl_entry::U32_38
+                | clk_volt_ctrl_entry::U32_3C => self.rec_u32(bit, which),
+                _ => None,
+            }
+        }
+
+        /// Read the FULL nine-field payload of record `bit`:
+        /// `[active, b04, u16_06, u32_08, u32_0C, u32_10, u32_34, u32_38, u32_3C]`.
+        pub fn record_full(&self, bit: u32) -> Option<[u32; 9]> {
+            let base = clk_volt_ctrl_entry::BASE
+                .checked_add(bit as usize * clk_volt_ctrl_entry::STRIDE)?;
+            let mut out = [0u32; 9];
+            for (k, (field, width)) in CLK_VOLT_CTRL_FIELDS.iter().enumerate() {
+                let abs = base.checked_add(*field)?;
+                out[k] = match *width {
+                    1 => *self.rest.get(abs - 4)? as u32,
+                    2 => {
+                        u16::from_le_bytes(self.rest.get(abs - 4..abs - 2)?.try_into().ok()?) as u32
+                    }
+                    _ => u32::from_le_bytes(self.rest.get(abs - 4..abs)?.try_into().ok()?),
+                };
+            }
+            Some(out)
+        }
+
+        /// Overwrite the FULL nine-field payload of record `bit` (same
+        /// order as [`Self::record_full`]); each field is written at its
+        /// native width (u8/u16/u32), never spilling into its neighbour.
+        pub fn set_record_full(&mut self, bit: u32, vals: [u32; 9]) -> Option<()> {
+            let base = clk_volt_ctrl_entry::BASE
+                .checked_add(bit as usize * clk_volt_ctrl_entry::STRIDE)?;
+            for (k, (field, width)) in CLK_VOLT_CTRL_FIELDS.iter().enumerate() {
+                let abs = base.checked_add(*field)?;
+                match *width {
+                    1 => *self.rest.get_mut(abs - 4)? = vals[k] as u8,
+                    2 => self
+                        .rest
+                        .get_mut(abs - 4..abs - 2)?
+                        .copy_from_slice(&(vals[k] as u16).to_le_bytes()),
+                    _ => self
+                        .rest
+                        .get_mut(abs - 4..abs)?
+                        .copy_from_slice(&vals[k].to_le_bytes()),
+                }
+            }
+            Some(())
+        }
+    }
+
+    impl NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO {
+        /// Driver-filled controller mask @+4.
+        pub fn mask(&self) -> u32 {
+            let o = clk_volt_info_entry::MASK - 4;
+            u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        /// Raw u32 at record-relative offset `field` of bit `bit`.
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= clk_volt_info_entry::STRIDE {
+                return None;
+            }
+            let abs = clk_volt_info_entry::BASE
+                .checked_add(bit as usize * clk_volt_info_entry::STRIDE)?
+                .checked_add(field)?;
+            let s = self.rest.get(abs - 4..abs)?;
+            Some(u32::from_le_bytes(s.try_into().ok()?))
+        }
+
+        /// i32 @rec+0x38 — the wire carries a 16-bit value the handler
+        /// sign-extends; reconstruct the same value from those 2 bytes.
+        pub fn rec_i32_38(&self, bit: u32) -> Option<i32> {
+            let abs = clk_volt_info_entry::BASE
+                .checked_add(bit as usize * clk_volt_info_entry::STRIDE)?
+                .checked_add(clk_volt_info_entry::I32_38)?;
+            Some(i16::from_le_bytes(self.rest.get(abs - 4..abs - 2)?.try_into().ok()?) as i32)
+        }
+
+        /// i32 @rec+0x3C (wire i16 sign-extended).
+        pub fn rec_i32_3c(&self, bit: u32) -> Option<i32> {
+            let abs = clk_volt_info_entry::BASE
+                .checked_add(bit as usize * clk_volt_info_entry::STRIDE)?
+                .checked_add(clk_volt_info_entry::I32_3C)?;
+            Some(i16::from_le_bytes(self.rest.get(abs - 4..abs - 2)?.try_into().ok()?) as i32)
+        }
+    }
+
+    impl NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS {
+        /// Seed the input mask at +4 (call before GET_STATUS).
+        pub fn set_mask(&mut self, mask: u32) {
+            let o = clk_volt_status_entry::MASK - 4;
+            self.rest[o..o + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+
+        /// Raw u32 at record-relative offset `field` of bit `bit`.
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= clk_volt_status_entry::STRIDE {
+                return None;
+            }
+            let abs = clk_volt_status_entry::BASE
+                .checked_add(bit as usize * clk_volt_status_entry::STRIDE)?
+                .checked_add(field)?;
+            let s = self.rest.get(abs - 4..abs)?;
+            Some(u32::from_le_bytes(s.try_into().ok()?))
+        }
+    }
+
+    nvapi! {
+        /// Voltage-controller GET_INFO (ID 0xEC6FCD0B, RM 0x20809033, magic
+        /// 0x10CD4). Driver fills the controller mask + per-bit descriptors
+        /// (two wire-i16 fields arrive sign-extended).
+        pub unsafe fn NvAPI_GPU_ClockClkVoltControllerGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Voltage-controller GET_STATUS (ID 0x8506C02E, RM 0x20809034,
+        /// magic 0x10BC8). MASK-SEEDED at +4.
+        pub unsafe fn NvAPI_GPU_ClockClkVoltControllerGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Voltage-controllers GET_CONTROL (ID 0xDD41633C, RM 0x20809035,
+        /// magic 0x10C48). MASK-SEEDED at +4; the per-record `active` u32
+        /// gates which controllers exist.
+        pub unsafe fn NvAPI_GPU_ClockClkVoltControllersGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Voltage-controllers SET_CONTROL (ID 0xF9833206, RM 0x2080D036).
+        /// DANGEROUS VRM-controller write: elevation-gated (-104 without
+        /// admin) BEFORE any validation, and only records with active==1
+        /// are committed. Always snapshot via GetControl, patch a COPY,
+        /// SET, read back, verify, restore on mismatch (see medium-layer
+        /// `set_clk_volt_controller_record`). Field semantics are
+        /// unconfirmed pending a laptop 610 A/B — do not call with
+        /// synthetic values.
+        pub unsafe fn NvAPI_GPU_ClockClkVoltControllersSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *const NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL) -> NvAPI_Status;
+    }
+
+    /// Layout regression tests for the ClockClkVoltController(s) family:
+    /// magic closure (BASE + 32*stride + 4 == size field) and accessor
+    /// round-trips at the disasm-derived offsets.
+    #[cfg(test)]
+    mod clk_volt_tests {
+        use super::*;
+
+        fn put_u32(rest: &mut [u8], abs: usize, v: u32) {
+            rest[abs - 4..abs].copy_from_slice(&v.to_le_bytes());
+        }
+
+        #[test]
+        fn clk_volt_magic_closure() {
+            // record region ends exactly at the magic size field:
+            // BASE + 32*stride == size (BASE already sits inside the size).
+            // INFO: 0x54 + 32*0x64 == 0xCD4 (3284)
+            assert_eq!(
+                clk_volt_info_entry::BASE + 32 * clk_volt_info_entry::STRIDE,
+                0xCD4
+            );
+            assert_eq!(size_of::<NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO>(), 3284);
+            // STATUS: 0x148 + 32*0x54 == 0xBC8 (3016)
+            assert_eq!(
+                clk_volt_status_entry::BASE + 32 * clk_volt_status_entry::STRIDE,
+                0xBC8
+            );
+            assert_eq!(size_of::<NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS>(), 3016);
+            // CONTROL: 0x48 + 32*0x60 == 0xC48 (3144)
+            assert_eq!(
+                clk_volt_ctrl_entry::BASE + 32 * clk_volt_ctrl_entry::STRIDE,
+                0xC48
+            );
+            assert_eq!(size_of::<NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL>(), 3144);
+            // rest arrays are exactly SIZE-4 (the OOB-read-garbage rule)
+            assert_eq!(
+                size_of::<NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL>() - 4,
+                3140
+            );
+        }
+
+        #[test]
+        fn clk_volt_control_record_roundtrip() {
+            let mut c = NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_CONTROL::default();
+            c.set_mask(0xFFFF_FFFF);
+            assert_eq!(c.mask(), 0xFFFF_FFFF);
+            // bit 5 active with the nine-field payload
+            let vals: [u32; 9] = [
+                1,
+                0xAB,
+                15,
+                327_680,
+                983_040,
+                1_638_400,
+                12,
+                34,
+                0xFFFD_BEA2,
+            ];
+            c.set_record_full(5, vals).unwrap();
+            assert_eq!(c.record_active(5), Some(1));
+            assert_eq!(c.record_b04(5), Some(0xAB));
+            assert_eq!(c.record_u16_06(5), Some(15));
+            assert_eq!(c.record_u32(5, 8), Some(327_680));
+            assert_eq!(c.record_u32(5, 0xC), Some(983_040));
+            assert_eq!(c.record_u32(5, 0x10), Some(1_638_400));
+            assert_eq!(c.record_ext_u32(5, 0x34), Some(12));
+            assert_eq!(c.record_ext_u32(5, 0x38), Some(34));
+            assert_eq!(c.record_ext_u32(5, 0x3C), Some(0xFFFD_BEA2));
+            assert_eq!(c.record_full(5), Some(vals));
+            // untouched bit stays zero; bit 31 (last record) is in bounds
+            assert_eq!(c.record_active(6), Some(0));
+            assert!(c.record_active(32).is_none());
+            let vals31: [u32; 9] = [1, 0, 0, 1, 2, 3, 4, 5, 6];
+            c.set_record_full(31, vals31).unwrap();
+            assert_eq!(c.record_full(31), Some(vals31));
+        }
+
+        #[test]
+        fn clk_volt_info_status_accessors() {
+            let mut info = NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_INFO::default();
+            put_u32(&mut info.rest, clk_volt_info_entry::MASK, 0x7);
+            assert_eq!(info.mask(), 0x7);
+            // i32 @0x38: the driver writes a 16-bit -18750 (0xB6C2) there
+            // and sign-extends on read; the accessor must reconstruct
+            // -18750 from exactly those 2 bytes.
+            let abs = clk_volt_info_entry::BASE
+                + 1 * clk_volt_info_entry::STRIDE
+                + clk_volt_info_entry::I32_38;
+            info.rest[abs - 4..abs - 2].copy_from_slice(&0xB6C2u16.to_le_bytes());
+            assert_eq!(info.rec_i32_38(1), Some(-18750));
+            assert!(info.rec_u32(1, 0x64).is_none());
+
+            let mut st = NV_GPU_CLOCK_CLK_VOLT_CONTROLLERS_STATUS::default();
+            st.set_mask(1 << 3);
+            let abs = clk_volt_status_entry::BASE
+                + 3 * clk_volt_status_entry::STRIDE
+                + clk_volt_status_entry::U32_2C;
+            put_u32(&mut st.rest, abs, 625_000);
+            assert_eq!(st.rec_u32(3, clk_volt_status_entry::U32_2C), Some(625_000));
+            assert_eq!(st.rec_u32(4, clk_volt_status_entry::U32_2C), Some(0));
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // nvClocks.spec P1 batch (2026-09-06 audit — reverse/version-audit/
+    // nvclocks-audit/, 4-agent static RE + live 462.96 GTX 1650 SUPER
+    // read-only probes). Six read surfaces + the ADC GetInfo seed source.
+    // All constants END-biased ([abs-width..abs] addressing); masks u32.
+    // Cross-generation (462.96 ↔ 610.88): every user layout/magic below is
+    // IDENTICAL; only RM cmd (0x2080_1XXX ↔ 0x2080_9XXX/DXXX) and escape
+    // (0x070004A ↔ 0x0700049 etc.) shift inside the handlers.
+    // ------------------------------------------------------------------
+
+    /// ADC device directory offsets ([`NV_GPU_CLOCK_ADC_DEVICES_INFO`]) —
+    /// the mask seed source for GetStatus. Records @0x50+bit*0x4C.
+    pub mod adc_devices_info_entry {
+        pub const MASK: usize = 4;
+        pub const BASE: usize = 0x50;
+        pub const STRIDE: usize = 0x4C;
+        /// rec+0: u32 device type (probe saw small ints)
+        pub const REC_TYPE: usize = 0x04;
+        /// rec+4: u32 channel id (probe: {8,16,32,0xC05})
+        pub const REC_CHANNEL: usize = 0x08;
+        /// rec+8..+24: 16 name bytes
+        pub const REC_NAME: usize = 0x0C;
+    }
+
+    nvstruct! {
+        /// ADC device directory (ID 0x68789E2A, RM 0x208090A0-family; magic
+        /// 0x10348 = (1<<16)|840). Driver fills mask@+4 and per-bit device
+        /// descriptors; the mask seeds
+        /// [`NV_GPU_CLOCK_ADC_DEVICES_STATUS`].
+        pub struct NV_GPU_CLOCK_ADC_DEVICES_INFO_V1 {
+            pub version: NvVersion,
+            /// +4 .. +840: mask@+4, header, 10×0x4C records @0x50
+            pub rest: [u8; 836],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_ADC_DEVICES_INFO NV_GPU_CLOCK_ADC_DEVICES_INFO_V1(1) = 0x348 }
+
+    /// ADC live-status offsets ([`NV_GPU_CLOCK_ADC_DEVICES_STATUS`]) — ★P1:
+    /// the ONLY live telemetry stream found in the whole nvClocks audit.
+    /// Records @0x48+bit*0x4C; live 462.96 (4 devices): state −1,
+    /// +4 = rail voltage µV (idle 625000..637500, load 1043750 — the four
+    /// channels read DIFFERENT rails), +8/+0xA = VF-table voltage-point
+    /// index pair (idle ↔ 28-31, load ↔ 94-96; user cross-cert
+    /// 2026-09-06 — the earlier temperature-°C hypothesis was WRONG),
+    /// +9 = 0, type byte = 2, +0x2C = 0x7FFFFFFF sentinel.
+    pub mod adc_devices_status_entry {
+        pub const MASK: usize = 4;
+        pub const BASE: usize = 0x48;
+        pub const STRIDE: usize = 0x4C;
+        /// rec+0x00: u32 state (−1 observed = invalid/reserved)
+        pub const REC_STATE: usize = 0x00;
+        /// rec+0x04: u32 rail voltage µV (cross-certified: four distinct
+        /// per-rail readings that track load)
+        pub const REC_VALUE_UV: usize = 0x04;
+        /// rec+0x08: u8 VF-table voltage-point index (锁定电压点 id;
+        /// idle ≈630 mV ↔ 28-31, load 1043 mV ↔ 94-96)
+        pub const REC_VFPID_A: usize = 0x08;
+        /// rec+0x09: u8 zero observed
+        pub const REC_ZERO: usize = 0x09;
+        /// rec+0x0A: u8 second VF-point index (±1 of REC_VFPID_A — likely
+        /// current-vs-target or min-vs-max tracking)
+        pub const REC_VFPID_B: usize = 0x0A;
+        /// rec+0x0B: u8 value format (1=no value / 2=u32 / 3,4=u8)
+        pub const REC_TYPE: usize = 0x0B;
+        /// rec+0x2C: secondary value (u32 when type==2, else u8 low byte);
+        /// 0x7FFFFFFF sentinel observed
+        pub const REC_VALUE2: usize = 0x2C;
+    }
+
+    nvstruct! {
+        /// ADC live status (ID 0x43D9B26A, RM 0x208090A1, magic 0x10340 =
+        /// (1<<16)|832). MASK-SEEDED at +4 (seed from
+        /// [`NV_GPU_CLOCK_ADC_DEVICES_INFO`]). V2 stamp 0x109C8 (32
+        /// devices) also accepted; V1 covers 10.
+        pub struct NV_GPU_CLOCK_ADC_DEVICES_STATUS_V1 {
+            pub version: NvVersion,
+            /// +4 .. +832: mask@+4, header, 10×0x4C records @0x48
+            pub rest: [u8; 828],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_ADC_DEVICES_STATUS NV_GPU_CLOCK_ADC_DEVICES_STATUS_V1(1) = 0x340 }
+
+    /// ClkPropRegimes directory offsets ([`NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO`])
+    /// — P1; settles the archived "scaling-sibling triple" mystery ID.
+    pub mod clk_prop_regimes_info_entry {
+        /// +4: u32 availability status (wire 3-state: 0/1/0xF)
+        pub const STATUS: usize = 4;
+        /// +8: u32 regime mask (output)
+        pub const MASK: usize = 8;
+        pub const BASE: usize = 0x10C;
+        pub const STRIDE: usize = 0x4C;
+        /// rec+0: u32 status (wire gate byte == 1 → 0, else −1 + whole-call
+        /// −103)
+        pub const REC_STATUS: usize = 0x00;
+        /// rec+4: u32 regime type — wire byte remapped through the 19-entry
+        /// jump table @0x180212808 → {1..7,9,0xF..0x1A}; illegal → 0x1F
+        pub const REC_TYPE: usize = 0x04;
+        /// rec+8: u32 value (freq/voltage anchor — units unconfirmed)
+        pub const REC_VALUE: usize = 0x08;
+    }
+
+    nvstruct! {
+        /// ClkPropRegimes directory (ID 0xCF08E934, RM 0x20809079, magic
+        /// 0x10A8C = (1<<16)|2700). No input seed. Each record = one
+        /// domain×regime entry (archived "4060: 19 per-domain values"
+        /// matches the 19-entry type remap).
+        pub struct NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO_V1 {
+            pub version: NvVersion,
+            /// +4 .. +2700: status@+4, mask@+8, 32×0x4C records @0x10C
+            pub rest: [u8; 2696],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO_V1(1) = 0xa8c }
+
+    /// ClkPropRegimes control offsets ([`NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL`]).
+    pub mod clk_prop_regimes_ctrl_entry {
+        /// +8: u32 mask, BOTH input seed and echo
+        pub const MASK: usize = 8;
+        pub const BASE: usize = 0x48;
+        pub const STRIDE: usize = 0x108;
+        /// rec+0x48: u32 status (0 / −1)
+        pub const REC_STATUS: usize = 0x48;
+        /// rec+0x4C: u32 value
+        pub const REC_VALUE: usize = 0x4C;
+    }
+
+    nvstruct! {
+        /// ClkPropRegimes control snapshot (ID 0x4F11EAA4, RM 0x2080907B,
+        /// magic 0x12148 = (1<<16)|8520). Mask-seeded at +8; pairs with
+        /// [`NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO`].
+        pub struct NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL_V1 {
+            pub version: NvVersion,
+            /// +4 .. +8520: mask@+8, 32×0x108 records @0x48
+            pub rest: [u8; 8516],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL_V1(1) = 0x2148 }
+
+    nvstruct! {
+        /// Per-clock-domain legal frequency enumeration (ID 0x40BDDDB36,
+        /// RM 0x2080901A, magic 0x10808 = 8 + 512×4). Selector u8@+4 picks
+        /// the domain (live: 0=core 141 pts 30..2130 step 15, 2=memory
+        /// [405,810,5001,5751,6001], 4=[147,324,405,540,648,810]); the
+        /// driver fills count u16@+6 and the freq table. **Unit is MHz**
+        /// (the only non-kHz table in the family — verified by magnitude:
+        /// 30 MHz idle floor, 6001 ≈ GDDR6 half-rate).
+        pub struct NV_GPU_CLOCK_CLK_DOMAIN_FREQS_ENUM_V1 {
+            pub version: NvVersion,
+            /// +4: selector u8 (input) · +6: count u16 (output) · +8: 512×u32 freqs
+            pub rest: [u8; 2052],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLK_DOMAIN_FREQS_ENUM NV_GPU_CLOCK_CLK_DOMAIN_FREQS_ENUM_V1(1) = 0x808 }
+
+    impl NV_GPU_CLOCK_CLK_DOMAIN_FREQS_ENUM {
+        /// Domain selector input (+4).
+        pub fn set_selector(&mut self, selector: u8) {
+            self.rest[0] = selector;
+        }
+
+        /// Frequency count output (+6, u16).
+        pub fn count(&self) -> u16 {
+            u16::from_le_bytes(self.rest[2..4].try_into().unwrap_or([0; 2]))
+        }
+
+        /// The filled frequency table (MHz), truncated to `count`.
+        pub fn freqs_mhz(&self) -> Vec<u32> {
+            let count = (self.count() as usize).min(512);
+            (0..count)
+                .map(|k| {
+                    let o = 4 + k * 4;
+                    u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]))
+                })
+                .collect()
+        }
+    }
+
+    nvstruct! {
+        /// Public clock info (ID 0x1B46D4CC, NO RM — escape 0x070010B with
+        /// the secondary "escDomainData" wire type; magic 0x10188 = 392B).
+        /// Driver fills count@+4 and lands {value, flag, max} u32 triples
+        /// into the 32×12B slot area at type-dependent offsets (observed:
+        /// type1→+8, type4→+0x38, type2→+0x5C, type8→+0x68); the caller
+        /// PRE-FILLS untouched slots with {32, ?, 100}. Raw slot access
+        /// until the slot map is confirmed on more parts.
+        pub struct NV_GPU_PUBLIC_CLOCK_INFO_V1 {
+            pub version: NvVersion,
+            /// +4: count u32 · +8..+392: 32×12B slots
+            pub rest: [u8; 388],
+        }
+    }
+
+    nvversion! { @=NV_GPU_PUBLIC_CLOCK_INFO NV_GPU_PUBLIC_CLOCK_INFO_V1(1) = 0x188 }
+
+    /// Named landing offsets (absolute) inside
+    /// [`NV_GPU_PUBLIC_CLOCK_INFO`] — where the driver wrote each wire
+    /// type's {value, flag, max} triple on the live 462.96 probe.
+    pub mod public_clock_info_slots {
+        pub const COUNT: usize = 4;
+        pub const SLOT_AREA: usize = 8;
+        pub const TYPE1: usize = 0x08;
+        pub const TYPE4: usize = 0x38;
+        pub const TYPE2: usize = 0x5C;
+        pub const TYPE8: usize = 0x68;
+    }
+
+    impl NV_GPU_PUBLIC_CLOCK_INFO {
+        /// Pre-fill every 12B slot with the driver's expected default
+        /// {32, 0, 100} triple (the handler only overwrites filled
+        /// domains; probe observed defaults 0x20/0x64).
+        pub fn preset_defaults(&mut self) {
+            for slot in 0..32 {
+                let o = 4 + slot * 12;
+                self.rest[o..o + 4].copy_from_slice(&32u32.to_le_bytes());
+                self.rest[o + 4..o + 8].copy_from_slice(&0u32.to_le_bytes());
+                self.rest[o + 8..o + 12].copy_from_slice(&100u32.to_le_bytes());
+            }
+        }
+
+        /// Domain count output (+4).
+        pub fn count(&self) -> u32 {
+            u32::from_le_bytes(self.rest[0..4].try_into().unwrap_or([0; 4]))
+        }
+
+        /// Raw u32 at absolute offset `abs` (≥8).
+        pub fn u32_at(&self, abs: usize) -> Option<u32> {
+            if abs < public_clock_info_slots::SLOT_AREA || abs + 4 > self.rest.len() + 4 {
+                return None;
+            }
+            Some(u32::from_le_bytes(
+                self.rest.get(abs - 4..abs)?.try_into().ok()?,
+            ))
+        }
+    }
+
+    nvstruct! {
+        /// Locked-clock mode status (ID 0xC4733F19, NO RM — escape
+        /// 0x07001D6, 8-byte struct). modeMask bit0..3 = four mode flags.
+        /// VERDICT DOWNGRADE (user live test 2026-09-06): returns 0 with
+        /// BOTH PerfClientLimits voltage-lock AND frequency-lock active —
+        /// this is NOT the readback of any nvoc lock plane; the control
+        /// surface it mirrors is unidentified. Keep raw; don't surface as
+        /// "locked" state.
+        pub struct NV_GPU_LOCKED_CLOCK_MODE_STATUS_V1 {
+            pub version: NvVersion,
+            pub mode_mask: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_LOCKED_CLOCK_MODE_STATUS NV_GPU_LOCKED_CLOCK_MODE_STATUS_V1(1) = 0x8 }
+
+    impl NV_GPU_CLOCK_ADC_DEVICES_INFO {
+        /// Driver-filled ADC device mask @+4.
+        pub fn mask(&self) -> u32 {
+            u32::from_le_bytes(
+                self.rest[adc_devices_info_entry::MASK - 4..adc_devices_info_entry::MASK]
+                    .try_into()
+                    .unwrap_or([0; 4]),
+            )
+        }
+
+        /// Raw u32 at record-relative offset `field` of bit `bit`.
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= adc_devices_info_entry::STRIDE {
+                return None;
+            }
+            let abs = adc_devices_info_entry::BASE
+                .checked_add(bit as usize * adc_devices_info_entry::STRIDE)?
+                .checked_add(field)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(abs - 4..abs)?.try_into().ok()?,
+            ))
+        }
+
+        /// The 16 name bytes of device `bit`.
+        pub fn rec_name(&self, bit: u32) -> Option<&[u8]> {
+            let abs = adc_devices_info_entry::BASE
+                .checked_add(bit as usize * adc_devices_info_entry::STRIDE)?
+                .checked_add(adc_devices_info_entry::REC_NAME)?;
+            self.rest.get(abs - 4..abs + 12)
+        }
+    }
+
+    impl NV_GPU_CLOCK_ADC_DEVICES_STATUS {
+        /// Seed the input mask at +4 (call before GetStatus).
+        pub fn set_mask(&mut self, mask: u32) {
+            let o = adc_devices_status_entry::MASK - 4;
+            self.rest[o..o + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+
+        /// Echoed mask @+4.
+        pub fn mask(&self) -> u32 {
+            let o = adc_devices_status_entry::MASK - 4;
+            u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        /// Raw u32 at record-relative offset `field` of bit `bit`.
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= adc_devices_status_entry::STRIDE {
+                return None;
+            }
+            let abs = adc_devices_status_entry::BASE
+                .checked_add(bit as usize * adc_devices_status_entry::STRIDE)?
+                .checked_add(field)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(abs - 4..abs)?.try_into().ok()?,
+            ))
+        }
+    }
+
+    impl NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO {
+        /// Availability status @+4 (0/1/0xF).
+        pub fn status(&self) -> u32 {
+            let o = clk_prop_regimes_info_entry::STATUS - 4;
+            u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        /// Regime mask @+8.
+        pub fn mask(&self) -> u32 {
+            let o = clk_prop_regimes_info_entry::MASK - 4;
+            u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        /// Raw u32 at record-relative offset `field` of bit `bit`.
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= clk_prop_regimes_info_entry::STRIDE {
+                return None;
+            }
+            let abs = clk_prop_regimes_info_entry::BASE
+                .checked_add(bit as usize * clk_prop_regimes_info_entry::STRIDE)?
+                .checked_add(field)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(abs - 4..abs)?.try_into().ok()?,
+            ))
+        }
+    }
+
+    impl NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL {
+        /// Seed the input mask at +8 (call before GetControl).
+        pub fn set_mask(&mut self, mask: u32) {
+            let o = clk_prop_regimes_ctrl_entry::MASK - 4;
+            self.rest[o..o + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+
+        /// Echoed mask @+8.
+        pub fn mask(&self) -> u32 {
+            let o = clk_prop_regimes_ctrl_entry::MASK - 4;
+            u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        /// Raw u32 at record-relative offset `field` of bit `bit`.
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= clk_prop_regimes_ctrl_entry::STRIDE {
+                return None;
+            }
+            let abs = clk_prop_regimes_ctrl_entry::BASE
+                .checked_add(bit as usize * clk_prop_regimes_ctrl_entry::STRIDE)?
+                .checked_add(field)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(abs - 4..abs)?.try_into().ok()?,
+            ))
+        }
+    }
+
+    nvapi! {
+        /// ADC device directory (ID 0x68789E2A, magic 0x10348). Mask seed
+        /// source for [`NvAPI_GPU_ClockAdcDevicesGetStatus`].
+        pub unsafe fn NvAPI_GPU_ClockAdcDevicesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLOCK_ADC_DEVICES_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// ADC live status (ID 0x43D9B26A, magic 0x10340) — ★P1 live
+        /// voltage/temperature telemetry (the only dynamic sensor stream
+        /// in the nvClocks audit). MASK-SEEDED at +4.
+        pub unsafe fn NvAPI_GPU_ClockAdcDevicesGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLOCK_ADC_DEVICES_STATUS) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// ClkPropRegimes directory (ID 0xCF08E934, magic 0x10A8C) — P1;
+        /// settles the archived scaling-sibling mystery ID.
+        pub unsafe fn NvAPI_GPU_ClockClkPropRegimesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// ClkPropRegimes control snapshot (ID 0x4F11EAA4, magic 0x12148).
+        /// MASK-SEEDED at +8.
+        pub unsafe fn NvAPI_GPU_ClockClkPropRegimesGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Per-domain legal frequency enumeration (ID 0x40BDDDB36, magic
+        /// 0x10808) — MHz units, selector-driven.
+        pub unsafe fn NvAPI_GPU_ClockClkDomainFreqsEnum(hPhysicalGPU: NvPhysicalGpuHandle, pFreqsEnum: *mut NV_GPU_CLOCK_CLK_DOMAIN_FREQS_ENUM) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Public clock info (ID 0x1B46D4CC, magic 0x10188, "escDomainData"
+        /// wire type, no RM). Pre-fill slots via
+        /// [`NV_GPU_PUBLIC_CLOCK_INFO::preset_defaults`] before calling.
+        pub unsafe fn NvAPI_GPU_GetPublicClockInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_PUBLIC_CLOCK_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Locked-clock mode status (ID 0xC4733F19, magic 0x10008, 8B).
+        pub unsafe fn NvAPI_GPU_GetLockedClockModeStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_LOCKED_CLOCK_MODE_STATUS) -> NvAPI_Status;
+    }
+
+    /// Layout regression tests for the nvClocks P1 batch: magic closure
+    /// and accessor round-trips at the audit-derived offsets.
+    #[cfg(test)]
+    mod p1_batch_tests {
+        use super::*;
+
+        fn put_u32(rest: &mut [u8], abs: usize, v: u32) {
+            rest[abs - 4..abs].copy_from_slice(&v.to_le_bytes());
+        }
+
+        #[test]
+        fn p1_magic_closure() {
+            // ADC INFO: 0x50 + 10*0x4C == 0x348 (840)
+            assert_eq!(
+                adc_devices_info_entry::BASE + 10 * adc_devices_info_entry::STRIDE,
+                0x348
+            );
+            assert_eq!(size_of::<NV_GPU_CLOCK_ADC_DEVICES_INFO>(), 840);
+            // ADC STATUS: 0x48 + 10*0x4C == 0x340 (832)
+            assert_eq!(
+                adc_devices_status_entry::BASE + 10 * adc_devices_status_entry::STRIDE,
+                0x340
+            );
+            assert_eq!(size_of::<NV_GPU_CLOCK_ADC_DEVICES_STATUS>(), 832);
+            // REGIMES INFO: 0x10C + 32*0x4C == 0xA8C (2700)
+            assert_eq!(
+                clk_prop_regimes_info_entry::BASE + 32 * clk_prop_regimes_info_entry::STRIDE,
+                0xA8C
+            );
+            assert_eq!(size_of::<NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO>(), 2700);
+            // REGIMES CONTROL: 0x48 + 32*0x108 == 0x2148 (8520)
+            assert_eq!(
+                clk_prop_regimes_ctrl_entry::BASE + 32 * clk_prop_regimes_ctrl_entry::STRIDE,
+                0x2148
+            );
+            assert_eq!(size_of::<NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL>(), 8520);
+            // FREQS ENUM: 8 + 512*4 == 0x808 (2056)
+            assert_eq!(size_of::<NV_GPU_CLOCK_CLK_DOMAIN_FREQS_ENUM>(), 2056);
+            // PUBLIC CLOCK INFO: 8 + 32*12 == 0x188 (392)
+            assert_eq!(size_of::<NV_GPU_PUBLIC_CLOCK_INFO>(), 392);
+            // LOCKED CLOCK MODE: 4 + 4 == 0x8
+            assert_eq!(size_of::<NV_GPU_LOCKED_CLOCK_MODE_STATUS>(), 8);
+        }
+
+        #[test]
+        fn p1_accessors() {
+            // ADC status record decode: live-shaped record
+            let mut st = NV_GPU_CLOCK_ADC_DEVICES_STATUS::default();
+            st.set_mask(0xF);
+            assert_eq!(st.mask(), 0xF);
+            let base = adc_devices_status_entry::BASE + 2 * adc_devices_status_entry::STRIDE;
+            put_u32(
+                &mut st.rest,
+                base + adc_devices_status_entry::REC_STATE,
+                0xFFFF_FFFF,
+            );
+            put_u32(
+                &mut st.rest,
+                base + adc_devices_status_entry::REC_VALUE_UV,
+                631_250,
+            );
+            st.rest[base + adc_devices_status_entry::REC_VFPID_A - 4] = 29;
+            st.rest[base + adc_devices_status_entry::REC_TYPE - 4] = 2;
+            put_u32(
+                &mut st.rest,
+                base + adc_devices_status_entry::REC_VALUE2,
+                0x7FFF_FFFF,
+            );
+            assert_eq!(
+                st.rec_u32(2, adc_devices_status_entry::REC_STATE),
+                Some(0xFFFF_FFFF)
+            );
+            assert_eq!(
+                st.rec_u32(2, adc_devices_status_entry::REC_VALUE_UV),
+                Some(631_250)
+            );
+            assert_eq!(
+                st.rest[base + adc_devices_status_entry::REC_VFPID_A - 4],
+                29
+            );
+            assert_eq!(st.rec_u32(2, adc_devices_status_entry::REC_TYPE), Some(2));
+            assert_eq!(
+                st.rec_u32(2, adc_devices_status_entry::REC_VALUE2),
+                Some(0x7FFF_FFFF)
+            );
+
+            // Regimes info record decode
+            let mut info = NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO::default();
+            put_u32(&mut info.rest, clk_prop_regimes_info_entry::MASK, 0x3);
+            let base = clk_prop_regimes_info_entry::BASE + 1 * clk_prop_regimes_info_entry::STRIDE;
+            put_u32(
+                &mut info.rest,
+                base + clk_prop_regimes_info_entry::REC_STATUS,
+                0,
+            );
+            put_u32(
+                &mut info.rest,
+                base + clk_prop_regimes_info_entry::REC_TYPE,
+                0xF,
+            );
+            put_u32(
+                &mut info.rest,
+                base + clk_prop_regimes_info_entry::REC_VALUE,
+                1470,
+            );
+            assert_eq!(
+                info.rec_u32(1, clk_prop_regimes_info_entry::REC_TYPE),
+                Some(0xF)
+            );
+            assert_eq!(
+                info.rec_u32(1, clk_prop_regimes_info_entry::REC_VALUE),
+                Some(1470)
+            );
+
+            // Regimes control: mask seed + sparse record fields
+            let mut ctl = NV_GPU_CLOCK_CLK_PROP_REGIMES_CONTROL::default();
+            ctl.set_mask(1 << 5);
+            let base = clk_prop_regimes_ctrl_entry::BASE + 5 * clk_prop_regimes_ctrl_entry::STRIDE;
+            put_u32(
+                &mut ctl.rest,
+                base + clk_prop_regimes_ctrl_entry::REC_VALUE,
+                1638400,
+            );
+            assert_eq!(
+                ctl.rec_u32(5, clk_prop_regimes_ctrl_entry::REC_VALUE),
+                Some(1_638_400)
+            );
+            assert_eq!(
+                ctl.rec_u32(6, clk_prop_regimes_ctrl_entry::REC_VALUE),
+                Some(0)
+            );
+
+            // Freqs enum decode
+            let mut fe = NV_GPU_CLOCK_CLK_DOMAIN_FREQS_ENUM::default();
+            fe.set_selector(2);
+            fe.rest[2..4].copy_from_slice(&3u16.to_le_bytes());
+            for (k, v) in [405u32, 810, 6001].into_iter().enumerate() {
+                let o = 4 + k * 4;
+                fe.rest[o..o + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            assert_eq!(fe.count(), 3);
+            assert_eq!(fe.freqs_mhz(), vec![405, 810, 6001]);
+
+            // Public clock info: presets + typed landing zone
+            let mut pc = NV_GPU_PUBLIC_CLOCK_INFO::default();
+            pc.preset_defaults();
+            assert_eq!(pc.u32_at(public_clock_info_slots::TYPE1), Some(32));
+            assert_eq!(pc.u32_at(public_clock_info_slots::TYPE1 + 8), Some(100));
+            put_u32(&mut pc.rest, public_clock_info_slots::TYPE4 + 4, 4);
+            assert_eq!(pc.u32_at(public_clock_info_slots::TYPE4 + 4), Some(4));
+
+            // Locked clock mode: plain field struct
+            let mut lm = NV_GPU_LOCKED_CLOCK_MODE_STATUS::default();
+            lm.mode_mask = 0b1010;
+            assert_eq!(lm.mode_mask, 0b1010);
+        }
+    }
 }

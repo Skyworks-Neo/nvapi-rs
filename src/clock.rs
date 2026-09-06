@@ -2029,6 +2029,233 @@ impl RawConversion for power::undocumented::NV_VOLT_STATUS {
     }
 }
 
+/// One voltage-controller descriptor from the private
+/// `ClockClkVoltControllerGetInfo` read (ID 0xEC6FCD0B). Field semantics
+/// are UNCONFIRMED — no non-empty table has been observed yet (live
+/// 462.96 GTX 1650 SUPER: mask 0); names carry the record-relative
+/// offsets until a laptop 610 A/B anchors them.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct ClkVoltControllerInfoEntry {
+    pub bit: u32,
+    pub b04: u8,
+    pub b05: u8,
+    pub b06: u8,
+    pub u16_08: u16,
+    pub u32_0c: u32,
+    pub u32_10: u32,
+    pub u32_14: u32,
+    /// wire i16, sign-extended by the handler (on the freq sibling the
+    /// neighbouring slots hold a symmetric min/max pair + a 256 = Q8.8
+    /// scale factor — plausible hypothesis here too)
+    pub i32_38: i32,
+    /// wire i16, sign-extended by the handler
+    pub i32_3c: i32,
+    pub u32_40: u32,
+}
+
+/// `ClockClkVoltControllerGetInfo` result: driver-filled controller mask
+/// plus one entry per active record. `Ok(None)` from the medium layer
+/// means the part exposes no voltage controllers (mask 0).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkVoltControllersInfo {
+    pub mask: u32,
+    pub entries: Vec<ClkVoltControllerInfoEntry>,
+}
+
+/// One live-status record from `ClockClkVoltControllerGetStatus`
+/// (ID 0x8506C02E). Offsets are record-relative; semantics unconfirmed.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct ClkVoltControllerStatusEntry {
+    pub bit: u32,
+    pub u32_04: u32,
+    pub u32_28: u32,
+    pub u32_2c: u32,
+    pub u32_30: u32,
+}
+
+/// `ClockClkVoltControllerGetStatus` result (mask-seeded read).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkVoltControllersStatus {
+    pub mask: u32,
+    pub entries: Vec<ClkVoltControllerStatusEntry>,
+}
+
+/// One voltage-controller record from the GET/SET_CONTROL block
+/// (IDs 0xDD41633C / 0xF9833206). `active` gates existence: the SET
+/// handler commits ONLY records with `active == 1` (and stamps the wire
+/// type byte for them). The `u32_34/38/3c` triple is wire-packed only in
+/// that case; on the freq sibling `u32_3c` is DYNAMIC — plausible live
+/// offset slot. All semantics unconfirmed pending laptop 610 A/B.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct ClkVoltControllerControlEntry {
+    pub bit: u32,
+    pub active: u32,
+    pub b04: u8,
+    pub u16_06: u16,
+    pub u32_08: u32,
+    pub u32_0c: u32,
+    pub u32_10: u32,
+    pub u32_34: u32,
+    pub u32_38: u32,
+    pub u32_3c: u32,
+}
+
+/// GET_CONTROL snapshot of the voltage-controller block (mask-seeded at
+/// +4; entries one per record the driver reports active).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkVoltControllersControl {
+    pub mask: u32,
+    pub entries: Vec<ClkVoltControllerControlEntry>,
+}
+
+/// One ADC device descriptor from the directory read (ID 0x68789E2A).
+/// `channel` ids observed live: {8, 16, 32, 0xC05}.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AdcDeviceInfo {
+    pub bit: u32,
+    pub device_type: u32,
+    pub channel: u32,
+    /// 16 raw name bytes (offset rec+8..24; ASCII on live parts)
+    pub name: [u8; 16],
+}
+
+/// `ClockAdcDevicesGetInfo` result — the mask seeds
+/// [`PhysicalGpu::adc_devices_status`].
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AdcDevicesInfo {
+    pub mask: u32,
+    pub entries: Vec<AdcDeviceInfo>,
+}
+
+/// One live ADC channel reading (ID 0x43D9B26A) — ★P1: the only dynamic
+/// sensor stream in the nvClocks audit. `value_uv` holds the RAIL voltage
+/// in µV — cross-certified live: the four channels read DIFFERENT rails
+/// (idle 625000/631250/637500, load 1043750). `vf_point_id_a`/`b` are the
+/// VF-table voltage-point index (锁定电压点 id; idle ≈630 mV ↔ 28-31,
+/// load 1043 mV ↔ 94-96) — NOT temperatures; the two ids sit ±1 apart
+/// (current-vs-target or min-vs-max tracking hypothesis). `value2` is
+/// type-dependent (0x7FFFFFFF sentinel observed).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct AdcDeviceStatusEntry {
+    pub bit: u32,
+    /// u32 state (−1 observed = invalid/reserved)
+    pub state: u32,
+    /// rail voltage, µV (high-confidence hypothesis)
+    pub value_uv: u32,
+    /// VF-table voltage-point index (see type doc)
+    pub vf_point_id_a: u8,
+    /// always 0 observed
+    pub reserved: u8,
+    /// second VF-point index, ±1 of [`Self::vf_point_id_a`]
+    pub vf_point_id_b: u8,
+    /// value format: 1 = no value / 2 = u32 / 3,4 = u8
+    pub value_format: u8,
+    pub value2: u32,
+}
+
+/// `ClockAdcDevicesGetStatus` result (mask-seeded from
+/// [`PhysicalGpu::adc_devices_info`]).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AdcDevicesStatus {
+    pub mask: u32,
+    pub entries: Vec<AdcDeviceStatusEntry>,
+}
+
+/// One regime record from `ClockClkPropRegimesGetInfo` (ID 0xCF08E934).
+/// `regime_type` is the driver-remapped enum (wire byte through a 19-entry
+/// jump table → {1..7, 9, 0xF..0x1A}); `value` is the regime's freq or
+/// voltage anchor (units unconfirmed — live table was empty).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct ClkPropRegimeInfoEntry {
+    pub bit: u32,
+    pub status: u32,
+    pub regime_type: u32,
+    pub value: u32,
+}
+
+/// `ClockClkPropRegimesGetInfo` result. `availability` is the wire
+/// 3-state at +4 (0/1/0xF — suspected "regime feature present" flag).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkPropRegimesInfo {
+    pub availability: u32,
+    pub mask: u32,
+    pub entries: Vec<ClkPropRegimeInfoEntry>,
+}
+
+/// One regime record from `ClockClkPropRegimesGetControl`
+/// (ID 0x4F11EAA4) — the control-view snapshot paired with
+/// [`ClkPropRegimesInfo`].
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct ClkPropRegimeControlEntry {
+    pub bit: u32,
+    pub status: u32,
+    pub value: u32,
+}
+
+/// `ClockClkPropRegimesGetControl` result (mask-seeded at +8).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkPropRegimesControl {
+    pub mask: u32,
+    pub entries: Vec<ClkPropRegimeControlEntry>,
+}
+
+/// Per-clock-domain legal frequency enumeration
+/// (ID 0x40BDDDB36). **`freqs_mhz` is in MHz** — the only non-kHz table
+/// in the family (live: selector 0 → 141 core points 30..2130 step 15;
+/// 2 → memory [405, 810, 5001, 5751, 6001]).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkDomainFreqsEnum {
+    pub selector: u8,
+    pub freqs_mhz: Vec<u32>,
+}
+
+/// Raw decoded slot triple from `GetPublicClockInfo` (ID 0x1B46D4CC).
+/// The driver lands {value, flag, max} at type-dependent slots
+/// (type1→+8, type4→+0x38, type2→+0x5C, type8→+0x68); untouched slots
+/// keep the {32, 0, 100} preset.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct PublicClockInfoSlot {
+    /// slot index (0..32); absolute offset = 8 + index*12
+    pub index: usize,
+    pub value: u32,
+    pub flag: u32,
+    pub max: u32,
+}
+
+/// `GetPublicClockInfo` result: driver count + the raw 32-slot area.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PublicClockInfo {
+    pub count: u32,
+    pub slots: Vec<PublicClockInfoSlot>,
+}
+
+/// `GetLockedClockModeStatus` (ID 0xC4733F19): bit0..3 mode flags.
+/// NOT a readback of the nvoc lock planes — live 0 even with
+/// PerfClientLimits voltage-lock AND frequency-lock active; the
+/// control surface it mirrors is unidentified.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct LockedClockModeStatus {
+    pub mode_mask: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
