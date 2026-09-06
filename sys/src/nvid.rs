@@ -1811,6 +1811,11 @@ Unknown_593E8644_LifecycleInit = 0x593e8644,
     NvAPI_GPU_ClockClkPropTopsSetControl = 0x56981468,
     NvAPI_GPU_ClockClkFreqControllerGetInfo = 0x58f4f4c1,
     NvAPI_GPU_ClockClkVfRelsGetInfo = 0x5a769461,
+    /// One QI id serves both directory sizes — the V1(0x10348)/V2(0x109C8)
+    /// stamps select the slot count (10 vs 32). V2 is REQUIRED on parts
+    /// exposing >10 devices (4060 Laptop/R610 rejects V1 with -174
+    /// INSUFFICIENT_BUFFER); the sys layer exposes a second FFI symbol
+    /// typed for the V2 buffer against this same id.
     NvAPI_GPU_ClockAdcDevicesGetInfo = 0x68789e2a,
     NvAPI_GPU_ClockClkPropRegimesSetControl = 0x6bd3bb9e,
     NvAPI_GPU_ClockClkPropTopsGetControl = 0x725a4552,

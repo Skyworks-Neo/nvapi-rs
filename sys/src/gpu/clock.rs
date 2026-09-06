@@ -4300,10 +4300,13 @@ pub mod undocumented {
     }
 
     nvstruct! {
-        /// ADC device directory (ID 0x68789E2A, RM 0x208090A0-family; magic
-        /// 0x10348 = (1<<16)|840). Driver fills mask@+4 and per-bit device
-        /// descriptors; the mask seeds
-        /// [`NV_GPU_CLOCK_ADC_DEVICES_STATUS`].
+        /// ADC device directory V1 (ID 0x68789E2A, RM 0x208090A0-family;
+        /// magic 0x10348 = (1<<16)|840). Driver fills mask@+4 and per-bit
+        /// device descriptors; the mask seeds
+        /// [`NV_GPU_CLOCK_ADC_DEVICES_STATUS`]. Parts with MORE than 10
+        /// ADC devices reject this stamp with -174
+        /// INSUFFICIENT_BUFFER (live 4060 Laptop/R610) — the caller must
+        /// fall back to [`NV_GPU_CLOCK_ADC_DEVICES_INFO2`] (32 slots).
         pub struct NV_GPU_CLOCK_ADC_DEVICES_INFO_V1 {
             pub version: NvVersion,
             /// +4 .. +840: mask@+4, header, 10×0x4C records @0x50
@@ -4312,6 +4315,49 @@ pub mod undocumented {
     }
 
     nvversion! { @=NV_GPU_CLOCK_ADC_DEVICES_INFO NV_GPU_CLOCK_ADC_DEVICES_INFO_V1(1) = 0x348 }
+
+    nvstruct! {
+        /// ADC device directory V2 — magic 0x109C8 = (1<<16)|2504, same
+        /// layout with 32 record slots. Accepted (and REQUIRED) by parts
+        /// exposing more than 10 devices (live 4060 Laptop/R610 rejected
+        /// V1 with -174).
+        pub struct NV_GPU_CLOCK_ADC_DEVICES_INFO_V2 {
+            pub version: NvVersion,
+            /// +4 .. +2504: mask@+4, header, 32×0x4C records @0x50
+            pub rest: [u8; 2500],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_ADC_DEVICES_INFO2 NV_GPU_CLOCK_ADC_DEVICES_INFO_V2(2) = 0x9c8 }
+
+    impl NV_GPU_CLOCK_ADC_DEVICES_INFO2 {
+        pub fn mask(&self) -> u32 {
+            u32::from_le_bytes(
+                self.rest[adc_devices_info_entry::MASK - 4..adc_devices_info_entry::MASK]
+                    .try_into()
+                    .unwrap_or([0; 4]),
+            )
+        }
+
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= adc_devices_info_entry::STRIDE {
+                return None;
+            }
+            let abs = adc_devices_info_entry::BASE
+                .checked_add(bit as usize * adc_devices_info_entry::STRIDE)?
+                .checked_add(field)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(abs - 4..abs)?.try_into().ok()?,
+            ))
+        }
+
+        pub fn rec_name(&self, bit: u32) -> Option<&[u8]> {
+            let abs = adc_devices_info_entry::BASE
+                .checked_add(bit as usize * adc_devices_info_entry::STRIDE)?
+                .checked_add(adc_devices_info_entry::REC_NAME)?;
+            self.rest.get(abs - 4..abs + 12)
+        }
+    }
 
     /// ADC live-status offsets ([`NV_GPU_CLOCK_ADC_DEVICES_STATUS`]) — ★P1:
     /// the ONLY live telemetry stream found in the whole nvClocks audit.
@@ -4645,9 +4691,29 @@ pub mod undocumented {
     }
 
     nvapi! {
-        /// ADC device directory (ID 0x68789E2A, magic 0x10348). Mask seed
-        /// source for [`NvAPI_GPU_ClockAdcDevicesGetStatus`].
+        /// ADC device directory V1 (ID 0x68789E2A, magic 0x10348, 10
+        /// slots). Parts with more devices reject it with -174 — fall
+        /// back to [`NvAPI_GPU_ClockAdcDevicesGetInfoV2`].
         pub unsafe fn NvAPI_GPU_ClockAdcDevicesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLOCK_ADC_DEVICES_INFO) -> NvAPI_Status;
+    }
+
+    /// ADC device directory V2 entry point — SAME QI id as
+    /// [`NvAPI_GPU_ClockAdcDevicesGetInfo`] (0x68789E2A); the stamp in the
+    /// caller's buffer selects the slot count. Declared by hand (not via
+    /// `nvapi!`) because the macro derives the `Api` variant from the fn
+    /// name and the enum cannot carry a duplicate id.
+    pub unsafe fn NvAPI_GPU_ClockAdcDevicesGetInfoV2(
+        hPhysicalGPU: NvPhysicalGpuHandle,
+        pInfo: *mut NV_GPU_CLOCK_ADC_DEVICES_INFO2,
+    ) -> NvAPI_Status {
+        // identical signature up to the pointee; route through the V1
+        // symbol so the QI cache/log path stays shared
+        unsafe {
+            NvAPI_GPU_ClockAdcDevicesGetInfo(
+                hPhysicalGPU,
+                pInfo as *mut NV_GPU_CLOCK_ADC_DEVICES_INFO,
+            )
+        }
     }
 
     nvapi! {

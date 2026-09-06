@@ -7681,6 +7681,47 @@ impl PhysicalGpu {
     /// ADC devices.
     pub fn adc_devices_info(&self) -> crate::Result<Option<crate::clock::AdcDevicesInfo>> {
         trace!("gpu.adc_devices_info()");
+        // V1 (10 slots) first; parts exposing more devices reject it with
+        // -174 INSUFFICIENT_BUFFER (live 4060 Laptop/R610) — retry with the
+        // 32-slot V2 stamp (same QI id, buffer stamp selects the size).
+        match self.adc_devices_info_v1() {
+            Ok(v) => return Ok(v),
+            Err(crate::Error::Nvapi(e)) if e.status == crate::Status::InsufficientBuffer => {}
+            Err(e) => return Err(e),
+        }
+        use clock::undocumented::{NV_GPU_CLOCK_ADC_DEVICES_INFO2, adc_devices_info_entry};
+        let mut raw = NV_GPU_CLOCK_ADC_DEVICES_INFO2::default();
+        raw.version =
+            <NV_GPU_CLOCK_ADC_DEVICES_INFO2 as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockAdcDevicesGetInfoV2(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockAdcDevicesGetInfo, st)
+            .map_err(crate::Error::from)?;
+        let mask = raw.mask();
+        if mask == 0 {
+            return Ok(None);
+        }
+        let entries = (0..32)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .map(|bit| crate::clock::AdcDeviceInfo {
+                bit,
+                device_type: raw
+                    .rec_u32(bit, adc_devices_info_entry::REC_TYPE)
+                    .unwrap_or(0),
+                channel: raw
+                    .rec_u32(bit, adc_devices_info_entry::REC_CHANNEL)
+                    .unwrap_or(0),
+                name: raw
+                    .rec_name(bit)
+                    .and_then(|s| <[u8; 16]>::try_from(s).ok())
+                    .unwrap_or([0; 16]),
+            })
+            .collect();
+        Ok(Some(crate::clock::AdcDevicesInfo { mask, entries }))
+    }
+
+    fn adc_devices_info_v1(&self) -> crate::Result<Option<crate::clock::AdcDevicesInfo>> {
         use clock::undocumented::{NV_GPU_CLOCK_ADC_DEVICES_INFO, adc_devices_info_entry};
 
         let mut raw = NV_GPU_CLOCK_ADC_DEVICES_INFO::default();
