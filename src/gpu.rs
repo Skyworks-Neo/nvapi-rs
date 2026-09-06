@@ -6578,6 +6578,67 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_ClientFanPoliciesSetControl, status)
     }
 
+    /// Read the legacy per-fan-policy enable-flag table
+    /// (`ClientFanPoliciesGetControl` NDA 0xE543C540, structure magic
+    /// `0x10038`). The only fan-policy control surface some pre-R538 boards
+    /// serve — on the R465 reference card (GTX 1650 SUPER) the handler's
+    /// internal policy state (`v13 == 2`) rejects the 0x200DC and 0x2004C
+    /// stamps outright, leaving V1 as the sole writable surface there.
+    /// The driver refreshes its internal table via GetInfo when the caller
+    /// sends count = 0, then fills the per-slot policy ids. GET does NOT
+    /// echo the flag bytes (ids only) — flags are write-only here.
+    /// Returns `Ok(None)` when the driver reports no policies.
+    pub fn fan_policy_flags(&self) -> crate::NvapiResult<Option<Vec<FanPolicyFlag>>> {
+        trace!("gpu.fan_policy_flags()");
+        let mut raw = cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1::new();
+        let status = unsafe {
+            sys::api::NvAPI_GPU_ClientFanPoliciesGetControl(
+                self.0,
+                &mut raw as *mut _ as *mut cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL,
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientFanPoliciesGetControl, status)?;
+        let count = (raw.count as usize).min(4);
+        let mut out = Vec::with_capacity(count);
+        for slot in &raw.slots.data[..count] {
+            out.push(FanPolicyFlag {
+                policy_id: slot.policy_id,
+                enabled: slot.flag & 1 != 0,
+            });
+        }
+        Ok((count > 0).then_some(out))
+    }
+
+    /// Write the legacy per-fan-policy enable flags
+    /// (`ClientFanPoliciesSetControl` NDA 0xC181947A, structure magic
+    /// `0x10038`). The driver resolves each `policy_id` against its internal
+    /// table (unknown id → InvalidArgument) and consumes the flag's bit 0
+    /// per policy, building the selected-policy mask. NOTE: this is an
+    /// enable-flag write, not a fan-curve write — curve points have no V1
+    /// surface (see [`Self::fan_policy_flags`]).
+    pub fn set_fan_policy_flags(&self, flags: &[FanPolicyFlag]) -> crate::NvapiResult<()> {
+        trace!("gpu.set_fan_policy_flags({:?})", flags);
+        if flags.is_empty() || flags.len() > 4 {
+            return Err(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClientFanPoliciesSetControl,
+                sys::Status::InvalidArgument,
+            ));
+        }
+        let mut raw = cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1::new();
+        raw.count = flags.len() as u8;
+        for (slot, f) in raw.slots.data.iter_mut().zip(flags) {
+            slot.policy_id = f.policy_id;
+            slot.flag = f.enabled as u8;
+        }
+        let status = unsafe {
+            sys::api::NvAPI_GPU_ClientFanPoliciesSetControl(
+                self.0,
+                &raw as *const _ as *const cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL,
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientFanPoliciesSetControl, status)
+    }
+
     /// Reset one fan-curve slot to factory (`FanPolicySetControl` NDA
     /// 0x2B2A2A45, structure magic `0x214AC`). RE'd byte-exact from ref tool 2
     /// `GPUHandle::resetFanCurve` and cross-checked against the impl.dll
@@ -8121,6 +8182,18 @@ pub struct FanCurvePoint {
     pub rpm: u32,
 }
 
+/// One per-fan-policy enable flag from the legacy `0x10038` table (see
+/// [`PhysicalGpu::fan_policy_flags`]). The V1 surface carries enable bits,
+/// not curve points.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FanPolicyFlag {
+    /// driver-side policy identifier (echoed by GET, resolved by SET)
+    pub policy_id: u32,
+    /// enable flag (SET consumes bit 0)
+    pub enabled: bool,
+}
+
 /// A single fan-curve slot as reported by [`PhysicalGpu::fan_curves`] /
 /// targeted by [`PhysicalGpu::set_fan_curve`]. The table holds up to 4 slots
 /// (ref tool 2's runtime "Next Curve" cycles `(idx + 1) % count`); `count` — the
@@ -8386,6 +8459,50 @@ mod fan_curve_tests {
                 rpm_q16
             ),
             8
+        );
+    }
+
+    /// Legacy `0x10038` table canary: same 220-byte table geometry as the
+    /// 0x200DC table (R465 handler fills/reads 52-byte slots at +12 for up
+    /// to 4 policies; stamp's 56-byte size field does NOT bound the buffer —
+    /// same pattern as ClientPStateLimitStatus's 164B-buffer/0x10088-stamp).
+    #[test]
+    fn fan_policy_flags_legacy_layout() {
+        assert_eq!(
+            cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1::MAGIC,
+            0x10038
+        );
+        assert_eq!(
+            std::mem::size_of::<cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1>(
+            ),
+            4 + 1 + 7 + 4 * 52
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_CONTROL_LEGACY_V1,
+                slots
+            ),
+            12
+        );
+        assert_eq!(
+            std::mem::size_of::<cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_SLOT_LEGACY_V1>(),
+            52
+        );
+        // slot +0 = policy id (table +12), slot +4 = flag (table +16) — the
+        // two fields the R465 SET path consumes (`52*k + a2 + 12` / `+ 16`).
+        assert_eq!(
+            std::mem::offset_of!(
+                cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_SLOT_LEGACY_V1,
+                policy_id
+            ),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                cooler::undocumented::NV_GPU_CLIENT_FAN_POLICIES_SLOT_LEGACY_V1,
+                flag
+            ),
+            4
         );
     }
 
