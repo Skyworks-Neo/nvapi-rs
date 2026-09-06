@@ -4766,7 +4766,9 @@ pub mod undocumented {
     nvstruct! {
         /// NAFLL device directory (ID 0x2BC9F805, RM 0x208090B0, magic
         /// 0x20C58 = (2<<16)|3160 = 0x58 + 32×0x60). No input seed. Live
-        /// TU116: mask 0x7F, header {u8@8=0x80, 6250@0xC, 450000@0x10}.
+        /// TU116: mask 0x7F, header {u8@8=0x80, 6250@0xC, 450000@0x10};
+        /// live 4060 Laptop/R610 identical geometry (all type=3, domains
+        /// {3,4,5,2,0,A,B}, mode = 0xFFF0+domain-dependent low bits).
         pub struct NV_GPU_CLOCK_NAFLL_DEVICES_INFO_V2 {
             pub version: NvVersion,
             /// +4 .. +3160: mask@+4, header, 32×0x60 records @0x58
@@ -4815,9 +4817,11 @@ pub mod undocumented {
     nvstruct! {
         /// NAFLL devices status (ID 0xAFA4113C, RM 0x208090B1, v1 magic
         /// 0x10F48). MASK-SEEDED at +4. V2/V3/V6 stamps exist on 610 but
-        /// v1 is the cross-generation-stable surface (live 462.96:
-        /// 7 records, static 80-entry u16 tables 29..125 — voltage×10mV
-        /// or freq÷15MHz ladder, unit unclosed).
+        /// v1 is the cross-generation-stable surface (static 80-entry u16
+        /// ladders per device; unit unclosed — voltage×10mV or freq÷15MHz).
+        /// 4060/R610: ladders DIFFER per device (1650S had 4 identical) —
+        /// domain-11 device steps coarser (30,34,40,…); tail flag 0x05/0x03
+        /// vs 1650S 0x02 (per-part/platform value).
         pub struct NV_GPU_CLOCK_NAFLL_DEVICES_STATUS_V1 {
             pub version: NvVersion,
             /// +4 .. +3912: mask@+4, records @0x48 (stamp size 0xF48;
@@ -4860,7 +4864,9 @@ pub mod undocumented {
         /// ClkFreqController directory (ID 0x58F4F4C1, RM 0x20809025,
         /// magic 0x10C4C = (1<<16)|3148 = 0x4C + 32×0x60). No seed.
         /// Live TU116: mask 0x7, records carry {1638400 max_kHz,
-        /// −18750/+18750 offset pair}.
+        /// −18750/+18750 offset pair}. 4060 Laptop/R610: mask 0 — this
+        /// controller tree is TU116-specific so far (same emptiness as
+        /// its ClkVolt sibling there).
         pub struct NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_INFO_V1 {
             pub version: NvVersion,
             /// +4 .. +3148: mask@+4, header, 32×0x60 records @0x4C
@@ -4910,8 +4916,10 @@ pub mod undocumented {
         /// "hwfsControlEscData" string in the binary anchors this ID).
         /// Flat 52-byte struct, no mask/records: +4 u8 in, +5 u8 out,
         /// +0x24 u32 selector (jump-table 0..0x1D), +0x28/+0x2C/+0x30
-        /// u32 in/out. Live sel=2 → {out=10, 0x7FFFFFFF, 64, 256(Q8 1.0?)};
-        /// sel 0/1/3/4 → -104 on TU116.
+        /// u32 in/out. Live sel=2 → {out=10, 0x7FFFFFFF, 64, 256(Q8 1.0?)}
+        /// on BOTH TU116/462.96 and 4060/R610; sel 0/1/3 → -104 both;
+        /// sel 4/5 → -104 on TU116 but -5 on 4060 (jump-table size is
+        /// per-generation).
         pub struct NV_GPU_THERMAL_HWFS_CONTROL_V1 {
             pub version: NvVersion,
             /// +4: u8 input selector pass-through
