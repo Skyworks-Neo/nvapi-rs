@@ -4574,7 +4574,9 @@ impl PhysicalGpu {
         use clock::undocumented::{
             PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V1_LEGACY_MAGIC,
             PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN, PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC,
-            perf_pstates_legacy_domain_clock, perf_pstates_legacy_mask, perf_pstates_legacy_record,
+            perf_pstates_legacy_domain_clock, perf_pstates_legacy_header_plausible,
+            perf_pstates_legacy_id_from_header, perf_pstates_legacy_mask,
+            perf_pstates_legacy_record,
         };
 
         for (len, magic, tag) in [
@@ -4597,13 +4599,32 @@ impl PhysicalGpu {
             match crate::status_result(sys::Api::NvAPI_GPU_PerfPstatesGetInfoPrivate, status) {
                 Ok(()) => {
                     let mask = perf_pstates_legacy_mask(&buf);
-                    let pstates = (0..32u32)
-                        .filter(|b| mask & (1 << b) != 0)
+                    // Pre-pass: the pstate-ID source is a per-buffer
+                    // property of the driver generation — R465 carries the
+                    // REAL pstate number in header +4 (P8/P5/P3/P2/P0 for a
+                    // 1650 SUPER) with the slot index at +12, while
+                    // R538/V100 keep the ID at +12. Deciding on the whole
+                    // record set avoids per-record ambiguity.
+                    let bits: Vec<u32> = (0..32u32).filter(|b| mask & (1 << b) != 0).collect();
+                    let records: Vec<(u32, u32, u32, u8)> = bits
+                        .iter()
+                        .map(|&b| perf_pstates_legacy_record(&buf, b))
+                        .collect();
+                    let id_from_header = perf_pstates_legacy_id_from_header(&records);
+                    let pstates = bits
+                        .into_iter()
                         .map(|b| {
-                            let (ty, min, max, pstate) = perf_pstates_legacy_record(&buf, b);
+                            let (ty, min, max, slot_pstate) = perf_pstates_legacy_record(&buf, b);
+                            let pstate = if id_from_header {
+                                // R465-era: +4 IS the pstate number.
+                                min as u8
+                            } else {
+                                slot_pstate
+                            };
                             trace!(
                                 "gpu.pstate_levels_domain(): legacy {tag} bit {b} → \
-                                 P{pstate} type {ty} {min}-{max} kHz"
+                                 P{pstate} (id from {}) type {ty} hdr {min}-{max} kHz",
+                                if id_from_header { "+4" } else { "+12" }
                             );
                             // 0 = the driver didn't fill the legacy header
                             // min/max (live V100: the clocks live in the
@@ -4616,12 +4637,19 @@ impl PhysicalGpu {
                             // boost). Header fields take precedence when a
                             // driver does fill them.
                             let clocks = perf_pstates_legacy_domain_clock(&buf, b, domain);
-                            let min = if min > 0 {
+                            // Header min/max are kHz only when plausible:
+                            // R465 fills +4 with the pstate number
+                            // (8/5/3/2/0 for P8/P5/P3/P2/P0 — surfaced as
+                            // "Min 0.008 MHz" when trusted) and V100 leaves
+                            // them zero. The per-domain sub-table is stable
+                            // across all decoded generations — fall back
+                            // to it for implausible header values.
+                            let min = if perf_pstates_legacy_header_plausible(min) {
                                 Some(min)
                             } else {
                                 clocks.map(|(_, live_min, _)| live_min)
                             };
-                            let max = if max > 0 {
+                            let max = if perf_pstates_legacy_header_plausible(max) {
                                 Some(max)
                             } else {
                                 clocks.map(|(_, _, mx)| mx)
@@ -4644,7 +4672,6 @@ impl PhysicalGpu {
         }
         Ok(None)
     }
-
     /// P-State level table for the default (GPC/core) clock-domain. Convenience
     /// for [`pstate_levels_domain`](Self::pstate_levels_domain)(0).
     pub fn pstate_levels(&self) -> crate::NvapiResult<Option<PStateLevelsInfo>> {

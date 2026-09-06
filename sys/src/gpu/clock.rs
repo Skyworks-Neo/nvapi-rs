@@ -1000,12 +1000,24 @@ pub mod undocumented {
     //   +0  u32 clock-domain type (semantics live; V1 re-indexes by pstate
     //       number — multi-domain slots overwrite — V3 keeps every slot,
     //       so prefer V3)
-    //   +4  u32 min_kHz
+    //   +4  u32 min_kHz   ← R538-era; R465-era: PSTATE NUMBER (see below)
     //   +8  u32 max_kHz (bit0 = driver flag, masked off)
-    //   +12 u8  pstate number
+    //   +12 u8  pstate number (R538/V100-era); R465-era: slot index
     // (V1 aggregates mask bits BY pstate number — bit p ⇔ P{p} present;
     //  V3's mask is the raw slot mask and the pstate number rides in each
     //  record. Iterating set bits and reading record.pstate decodes BOTH.)
+    //
+    // GENERATION SPLIT for the header vs +12 semantics — three live decodes:
+    //   R538 (538.78 IDA): +4/+8 = real kHz bounds, +12 = pstate number.
+    //   V100 (2026-09-02 live): header zero, +12 = pstate number.
+    //   R465 (462.96 live, GTX 1650 SUPER): +4 = pstate number (records
+    //       arrive P8/P5/P3/P2/P0), +12 = slot index 0..n, +8 = 0. Trusting
+    //       +12 labels the rows P0..P4 (wrong), trusting +4 as kHz yields
+    //       "Min 0.008 MHz" (wrong). The per-buffer decider is
+    //       perf_pstates_legacy_id_from_header; the kHz plausibility gate
+    //       routes header values to the clock columns only when they are
+    //       actually frequencies. The per-domain sub-table (below) is
+    //       stable across all three generations.
     // ------------------------------------------------------------------
 
     /// V3 legacy version magic — driver-accepted value 0x319C8 (= the
@@ -1043,6 +1055,11 @@ pub mod undocumented {
     /// equals the get-private-freq-domain-info Type sequence of bits 1..9
     /// exactly.
     ///
+    /// Re-verified on R465 (462.96, GTX 1650 SUPER, 2026-09-05): identical
+    /// entry offsets/stride (P0 GPC {nominal 645000, min 300000, max 645000},
+    /// P1 {645000, 300000, 2100000}); see
+    /// tests/pstates_private_r465_probe.rs.
+    ///
     /// Returns `(nominal_khz, live_min_khz, max_khz)` for `domain_bit` of
     /// record `bit`, or `None` when the entry is absent/out of range.
     /// NOTE the values are domain-appropriate, not uniformly kHz: on V100
@@ -1065,6 +1082,150 @@ pub mod undocumented {
             return None; // absent domain / padding
         }
         Some((dw(base + 8), dw(base + 12), dw(base + 16)))
+    }
+
+    /// Legacy record header (+4 min / +8 max) plausibility floor. R538-era
+    /// drivers fill them with real kHz bounds; R465 (462.96 live) instead
+    /// leaves small non-kHz control values there (P0..P4 → 8/5/3/2/0 — read
+    /// as "Min 0.008 MHz" by anything trusting the header), and V100-era
+    /// leaves them zero. Real clock floors seen in live decodes start at
+    /// 135000 kHz (NVML P0-min parity), so anything below 10 MHz is not a
+    /// frequency — the caller should fall back to the per-domain sub-table
+    /// (stable across all three generations, see
+    /// [`perf_pstates_legacy_domain_clock`]).
+    pub const PERF_PSTATES_LEGACY_HEADER_MIN_PLAUSIBLE_KHZ: u32 = 10_000;
+
+    pub fn perf_pstates_legacy_header_plausible(khz: u32) -> bool {
+        khz >= PERF_PSTATES_LEGACY_HEADER_MIN_PLAUSIBLE_KHZ
+    }
+
+    /// Does header +4 carry the record's P-STATE NUMBER (instead of a kHz
+    /// min)? Decided per buffer across the three decoded generations:
+    ///  - R538-era: header +4/+8 are real kHz bounds (≥ 10 MHz) → the ID
+    ///    rides at +12 (IDA-verified marshal) → `false`.
+    ///  - R465-era (462.96 live, GTX 1650 SUPER): header +4 IS the pstate
+    ///    ID — records arrive as P8/P5/P3/P2/P0 (the GPU's real pstate set)
+    ///    — and +12 is the slot index 0..n, so trusting +12 mislabels every
+    ///    row as P0..P4 → `true`.
+    ///  - V100-era: header all-zero → ID at +12 → `false`.
+    /// Rule: NO header value plausible as kHz, AND every +4 value is a valid
+    /// pstate id (≤ 15), AND the set is distinct (a real id set never
+    /// repeats). A single-record buffer cannot prove distinctness and stays
+    /// on the +12 convention.
+    pub fn perf_pstates_legacy_id_from_header(records: &[(u32, u32, u32, u8)]) -> bool {
+        if records.iter().any(|&(_, mn, mx, _)| {
+            perf_pstates_legacy_header_plausible(mn) || perf_pstates_legacy_header_plausible(mx)
+        }) {
+            return false;
+        }
+        let ids: std::collections::HashSet<u32> = records.iter().map(|&(_, mn, _, _)| mn).collect();
+        records.iter().all(|&(_, mn, _, _)| mn <= 15) && ids.len() > 1
+    }
+
+    /// Header-gate regression for the R465 get-pstate-lock misdecode
+    /// (GTX 1650 SUPER, 462.96, dumped 2026-09-05 by
+    /// tests/pstates_private_r465_probe.rs → .zcode/pstate-dumps/): the V3
+    /// legacy header carries small non-kHz values (P0..P4 → 8/5/3/2/0) while
+    /// the real bounds live in the per-domain sub-table at the V100-derived
+    /// offsets. A synthetic V3 buffer with those exact bytes must decode the
+    /// sub-table and reject the header values as clock candidates.
+    #[cfg(test)]
+    mod legacy_header_gate_tests {
+        use super::*;
+
+        /// V3 buffer: mask 0x5b, records at 72 + 2252*bit; record0 header
+        /// {type 2, "min" 8, "max" 0, pstate 0}; record6 header "min" 0;
+        /// sub-table entries at +72 + 68*domain with V100 field offsets.
+        fn synthetic_r465_v3() -> Vec<u8> {
+            let mut buf = vec![0u8; PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_LEN];
+            buf[..4].copy_from_slice(&PERF_PSTATES_INFO_PRIVATE_V3_LEGACY_MAGIC.to_ne_bytes());
+            buf[4..8].copy_from_slice(&0x5bu32.to_ne_bytes());
+            buf[8] = 0x35; // table_version
+            let put = |buf: &mut [u8], off: usize, v: u32| {
+                buf[off..off + 4].copy_from_slice(&v.to_le_bytes());
+            };
+            // record 0 (P0): type 2, header "min" 8 (non-kHz junk), max 0
+            put(&mut buf, 72, 2);
+            put(&mut buf, 76, 8);
+            buf[72 + 12] = 0;
+            // record 6 (P4): header "min" 0 → sub-table rescue (old behavior)
+            put(&mut buf, 72 + 2252 * 6, 2);
+            buf[72 + 2252 * 6 + 12] = 4;
+            // P0 GPC sub-entry: nominal 645000, min 300000, max 645000, tail 9
+            let e0 = 72 + 72;
+            put(&mut buf, e0 + 8, 645_000);
+            put(&mut buf, e0 + 12, 300_000);
+            put(&mut buf, e0 + 16, 645_000);
+            put(&mut buf, e0 + 40, 9);
+            // P4 GPC sub-entry: min 330000, max 2130000
+            let e6 = 72 + 2252 * 6 + 72;
+            put(&mut buf, e6 + 8, 2_130_000);
+            put(&mut buf, e6 + 12, 330_000);
+            put(&mut buf, e6 + 16, 2_130_000);
+            put(&mut buf, e6 + 40, 9);
+            buf
+        }
+
+        #[test]
+        fn r465_header_junk_never_reaches_the_clock_columns() {
+            let buf = synthetic_r465_v3();
+            // header values as the driver wrote them
+            let (ty, min, max, pstate) = perf_pstates_legacy_record(&buf, 0);
+            assert_eq!((ty, min, max, pstate), (2, 8, 0, 0));
+            // the sub-table carries the real bounds, same offsets as V100
+            assert_eq!(
+                perf_pstates_legacy_domain_clock(&buf, 0, 0),
+                Some((645_000, 300_000, 645_000))
+            );
+            assert_eq!(
+                perf_pstates_legacy_domain_clock(&buf, 6, 0),
+                Some((2_130_000, 330_000, 2_130_000))
+            );
+            // the gate: junk header values are implausible, real floors are not
+            assert!(!perf_pstates_legacy_header_plausible(8));
+            assert!(!perf_pstates_legacy_header_plausible(0));
+            assert!(perf_pstates_legacy_header_plausible(135_000));
+            // resolution rule the caller implements: implausible header →
+            // sub-table; plausible header → header (R538-era behavior kept)
+            let (_, hmin, hmax, _) = perf_pstates_legacy_record(&buf, 0);
+            let clocks = perf_pstates_legacy_domain_clock(&buf, 0, 0);
+            let min = if perf_pstates_legacy_header_plausible(hmin) {
+                Some(hmin)
+            } else {
+                clocks.map(|(_, live_min, _)| live_min)
+            };
+            let max = if perf_pstates_legacy_header_plausible(hmax) {
+                Some(hmax)
+            } else {
+                clocks.map(|(_, _, mx)| mx)
+            };
+            assert_eq!(min, Some(300_000));
+            assert_eq!(max, Some(645_000));
+        }
+
+        /// R465 records arrive as P8/P5/P3/P2/P0: header +4 carries the
+        /// pstate number, +12 the slot index. The decider must pick the
+        /// header for that shape and reject the V100 (all-zero header) and
+        /// R538 (kHz header) shapes.
+        #[test]
+        fn r465_pstate_ids_live_in_header_plus4() {
+            // (type, header+4, header+8, +12) — dump-verbatim 1650 SUPER set
+            let r465: Vec<(u32, u32, u32, u8)> = vec![
+                (2, 8, 0, 0),
+                (2, 5, 0, 1),
+                (2, 3, 0, 2),
+                (2, 2, 0, 3),
+                (2, 0, 0, 4),
+            ];
+            assert!(perf_pstates_legacy_id_from_header(&r465));
+            // V100: header all-zero → +12 stays the ID source
+            let v100: Vec<(u32, u32, u32, u8)> = vec![(0, 0, 0, 0), (0, 0, 0, 1), (0, 0, 0, 2)];
+            assert!(!perf_pstates_legacy_id_from_header(&v100));
+            // R538: header values are real kHz → +12 stays the ID source
+            let r538: Vec<(u32, u32, u32, u8)> =
+                vec![(0, 300_000, 2_100_000, 0), (0, 300_000, 2_100_000, 1)];
+            assert!(!perf_pstates_legacy_id_from_header(&r538));
+        }
     }
 
     // ------------------------------------------------------------------
