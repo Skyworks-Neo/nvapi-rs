@@ -7691,8 +7691,7 @@ impl PhysicalGpu {
         }
         use clock::undocumented::{NV_GPU_CLOCK_ADC_DEVICES_INFO2, adc_devices_info_entry};
         let mut raw = NV_GPU_CLOCK_ADC_DEVICES_INFO2::default();
-        raw.version =
-            <NV_GPU_CLOCK_ADC_DEVICES_INFO2 as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        raw.version = <NV_GPU_CLOCK_ADC_DEVICES_INFO2 as sys::nvapi::StructVersion>::NVAPI_VERSION;
         let st = unsafe {
             sys::api::NvAPI_GPU_ClockAdcDevicesGetInfoV2(self.0, ptr::from_mut(&mut raw).cast())
         };
@@ -7764,38 +7763,58 @@ impl PhysicalGpu {
         let Some(info) = self.adc_devices_info()? else {
             return Ok(None);
         };
-        let mut raw = NV_GPU_CLOCK_ADC_DEVICES_STATUS::default();
-        raw.set_mask(info.mask);
-        let st = unsafe {
-            sys::api::NvAPI_GPU_ClockAdcDevicesGetStatus(self.0, ptr::from_mut(&mut raw).cast())
+        // V1 (10 slots) first; >10-device parts reject it with -174 —
+        // retry with the 32-slot V2 stamp 0x109C8 (same QI id).
+        enum Raw {
+            V1(NV_GPU_CLOCK_ADC_DEVICES_STATUS),
+            V2(clock::undocumented::NV_GPU_CLOCK_ADC_DEVICES_STATUS_V2),
+        }
+        let raw = {
+            let mut v1 = NV_GPU_CLOCK_ADC_DEVICES_STATUS::default();
+            v1.set_mask(info.mask);
+            match unsafe {
+                sys::api::NvAPI_GPU_ClockAdcDevicesGetStatus(self.0, ptr::from_mut(&mut v1).cast())
+            } {
+                0 => Raw::V1(v1),
+                st_v1 => {
+                    if st_v1 as i32 == -174 {
+                        let mut v2 =
+                            clock::undocumented::NV_GPU_CLOCK_ADC_DEVICES_STATUS_V2::default();
+                        v2.set_mask(info.mask);
+                        let st2 = unsafe {
+                            sys::api::NvAPI_GPU_ClockAdcDevicesGetStatusV2(
+                                self.0,
+                                ptr::from_mut(&mut v2).cast(),
+                            )
+                        };
+                        crate::status_result(sys::Api::NvAPI_GPU_ClockAdcDevicesGetStatus, st2)
+                            .map_err(crate::Error::from)?;
+                        Raw::V2(v2)
+                    } else {
+                        crate::status_result(sys::Api::NvAPI_GPU_ClockAdcDevicesGetStatus, st_v1)
+                            .map_err(crate::Error::from)?;
+                        unreachable!()
+                    }
+                }
+            }
         };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockAdcDevicesGetStatus, st)
-            .map_err(crate::Error::from)?;
-        let entries = (0..10)
+        let entries = (0..32)
             .filter(|bit| info.mask & (1 << bit) != 0)
-            .map(|bit| crate::clock::AdcDeviceStatusEntry {
-                bit,
-                state: raw
-                    .rec_u32(bit, adc_devices_status_entry::REC_STATE)
-                    .unwrap_or(0),
-                value_uv: raw
-                    .rec_u32(bit, adc_devices_status_entry::REC_VALUE_UV)
-                    .unwrap_or(0),
-                vf_point_id_a: raw
-                    .rec_u32(bit, adc_devices_status_entry::REC_VFPID_A)
-                    .unwrap_or(0) as u8,
-                reserved: raw
-                    .rec_u32(bit, adc_devices_status_entry::REC_ZERO)
-                    .unwrap_or(0) as u8,
-                vf_point_id_b: raw
-                    .rec_u32(bit, adc_devices_status_entry::REC_VFPID_B)
-                    .unwrap_or(0) as u8,
-                value_format: raw
-                    .rec_u32(bit, adc_devices_status_entry::REC_TYPE)
-                    .unwrap_or(0) as u8,
-                value2: raw
-                    .rec_u32(bit, adc_devices_status_entry::REC_VALUE2)
-                    .unwrap_or(0),
+            .map(|bit| {
+                let get = |field: usize| match &raw {
+                    Raw::V1(r) => r.rec_u32(bit, field).unwrap_or(0),
+                    Raw::V2(r) => r.rec_u32(bit, field).unwrap_or(0),
+                };
+                crate::clock::AdcDeviceStatusEntry {
+                    bit,
+                    state: get(adc_devices_status_entry::REC_STATE),
+                    value_uv: get(adc_devices_status_entry::REC_VALUE_UV),
+                    vf_point_id_a: get(adc_devices_status_entry::REC_VFPID_A) as u8,
+                    reserved: get(adc_devices_status_entry::REC_ZERO) as u8,
+                    vf_point_id_b: get(adc_devices_status_entry::REC_VFPID_B) as u8,
+                    value_format: get(adc_devices_status_entry::REC_TYPE) as u8,
+                    value2: get(adc_devices_status_entry::REC_VALUE2),
+                }
             })
             .collect();
         Ok(Some(crate::clock::AdcDevicesStatus {

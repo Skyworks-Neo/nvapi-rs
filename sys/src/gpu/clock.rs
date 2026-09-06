@@ -4317,18 +4317,21 @@ pub mod undocumented {
     nvversion! { @=NV_GPU_CLOCK_ADC_DEVICES_INFO NV_GPU_CLOCK_ADC_DEVICES_INFO_V1(1) = 0x348 }
 
     nvstruct! {
-        /// ADC device directory V2 — magic 0x109C8 = (1<<16)|2504, same
-        /// layout with 32 record slots. Accepted (and REQUIRED) by parts
-        /// exposing more than 10 devices (live 4060 Laptop/R610 rejected
-        /// V1 with -174).
+        /// ADC device directory V2 — magic **0x209F0** = (2<<16)|2544
+        /// (IDA R610.88: `cmp eax, 0x209f0` at 0x18020312A, alongside the
+        /// V1 gate 0x10348; unpack copies mask@wire+0x3C→+4, then
+        /// per-bit 4-byte records; V1 path passes count 0xA, V2 count
+        /// 0x20). Same layout as V1 with 32 slots. REQUIRED on parts
+        /// exposing more than 10 devices (4060 Laptop/R610 rejects V1
+        /// with -174). The earlier 0x109C8 guess was a stamp misread.
         pub struct NV_GPU_CLOCK_ADC_DEVICES_INFO_V2 {
             pub version: NvVersion,
-            /// +4 .. +2504: mask@+4, header, 32×0x4C records @0x50
-            pub rest: [u8; 2500],
+            /// +4 .. +2544: mask@+4, header, 32×0x4C records @0x50
+            pub rest: [u8; 2540],
         }
     }
 
-    nvversion! { @=NV_GPU_CLOCK_ADC_DEVICES_INFO2 NV_GPU_CLOCK_ADC_DEVICES_INFO_V2(2) = 0x9c8 }
+    nvversion! { @=NV_GPU_CLOCK_ADC_DEVICES_INFO2 NV_GPU_CLOCK_ADC_DEVICES_INFO_V2(2) = 0x9f0 }
 
     impl NV_GPU_CLOCK_ADC_DEVICES_INFO2 {
         pub fn mask(&self) -> u32 {
@@ -4394,8 +4397,8 @@ pub mod undocumented {
     nvstruct! {
         /// ADC live status (ID 0x43D9B26A, RM 0x208090A1, magic 0x10340 =
         /// (1<<16)|832). MASK-SEEDED at +4 (seed from
-        /// [`NV_GPU_CLOCK_ADC_DEVICES_INFO`]). V2 stamp 0x109C8 (32
-        /// devices) also accepted; V1 covers 10.
+        /// [`NV_GPU_CLOCK_ADC_DEVICES_INFO`]; use its V2 stamp when the
+        /// part exposes >10 devices — 4060 Laptop/R610 needs it).
         pub struct NV_GPU_CLOCK_ADC_DEVICES_STATUS_V1 {
             pub version: NvVersion,
             /// +4 .. +832: mask@+4, header, 10×0x4C records @0x48
@@ -4404,6 +4407,39 @@ pub mod undocumented {
     }
 
     nvversion! { @=NV_GPU_CLOCK_ADC_DEVICES_STATUS NV_GPU_CLOCK_ADC_DEVICES_STATUS_V1(1) = 0x340 }
+
+    nvstruct! {
+        /// ADC live status V2 — magic 0x109C8 = (1<<16)|2504, 32 slots,
+        /// same record layout. Required on parts exposing more than 10
+        /// ADC devices (4060 Laptop/R610; live R610.88 handler gate
+        /// `cmp eax, 0x109c8` at 0x180203C5D).
+        pub struct NV_GPU_CLOCK_ADC_DEVICES_STATUS_V2 {
+            pub version: NvVersion,
+            /// +4 .. +2504: mask@+4, header, 32×0x4C records @0x48
+            pub rest: [u8; 2500],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_ADC_DEVICES_STATUS2 NV_GPU_CLOCK_ADC_DEVICES_STATUS_V2(1) = 0x9c8 }
+
+    impl NV_GPU_CLOCK_ADC_DEVICES_STATUS2 {
+        pub fn set_mask(&mut self, mask: u32) {
+            let o = adc_devices_status_entry::MASK - 4;
+            self.rest[o..o + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= adc_devices_status_entry::STRIDE {
+                return None;
+            }
+            let abs = adc_devices_status_entry::BASE
+                .checked_add(bit as usize * adc_devices_status_entry::STRIDE)?
+                .checked_add(field)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(abs - 4..abs)?.try_into().ok()?,
+            ))
+        }
+    }
 
     /// ClkPropRegimes directory offsets ([`NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO`])
     /// — P1; settles the archived "scaling-sibling triple" mystery ID.
@@ -4719,10 +4755,27 @@ pub mod undocumented {
     }
 
     nvapi! {
-        /// ADC live status (ID 0x43D9B26A, magic 0x10340) — ★P1 live
-        /// voltage/temperature telemetry (the only dynamic sensor stream
-        /// in the nvClocks audit). MASK-SEEDED at +4.
+        /// ADC live status V1 (ID 0x43D9B26A, magic 0x10340) — ★P1 live
+        /// rail-voltage telemetry (the only dynamic sensor stream in the
+        /// nvClocks audit). MASK-SEEDED at +4.
         pub unsafe fn NvAPI_GPU_ClockAdcDevicesGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLOCK_ADC_DEVICES_STATUS) -> NvAPI_Status;
+    }
+
+    /// ADC live status V2 entry point — SAME QI id as
+    /// [`NvAPI_GPU_ClockAdcDevicesGetStatus`]; the stamp in the caller's
+    /// buffer (0x10340 vs 0x109C8) selects the slot count. Hand-written
+    /// wrapper over the V1 symbol (the `nvapi!` macro derives the `Api`
+    /// variant from the fn name; the enum cannot carry a duplicate id).
+    pub unsafe fn NvAPI_GPU_ClockAdcDevicesGetStatusV2(
+        hPhysicalGPU: NvPhysicalGpuHandle,
+        pStatus: *mut NV_GPU_CLOCK_ADC_DEVICES_STATUS_V2,
+    ) -> NvAPI_Status {
+        unsafe {
+            NvAPI_GPU_ClockAdcDevicesGetStatus(
+                hPhysicalGPU,
+                pStatus.cast::<NV_GPU_CLOCK_ADC_DEVICES_STATUS>(),
+            )
+        }
     }
 
     nvapi! {
