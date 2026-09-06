@@ -2173,8 +2173,13 @@ pub struct AdcDevicesStatus {
 
 /// One regime record from `ClockClkPropRegimesGetInfo` (ID 0xCF08E934).
 /// `regime_type` is the driver-remapped enum (wire byte through a 19-entry
-/// jump table → {1..7, 9, 0xF..0x1A}); `value` is the regime's freq or
-/// voltage anchor (units unconfirmed — live table was empty).
+/// jump table → {1..7, 9, 0xF..0x1A}). `value` is a FIXED driver constant
+/// — the 4060 Laptop/R610 table (19 entries, mask 0x7FFFF) reads
+/// {1:959, 2:0, 3:814, 4:555, 5:144, 6:780, 7:30, 9:554, 0xF:260,
+/// 0x11:522, 0x12:815, 0x13:158, 0x14:1, 0x15:554, 0x16:959} and does NOT
+/// move with clocks or OC (user-verified); these are the same 19 values
+/// the archived scaling-sibling mystery table carried. Semantics still
+/// unknown — treat as opaque tuning constants.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct ClkPropRegimeInfoEntry {

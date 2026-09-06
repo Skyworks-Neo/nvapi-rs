@@ -4420,7 +4420,9 @@ pub mod undocumented {
         /// rec+4: u32 regime type — wire byte remapped through the 19-entry
         /// jump table @0x180212808 → {1..7,9,0xF..0x1A}; illegal → 0x1F
         pub const REC_TYPE: usize = 0x04;
-        /// rec+8: u32 value (freq/voltage anchor — units unconfirmed)
+        /// rec+8: u32 FIXED driver constant (live 4060/R610: 19 entries
+        /// static across clock/OC changes — NOT frequency anchors; same
+        /// values as the archived scaling-sibling table)
         pub const REC_VALUE: usize = 0x08;
     }
 
