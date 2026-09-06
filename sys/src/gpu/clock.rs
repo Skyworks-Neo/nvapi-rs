@@ -1834,17 +1834,25 @@ pub mod undocumented {
 
     nvstruct! {
         /// Private ClockClient GET_INFO buffer (RM 0x20809019, the article's
-        /// discovery API). Best-effort: rejects all 5 IDA magics live on
-        /// R575.74 (-9 UNRESOLVED); discovery is routed through GetControl
-        /// (which exposes the mask + per-domain ranges) instead. Total
-        /// 0x9B8 = 2488 bytes; layout beyond the version opaque.
+        /// discovery API). Stamp-audit fix (2026-09-05): the declared size was
+        /// 0x9B8 (2488 B) → stamp 0x109B8, which NO driver branch accepts —
+        /// every branch's version gate wants 0x109D8 (v1|2520) or a
+        /// generation-larger stamp ({560+: 0x21624/0x34128/0x486AC/0x506AC}),
+        /// plain equality, no version mask (IDA: 391 `*a2 != 68056`; 538/560/
+        /// 582 `!= 68056 && != 136740 && != 213288`-family; 610 adds 296620/
+        /// 329388). The previous "rejects all 5 IDA magics live on R575.74"
+        /// note predates this size correction — v1|2520 with a full 2520-byte
+        /// buffer is the smallest universally accepted form; live behaviour
+        /// still unverified per-branch. Layout beyond the version dword
+        /// opaque; discovery is routed through GetControl (which exposes the
+        /// mask + per-domain ranges) either way. Total 0x9D8 = 2520 bytes.
         pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_PRIVATE_V1 {
             pub version: NvVersion,
-            pub rest: [u8; 2484],
+            pub rest: [u8; 2516],
         }
     }
 
-    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_PRIVATE NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_PRIVATE_V1(1) = 0x9b8 }
+    nvversion! { @=NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_PRIVATE NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_INFO_PRIVATE_V1(1) = 0x9d8 }
 
     nvapi! {
         /// Private ClockClient GET_INFO (RM 0x20809019). Best-effort on
