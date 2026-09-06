@@ -4728,6 +4728,255 @@ pub mod undocumented {
         }
     }
 
+    // ------------------------------------------------------------------
+    // nvClocks.spec P2 batch (2026-09-06 audit, nvclocks-audit/
+    // nafll-adc-freqctrl.md). READ-ONLY surfaces with broken layouts:
+    // NAFLL devices (info/status), ClkFreqController(s) (info/status/
+    // control), HWFS GetInfo, ThermalSlowdownState. Same start-biased
+    // offset convention; same cross-generation stamp stability.
+    // ------------------------------------------------------------------
+
+    /// NAFLL device directory offsets ([`NV_GPU_CLOCK_NAFLL_DEVICES_INFO`],
+    /// v2 0x20C58 — the layout this generation serves; v1 0x10414 legacy).
+    pub mod nafll_info_entry {
+        pub const MASK: usize = 4;
+        pub const BASE: usize = 0x58;
+        pub const STRIDE: usize = 0x60;
+        /// rec+0x00: u32 device type (live 7 devices: all 2)
+        pub const REC_DEV_TYPE: usize = 0x00;
+        /// rec+0x04: u8 raw domain id (live {3,4,5,2,0,A,B})
+        pub const REC_DOMAIN_ID: usize = 0x04;
+        /// rec+0x0C: u32 step count (cap 32)
+        pub const REC_STEPS: usize = 0x0C;
+        /// rec+0x10: u32 mode (0/1→0, 2→2, else 0xFE)
+        pub const REC_MODE: usize = 0x10;
+        /// rec+0x18: u16 (live 10)
+        pub const REC_U16_18: usize = 0x18;
+        /// rec+0x1A: u16 base frequency MHz (live 405 ≈ GPC min VF)
+        pub const REC_BASE_MHZ: usize = 0x1A;
+        /// rec+0x1C/1D: u8 pair (live 8, …)
+        pub const REC_B1C: usize = 0x1C;
+    }
+
+    nvstruct! {
+        /// NAFLL device directory (ID 0x2BC9F805, RM 0x208090B0, magic
+        /// 0x20C58 = (2<<16)|3160 = 0x58 + 32×0x60). No input seed. Live
+        /// TU116: mask 0x7F, header {u8@8=0x80, 6250@0xC, 450000@0x10}.
+        pub struct NV_GPU_CLOCK_NAFLL_DEVICES_INFO_V2 {
+            pub version: NvVersion,
+            /// +4 .. +3160: mask@+4, header, 32×0x60 records @0x58
+            pub rest: [u8; 3156],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_NAFLL_DEVICES_INFO NV_GPU_CLOCK_NAFLL_DEVICES_INFO_V2(2) = 0xc58 }
+
+    impl NV_GPU_CLOCK_NAFLL_DEVICES_INFO {
+        pub fn mask(&self) -> u32 {
+            let o = nafll_info_entry::MASK - 4;
+            u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= nafll_info_entry::STRIDE {
+                return None;
+            }
+            let abs = nafll_info_entry::BASE
+                .checked_add(bit as usize * nafll_info_entry::STRIDE)?
+                .checked_add(field)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(abs - 4..abs)?.try_into().ok()?,
+            ))
+        }
+    }
+
+    /// NAFLL live-status offsets ([`NV_GPU_CLOCK_NAFLL_DEVICES_STATUS`],
+    /// v1 0x10F48 — the only multi-generation-stable layout; records
+    /// EMPIRICAL stride 0x180, 80×4B entries per device).
+    pub mod nafll_status_entry {
+        pub const MASK: usize = 4;
+        pub const BASE: usize = 0x48;
+        pub const STRIDE: usize = 0x180;
+        /// entry count in the record's table (u32-ish; live 7 tables of
+        /// up to 80 entries)
+        pub const REC_TABLE: usize = 0x00;
+        /// first table entry (u32; entries are {u16,u16} or {u16,idx}
+        /// pairs by wire type)
+        pub const REC_TABLE0: usize = 0x04;
+        /// tail flag u8 (live rec0 = 01)
+        pub const REC_B140: usize = 0x140;
+    }
+
+    nvstruct! {
+        /// NAFLL devices status (ID 0xAFA4113C, RM 0x208090B1, v1 magic
+        /// 0x10F48). MASK-SEEDED at +4. V2/V3/V6 stamps exist on 610 but
+        /// v1 is the cross-generation-stable surface (live 462.96:
+        /// 7 records, static 80-entry u16 tables 29..125 — voltage×10mV
+        /// or freq÷15MHz ladder, unit unclosed).
+        pub struct NV_GPU_CLOCK_NAFLL_DEVICES_STATUS_V1 {
+            pub version: NvVersion,
+            /// +4 .. +3912: mask@+4, records @0x48 (stamp size 0xF48;
+            /// 7 live records ×0x180 fit, remaining tail opaque)
+            pub rest: [u8; 3908],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_NAFLL_DEVICES_STATUS NV_GPU_CLOCK_NAFLL_DEVICES_STATUS_V1(1) = 0xf48 }
+
+    impl NV_GPU_CLOCK_NAFLL_DEVICES_STATUS {
+        pub fn set_mask(&mut self, mask: u32) {
+            let o = nafll_status_entry::MASK - 4;
+            self.rest[o..o + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+    }
+
+    /// ClkFreqController directory offsets
+    /// ([`NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_INFO`], 0x10C4C — the freq
+    /// sibling of the ClkVolt INFO; live values anchor the units).
+    pub mod clk_freq_ctrl_info_entry {
+        pub const MASK: usize = 4;
+        pub const BASE: usize = 0x4C;
+        pub const STRIDE: usize = 0x60;
+        /// rec+0: u32 supported flag (domain type ∈ {1,3})
+        pub const REC_SUPPORTED: usize = 0x00;
+        /// rec+4: u8 type enum (raw 0..8 identity, 9→0xF, 10→0x10)
+        pub const REC_TYPE: usize = 0x04;
+        /// rec+8: u32 step count
+        pub const REC_STEPS: usize = 0x08;
+        /// rec+0x2C: u32 max VF frequency kHz (live 1638400 = 1638.4 MHz)
+        pub const REC_MAX_KHZ: usize = 0x2C;
+        /// rec+0x38: i32 −18750 (freq offset floor, ±18.75 MHz pair)
+        pub const REC_MIN_OFFSET: usize = 0x38;
+        /// rec+0x3C: i32 +18750 (offset ceiling)
+        pub const REC_MAX_OFFSET: usize = 0x3C;
+    }
+
+    nvstruct! {
+        /// ClkFreqController directory (ID 0x58F4F4C1, RM 0x20809025,
+        /// magic 0x10C4C = (1<<16)|3148 = 0x4C + 32×0x60). No seed.
+        /// Live TU116: mask 0x7, records carry {1638400 max_kHz,
+        /// −18750/+18750 offset pair}.
+        pub struct NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_INFO_V1 {
+            pub version: NvVersion,
+            /// +4 .. +3148: mask@+4, header, 32×0x60 records @0x4C
+            pub rest: [u8; 3144],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_INFO NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_INFO_V1(1) = 0xc4c }
+
+    impl NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_INFO {
+        pub fn mask(&self) -> u32 {
+            let o = clk_freq_ctrl_info_entry::MASK - 4;
+            u32::from_le_bytes(self.rest[o..o + 4].try_into().unwrap_or([0; 4]))
+        }
+
+        pub fn rec_u32(&self, bit: u32, field: usize) -> Option<u32> {
+            if field >= clk_freq_ctrl_info_entry::STRIDE {
+                return None;
+            }
+            let abs = clk_freq_ctrl_info_entry::BASE
+                .checked_add(bit as usize * clk_freq_ctrl_info_entry::STRIDE)?
+                .checked_add(field)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(abs - 4..abs)?.try_into().ok()?,
+            ))
+        }
+    }
+
+    nvstruct! {
+        /// ClkFreqController live status V1 (ID 0x45C064D5, RM 0x20809026,
+        /// magic 0x109CC = (1<<16)|2508 = 0x4C + 32×0x4C). MASK-SEEDED at
+        /// +4. Live TU116: all records {6, 0, 0} static on the v1 path
+        /// (470-generation data unfilled — re-evaluate with the v3 stamp
+        /// 0x30970 on 610+ drivers).
+        pub struct NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_STATUS_V1 {
+            pub version: NvVersion,
+            /// +4 .. +2508: mask@+4, 32×0x4C records @0x4C
+            pub rest: [u8; 2504],
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_STATUS NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_STATUS_V1(1) = 0x9cc }
+
+    nvstruct! {
+        /// HWFS (hardware forced slowdown) control (ID 0x14277C24, GET
+        /// RM 0x20808540/0x20800540, escape 0x07000190/0x07000191 — the
+        /// "hwfsControlEscData" string in the binary anchors this ID).
+        /// Flat 52-byte struct, no mask/records: +4 u8 in, +5 u8 out,
+        /// +0x24 u32 selector (jump-table 0..0x1D), +0x28/+0x2C/+0x30
+        /// u32 in/out. Live sel=2 → {out=10, 0x7FFFFFFF, 64, 256(Q8 1.0?)};
+        /// sel 0/1/3/4 → -104 on TU116.
+        pub struct NV_GPU_THERMAL_HWFS_CONTROL_V1 {
+            pub version: NvVersion,
+            /// +4: u8 input selector pass-through
+            pub b04_in: u8,
+            /// +5: u8 output (driver-filled)
+            pub b05_out: u8,
+            /// +6..+0x24: opaque
+            pub pad: [u8; 30],
+            /// +0x24: u32 selector (domain 0..0x1D via jump table)
+            pub selector: u32,
+            /// +0x28: u32 out (0x7FFFFFFF = "not set" hypothesis)
+            pub out_a: u32,
+            /// +0x2C: u32 in/out (live 64)
+            pub out_b: u32,
+            /// +0x30: u32 in/out (live 256 — Q8 1.0 hypothesis)
+            pub out_c: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_THERMAL_HWFS_CONTROL NV_GPU_THERMAL_HWFS_CONTROL_V1(1) = 0x34 }
+
+    nvstruct! {
+        /// Thermal slowdown state (ID 0x6683EE65, NO RM — escape
+        /// 0x0700011, cross-generation stable; the cheapest
+        /// "is the GPU thermally slowed" boolean). 0 = normal,
+        /// 0xFFFF = slowdown, other driver replies map to -1.
+        pub struct NV_GPU_THERMAL_SLOWDOWN_STATE_V1 {
+            pub version: NvVersion,
+            pub state: u32,
+        }
+    }
+
+    nvversion! { @=NV_GPU_THERMAL_SLOWDOWN_STATE NV_GPU_THERMAL_SLOWDOWN_STATE_V1(1) = 0x8 }
+
+    // P2 FFI (IDs 0x2BC9F805 / 0xAFA4113C / 0x58F4F4C1 / 0x45C064D5 /
+    // 0x14277C24 / 0x6683EE65 — registered in nvid.rs, first-time FFI).
+
+    nvapi! {
+        /// NAFLL device directory (ID 0x2BC9F805, magic 0x20C58 v2).
+        pub unsafe fn NvAPI_GPU_ClockNafllDevicesGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLOCK_NAFLL_DEVICES_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// NAFLL devices status (ID 0xAFA4113C, v1 magic 0x10F48).
+        /// MASK-SEEDED at +4.
+        pub unsafe fn NvAPI_GPU_ClockNafllDevicesGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLOCK_NAFLL_DEVICES_STATUS) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// ClkFreqController directory (ID 0x58F4F4C1, magic 0x10C4C).
+        pub unsafe fn NvAPI_GPU_ClockClkFreqControllerGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// ClkFreqController live status V1 (ID 0x45C064D5, magic 0x109CC).
+        /// MASK-SEEDED at +4.
+        pub unsafe fn NvAPI_GPU_ClockClkFreqControllerGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_STATUS) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// HWFS control GET (ID 0x14277C24, magic 0x10034, flat 52B).
+        pub unsafe fn NvAPI_GPU_ThermalHwFsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut NV_GPU_THERMAL_HWFS_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Thermal slowdown state (ID 0x6683EE65, 8B, no magic gate —
+        /// version dword still required as first field).
+        pub unsafe fn NvAPI_GPU_GetThermalSlowdownState(hPhysicalGPU: NvPhysicalGpuHandle, pState: *mut NV_GPU_THERMAL_SLOWDOWN_STATE) -> NvAPI_Status;
+    }
+
     nvapi! {
         /// ADC device directory V1 (ID 0x68789E2A, magic 0x10348, 10
         /// slots). Parts with more devices reject it with -174 — fall

@@ -2162,6 +2162,85 @@ pub struct AdcDeviceStatusEntry {
     pub value2: u32,
 }
 
+/// One NAFLL device from the directory read (ID 0x2BC9F805).
+/// `domain_id` is the raw byte (live {3,4,5,2,0,A,B}); `base_mhz` 405 ≈
+/// GPC minimum VF frequency; `steps` counts the status ladder entries.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct NafllDeviceInfo {
+    pub bit: u32,
+    pub device_type: u32,
+    pub domain_id: u8,
+    pub steps: u32,
+    pub mode: u32,
+    pub base_mhz: u16,
+    pub b1c: u8,
+}
+
+/// `ClockNafllDevicesGetInfo` result.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct NafllDevicesInfo {
+    pub mask: u32,
+    pub entries: Vec<NafllDeviceInfo>,
+}
+
+/// One NAFLL device's status ladder (ID 0xAFA4113C, v1 0x10F48).
+/// `table` holds the non-zero u32 entries of the 80-slot ladder —
+/// live values 29..125 monotonic, static across samples. Unit
+/// hypothesis (unclosed): voltage×10mV (0.29–1.25 V) or freq÷15MHz.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct NafllDeviceStatusEntry {
+    pub bit: u32,
+    /// tail flag u8 (live rec0 = 0x01)
+    pub tail_flag: u8,
+    /// non-zero ladder entries (raw)
+    pub table: Vec<u32>,
+}
+
+/// `ClockNafllDevicesGetStatus` result.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct NafllDevicesStatus {
+    pub mask: u32,
+    pub entries: Vec<NafllDeviceStatusEntry>,
+}
+
+/// One ClkFreqController record (ID 0x58F4F4C1) — per-domain VFO
+/// envelope. Live-anchored: `max_khz` 1638400 (= 1638.4 MHz top VF),
+/// `min_offset`/`max_offset` ±18750 (the ±18.75 MHz control span).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct ClkFreqControllerInfoEntry {
+    pub bit: u32,
+    pub supported: u32,
+    pub ctype: u8,
+    pub steps: u32,
+    pub max_khz: u32,
+    pub min_offset: i32,
+    pub max_offset: i32,
+}
+
+/// `ClockClkFreqControllerGetInfo` result.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ClkFreqControllerInfo {
+    pub mask: u32,
+    pub entries: Vec<ClkFreqControllerInfoEntry>,
+}
+
+/// HWFS control read (ID 0x14277C24, 0x10034). `out_a` 0x7FFFFFFF
+/// hypothesised "no limit"; `out_c` 256 = Q8 1.0 hypothesis (unclosed).
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct HwfsControl {
+    pub out_byte: u8,
+    pub out_a: u32,
+    pub out_b: u32,
+    pub out_c: u32,
+}
+
 /// `ClockAdcDevicesGetStatus` result (mask-seeded from
 /// [`PhysicalGpu::adc_devices_info`]).
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

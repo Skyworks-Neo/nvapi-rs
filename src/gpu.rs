@@ -7669,6 +7669,183 @@ impl PhysicalGpu {
         })
     }
 
+    // --- nvClocks.spec P2 batch (2026-09-06 audit) --------------------------
+    // Read surfaces with broken-out layouts from the audit; medium-only
+    // (no CLI). Live-data verdicts in nvclocks-audit/nafll-adc-freqctrl.md.
+
+    /// NAFLL device directory (ID 0x2BC9F805, v2 0x20C58). Live TU116:
+    /// mask 0x7F, 7 NAFLL devices with domain ids {3,4,5,2,0,A,B}.
+    pub fn nafll_devices_info(&self) -> crate::Result<Option<crate::clock::NafllDevicesInfo>> {
+        trace!("gpu.nafll_devices_info()");
+        use clock::undocumented::{NV_GPU_CLOCK_NAFLL_DEVICES_INFO, nafll_info_entry};
+
+        let mut raw = NV_GPU_CLOCK_NAFLL_DEVICES_INFO::default();
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockNafllDevicesGetInfo(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockNafllDevicesGetInfo, st)
+            .map_err(crate::Error::from)?;
+        let mask = raw.mask();
+        if mask == 0 {
+            return Ok(None);
+        }
+        let entries = (0..32)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .map(|bit| crate::clock::NafllDeviceInfo {
+                bit,
+                device_type: raw
+                    .rec_u32(bit, nafll_info_entry::REC_DEV_TYPE)
+                    .unwrap_or(0),
+                domain_id: raw
+                    .rec_u32(bit, nafll_info_entry::REC_DOMAIN_ID)
+                    .unwrap_or(0) as u8,
+                steps: raw.rec_u32(bit, nafll_info_entry::REC_STEPS).unwrap_or(0),
+                mode: raw.rec_u32(bit, nafll_info_entry::REC_MODE).unwrap_or(0),
+                base_mhz: raw
+                    .rec_u32(bit, nafll_info_entry::REC_BASE_MHZ)
+                    .unwrap_or(0) as u16,
+                b1c: raw.rec_u32(bit, nafll_info_entry::REC_B1C).unwrap_or(0) as u8,
+            })
+            .collect();
+        Ok(Some(crate::clock::NafllDevicesInfo { mask, entries }))
+    }
+
+    /// NAFLL devices status (ID 0xAFA4113C, v1 0x10F48) — static
+    /// 80-entry u16 ladder per device (unit unclosed: voltage×10mV or
+    /// freq÷15MHz). Returns the raw table per device by design.
+    pub fn nafll_devices_status(&self) -> crate::Result<Option<crate::clock::NafllDevicesStatus>> {
+        trace!("gpu.nafll_devices_status()");
+        use clock::undocumented::{NV_GPU_CLOCK_NAFLL_DEVICES_STATUS, nafll_status_entry};
+
+        let Some(info) = self.nafll_devices_info()? else {
+            return Ok(None);
+        };
+        let mut raw = NV_GPU_CLOCK_NAFLL_DEVICES_STATUS::default();
+        raw.set_mask(info.mask);
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockNafllDevicesGetStatus(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockNafllDevicesGetStatus, st)
+            .map_err(crate::Error::from)?;
+        let entries = (0..32)
+            .filter(|bit| info.mask & (1 << bit) != 0)
+            .map(|bit| {
+                let base = nafll_status_entry::BASE + bit as usize * nafll_status_entry::STRIDE;
+                let table: Vec<u32> = (0..80)
+                    .filter_map(|k| {
+                        let o = base + nafll_status_entry::REC_TABLE0 + k * 4 - 4;
+                        let v = u32::from_le_bytes(raw.rest.get(o..o + 4)?.try_into().ok()?);
+                        (v != 0).then_some(v)
+                    })
+                    .collect();
+                crate::clock::NafllDeviceStatusEntry {
+                    bit,
+                    tail_flag: raw
+                        .rest
+                        .get(base + nafll_status_entry::REC_B140 - 4)
+                        .copied()
+                        .unwrap_or(0),
+                    table,
+                }
+            })
+            .collect();
+        Ok(Some(crate::clock::NafllDevicesStatus {
+            mask: info.mask,
+            entries,
+        }))
+    }
+
+    /// ClkFreqController directory (ID 0x58F4F4C1, 0x10C4C) — per-domain
+    /// {max VF kHz, ±offset pair} envelope. Live-anchored: 1638400 kHz
+    /// max, ±18750 offset pair.
+    pub fn clk_freq_controller_info(
+        &self,
+    ) -> crate::Result<Option<crate::clock::ClkFreqControllerInfo>> {
+        trace!("gpu.clk_freq_controller_info()");
+        use clock::undocumented::{
+            NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_INFO, clk_freq_ctrl_info_entry,
+        };
+
+        let mut raw = NV_GPU_CLOCK_CLK_FREQ_CONTROLLER_INFO::default();
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ClockClkFreqControllerGetInfo(
+                self.0,
+                ptr::from_mut(&mut raw).cast(),
+            )
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkFreqControllerGetInfo, st)
+            .map_err(crate::Error::from)?;
+        let mask = raw.mask();
+        if mask == 0 {
+            return Ok(None);
+        }
+        let entries = (0..32)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .map(|bit| crate::clock::ClkFreqControllerInfoEntry {
+                bit,
+                supported: raw
+                    .rec_u32(bit, clk_freq_ctrl_info_entry::REC_SUPPORTED)
+                    .unwrap_or(0),
+                ctype: raw
+                    .rec_u32(bit, clk_freq_ctrl_info_entry::REC_TYPE)
+                    .unwrap_or(0) as u8,
+                steps: raw
+                    .rec_u32(bit, clk_freq_ctrl_info_entry::REC_STEPS)
+                    .unwrap_or(0),
+                max_khz: raw
+                    .rec_u32(bit, clk_freq_ctrl_info_entry::REC_MAX_KHZ)
+                    .unwrap_or(0),
+                min_offset: raw
+                    .rec_u32(bit, clk_freq_ctrl_info_entry::REC_MIN_OFFSET)
+                    .unwrap_or(0) as i32,
+                max_offset: raw
+                    .rec_u32(bit, clk_freq_ctrl_info_entry::REC_MAX_OFFSET)
+                    .unwrap_or(0) as i32,
+            })
+            .collect();
+        Ok(Some(crate::clock::ClkFreqControllerInfo { mask, entries }))
+    }
+
+    /// HWFS control GET (ID 0x14277C24, 0x10034 flat struct) — hardware
+    /// forced-slowdown config. `selector` 2 is the only live-answering
+    /// domain on TU116 (0/1/3/4 → -104).
+    pub fn hwfs_control_get(&self, selector: u32) -> crate::Result<crate::clock::HwfsControl> {
+        trace!("gpu.hwfs_control_get(selector={selector})");
+        use clock::undocumented::NV_GPU_THERMAL_HWFS_CONTROL;
+
+        let mut raw = NV_GPU_THERMAL_HWFS_CONTROL::default();
+        raw.version = <NV_GPU_THERMAL_HWFS_CONTROL as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        raw.b04_in = selector as u8;
+        raw.selector = selector;
+        let st = unsafe {
+            sys::api::NvAPI_GPU_ThermalHwFsGetInfo(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ThermalHwFsGetInfo, st)
+            .map_err(crate::Error::from)?;
+        Ok(crate::clock::HwfsControl {
+            out_byte: raw.b05_out,
+            out_a: raw.out_a,
+            out_b: raw.out_b,
+            out_c: raw.out_c,
+        })
+    }
+
+    /// Thermal slowdown state (ID 0x6683EE65) — 0 = normal,
+    /// 0xFFFF = thermally slowed (escape 0x0700011, cross-generation
+    /// stable; cheapest slowdown gate).
+    pub fn thermal_slowdown_state(&self) -> crate::Result<u32> {
+        trace!("gpu.thermal_slowdown_state()");
+        use clock::undocumented::NV_GPU_THERMAL_SLOWDOWN_STATE;
+
+        let mut raw = NV_GPU_THERMAL_SLOWDOWN_STATE::default();
+        let st = unsafe {
+            sys::api::NvAPI_GPU_GetThermalSlowdownState(self.0, ptr::from_mut(&mut raw).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_GetThermalSlowdownState, st)
+            .map_err(crate::Error::from)?;
+        Ok(raw.state)
+    }
+
     // --- nvClocks.spec P1 batch (2026-09-06 audit) --------------------------
     // Six read surfaces + the ADC-info seed source. sys/gpu/clock.rs
     // carries the layouts; reverse/version-audit/nvclocks-audit/ carries
