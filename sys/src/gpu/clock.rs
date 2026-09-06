@@ -4990,6 +4990,51 @@ pub mod undocumented {
         pub unsafe fn NvAPI_GPU_GetThermalSlowdownState(hPhysicalGPU: NvPhysicalGpuHandle, pState: *mut NV_GPU_THERMAL_SLOWDOWN_STATE) -> NvAPI_Status;
     }
 
+    // ------------------------------------------------------------------
+    // nvClocks.spec P3 batch — RAW probe surfaces. Deliberately declared
+    // with `*mut u8` buffers and NO structs: these trees were empty on
+    // every tested part (mask 0 / -104), their layouts are only partially
+    // broken out (nvclocks-audit/clkvf-progs-vfrels.md,
+    // clkprop-tops-toprels-regimes.md, thermal-block.md), and the stamps
+    // below are the smallest live-accepted ones. If a tree ever answers
+    // non-empty on a new part, promote it to a typed struct then.
+    // Stamps: ProgsGetInfo 0x183E4 / VfRelsGetInfo 0x7E53C /
+    // VfRelsGetControl 0x5E33C (seed mask @+4) / TopsGetInfo 0x10D4C /
+    // EnumsGetInfo 0x14C18 / ThermDeviceGetInfo 0x106A8 (seed mask @+4).
+    // ------------------------------------------------------------------
+
+    nvapi! {
+        /// ClockClkProgs directory (ID 0xFACEB39B, 0x183E4). Raw probe.
+        pub unsafe fn NvAPI_GPU_ClockClkProgsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u8) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// ClockClkVfRels directory (ID 0x5A769461, 0x7E53C). Raw probe.
+        pub unsafe fn NvAPI_GPU_ClockClkVfRelsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u8) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// ClockClkVfRels control (ID 0x2224D976, 0x5E33C). MASK-SEEDED
+        /// at +4. Raw probe.
+        pub unsafe fn NvAPI_GPU_ClockClkVfRelsGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pControl: *mut u8) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// ClockClkPropTops directory (ID 0x1EA976E2, 0x10D4C). Raw probe.
+        pub unsafe fn NvAPI_GPU_ClockClkPropTopsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u8) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// ClockClkEnums directory (ID 0x5439F0B7, 0x14C18). Raw probe.
+        pub unsafe fn NvAPI_GPU_ClockClkEnumsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u8) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Thermal device directory (ID 0x6FF0350C, 0x106A8). MASK-SEEDED
+        /// at +4. Raw probe.
+        pub unsafe fn NvAPI_GPU_ThermDeviceGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pInfo: *mut u8) -> NvAPI_Status;
+    }
+
     nvapi! {
         /// ADC device directory V1 (ID 0x68789E2A, magic 0x10348, 10
         /// slots). Parts with more devices reject it with -174 — fall
