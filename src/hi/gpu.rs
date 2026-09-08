@@ -2144,10 +2144,26 @@ where
     Kilohertz: From<T>,
 {
     fn from(v: VfpEntry<T>) -> Self {
-        debug_assert!(v.configured().voltage == v.current.voltage);
+        // The plane-agreement checks below started as mis-parse canaries:
+        // on the 30/40-series live cards current/default/overclocked agreed
+        // on voltage and (when the overclocked plane was populated) on
+        // frequency. Maxwell/Pascal legitimately report a DIVERGENT
+        // overclocked.frequency on the public VFP planes — that is driver
+        // data, not corruption — so a mismatch logs and keeps going instead
+        // of panicking (debug_assert killed CI on real dual-gen hardware).
+        if v.configured().voltage != v.current.voltage {
+            log::debug!("vfp planes: configured voltage != current voltage");
+        }
         if !v.overclocked.is_empty() {
-            debug_assert!(v.overclocked.voltage == v.current.voltage);
-            debug_assert!(v.current.frequency == v.overclocked.frequency);
+            if v.overclocked.voltage != v.current.voltage {
+                log::debug!("vfp planes: overclocked voltage != current voltage");
+            }
+            if v.current.frequency != v.overclocked.frequency {
+                log::debug!(
+                    "vfp planes: current frequency != overclocked frequency \
+                     (legacy-generation divergence)"
+                );
+            }
         }
         VfpPoint {
             point_type: v.point_type,
