@@ -55,25 +55,61 @@ fn p3_batch_live_census() {
 
     // Progs: 0x183E4 (99300 B), no seed. 1650S: OK mask 0x07FFFFFF (27
     // progs) but records all-zero.
-    probe!("ProgsGetInfo", nvapi::sys::api::NvAPI_GPU_ClockClkProgsGetInfo, 0x183E4, 99_300, None);
+    probe!(
+        "ProgsGetInfo",
+        nvapi::sys::api::NvAPI_GPU_ClockClkProgsGetInfo,
+        0x183E4,
+        99_300,
+        None
+    );
 
     // VfRels: 0x7E53C (517436 B), no seed. 1650S: OK mask 0.
-    probe!("VfRelsGetInfo", nvapi::sys::api::NvAPI_GPU_ClockClkVfRelsGetInfo, 0x7E53C, 517_436, None);
+    probe!(
+        "VfRelsGetInfo",
+        nvapi::sys::api::NvAPI_GPU_ClockClkVfRelsGetInfo,
+        0x7E53C,
+        517_436,
+        None
+    );
 
     // VfRels control: 0x5E33C (385852 B), mask-seeded at +4. 1650S: OK,
     // records zero.
-    probe!("VfRelsGetControl", nvapi::sys::api::NvAPI_GPU_ClockClkVfRelsGetControl, 0x5E33C, 385_852, Some(4));
+    probe!(
+        "VfRelsGetControl",
+        nvapi::sys::api::NvAPI_GPU_ClockClkVfRelsGetControl,
+        0x5E33C,
+        385_852,
+        Some(4)
+    );
 
     // Tops: 0x10D4C (68940 B), no seed (mask is OUTPUT at +8). 1650S: OK
     // mask 0.
-    probe!("TopsGetInfo", nvapi::sys::api::NvAPI_GPU_ClockClkPropTopsGetInfo, 0x10D4C, 68_940, None);
+    probe!(
+        "TopsGetInfo",
+        nvapi::sys::api::NvAPI_GPU_ClockClkPropTopsGetInfo,
+        0x10D4C,
+        68_940,
+        None
+    );
 
     // Enums: 0x14C18 (85016 B), no seed. 1650S: OK mask 0.
-    probe!("EnumsGetInfo", nvapi::sys::api::NvAPI_GPU_ClockClkEnumsGetInfo, 0x14C18, 85_016, None);
+    probe!(
+        "EnumsGetInfo",
+        nvapi::sys::api::NvAPI_GPU_ClockClkEnumsGetInfo,
+        0x14C18,
+        85_016,
+        None
+    );
 
     // ThermDevice: 0x106A8 (67048 B), mask-seeded at +4. 1650S: OK, real
     // device mask 0x20F, 5 devices (types 1,2,2,2,3) — EXPECTED non-empty.
-    probe!("ThermDeviceGetInfo", nvapi::sys::api::NvAPI_GPU_ThermDeviceGetInfo, 0x106A8, 67_048, Some(4));
+    probe!(
+        "ThermDeviceGetInfo",
+        nvapi::sys::api::NvAPI_GPU_ThermDeviceGetInfo,
+        0x106A8,
+        67_048,
+        Some(4)
+    );
 
     println!();
     println!("(done — read-only; a non-zero mask means that surface");
