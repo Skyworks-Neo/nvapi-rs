@@ -753,6 +753,14 @@ pub struct ClkVfSegment {
     /// default-frequency range (MHz)
     pub freq_default_mhz_min: u32,
     pub freq_default_mhz_max: u32,
+    /// Driver-dependent scale defect CORRECTED in this segment's frequency
+    /// values: some Pascal driver builds report the private type-1
+    /// frequency terms with an extra ×2 scale and a −51 MHz offset
+    /// (read f = 2×real − 51, live 1080/566.36: max 3822 ≫ 3000 while the
+    /// public curve tops at 1936); the decode applied (f+50)/2. Other
+    /// builds (580+) report plain MHz — nothing touches them. UI layers
+    /// annotate the segment header "(corrected)" when this is set.
+    pub freq_scale_corrected: bool,
 }
 
 /// Advisory domain attribution for a [`ClkVfSegment`] — see

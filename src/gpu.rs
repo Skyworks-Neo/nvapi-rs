@@ -2938,6 +2938,7 @@ impl PhysicalGpu {
                     voltage_uV_max: p.voltage_uV,
                     freq_default_mhz_min: p.freq_default_mhz,
                     freq_default_mhz_max: p.freq_default_mhz,
+                    freq_scale_corrected: false,
                 });
             }
         }
@@ -3013,6 +3014,65 @@ impl PhysicalGpu {
                 _ => crate::clock::ClkVfDomainHint::Unknown,
             };
             *ord += 1;
+        }
+
+        // Driver-dependent Pascal scale defect: SOME Pascal driver builds
+        // report the private type-1 frequency terms as f = 2×real − 51 MHz
+        // (the existing unconditional /2 halving already ran, leaving
+        // read ≈ real − 25.5 with the doubling residue ≫ visible). The
+        // signature is a GPC curve whose max frequency blows past 3000 MHz
+        // (live 1080/566.36: 3822 while the public curve tops at 1936);
+        // the same nvoc-cli on a 580 driver + Pascal reads plain MHz, and
+        // Turing-and-later legitimately exceed 3000 MHz boost — so the
+        // >3000 threshold may only fire ON PASCAL (architecture GP100,
+        // the GP10x family). Correct the whole GPC segment — current AND
+        // default — with (f+50)/2 and flag it so UI layers annotate
+        // "(corrected)".
+        let is_pascal = self
+            .architecture()
+            .map(|a| matches!(a.arch, crate::Architecture::GP100(_)))
+            .unwrap_or(false);
+        let gpc_max = if !is_pascal {
+            0
+        } else {
+            segments
+                .iter()
+                .filter(|s| {
+                    s.domain_hint == crate::clock::ClkVfDomainHint::Gpc
+                        && s.kind == crate::clock::ClkVfSegmentKind::VfCurve
+                })
+                .map(|s| s.freq_default_mhz_max)
+                .max()
+                .unwrap_or(0)
+        };
+        if gpc_max > 3000 {
+            let gpc_range: Vec<(u16, u16)> = segments
+                .iter()
+                .filter(|s| {
+                    s.domain_hint == crate::clock::ClkVfDomainHint::Gpc
+                        && s.kind == crate::clock::ClkVfSegmentKind::VfCurve
+                })
+                .map(|s| (s.bank as u16, s.start_index..=s.end_index))
+                .flat_map(|(bank, r)| r.map(move |i| (bank, i)))
+                .collect();
+            for p in points.iter_mut() {
+                let in_gpc = gpc_range
+                    .iter()
+                    .any(|&(bank, i)| p.bank as u16 == bank && p.index == i);
+                if in_gpc {
+                    p.freq_default_mhz = (p.freq_default_mhz + 50) / 2;
+                    p.freq_current_mhz = (p.freq_current_mhz + 50) / 2;
+                }
+            }
+            for s in segments.iter_mut() {
+                if s.domain_hint == crate::clock::ClkVfDomainHint::Gpc
+                    && s.kind == crate::clock::ClkVfSegmentKind::VfCurve
+                {
+                    s.freq_default_mhz_min = (s.freq_default_mhz_min + 50) / 2;
+                    s.freq_default_mhz_max = (s.freq_default_mhz_max + 50) / 2;
+                    s.freq_scale_corrected = true;
+                }
+            }
         }
 
         Ok(crate::clock::ClkVfPointsPrivate {
