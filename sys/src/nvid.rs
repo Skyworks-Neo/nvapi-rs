@@ -1611,6 +1611,63 @@ Unknown_33C7358C_LifecycleInit = 0x33c7358c,
 Unknown_593E8644_LifecycleInit = 0x593e8644,
 
 // ============================================================
+// Linux-only NVAPI IDs (libnvidia-api.so.1, RE'd 2026-09-10)
+// Source: 610.57.04 master QI table @0xC12A0 (590 entries) — see
+// docs/reverse-engineering/nvapi/linux-version-coverage-audit.md §3/§4.
+// All three are ABSENT from every Windows table we hold (nvapi64_impl /
+// nvapia64_impl 616.00 WOA x64+ARM64, 2345 entries) — they exist only in
+// the Linux NVAPI build. Kept registered per the full-ID-registry policy;
+// do NOT declare sys::api wrappers for the two Unknown_* (both are
+// dispatcher-dead stubs, see below).
+// ============================================================
+
+// --- Linux-only: implemented & live ---
+/// Linux-only (610.57.04 libnvidia-api QI table idx 3, handler @0x88C00).
+/// NOT in any Windows nvapi64 table we hold (incl. WOA 616.00 ARM64X pair).
+/// Registered by YOFOO below as a name only; RE evidence for the Linux
+/// presence recorded here so the ID is traceable from both directions.
+NvAPI_SYS_GetDriverAndBranchVersionEx = 0xbf75a81e,
+
+// --- Linux-only: registered but dispatcher-dead (NVAPI_NOT_SUPPORTED stubs) ---
+/// Linux-only GET-side of a SET/GET companion pair (610.57.04 QI table
+/// idx 112, handler @0x5FFB0). Absent from Windows tables (WOA 616.00).
+///
+/// Handler shape: validates out-struct `ver<<16|size == 0x10034` (V1, 52B:
+/// +0 version u32, +4/+12 two u64, +20/+24/+28 three u32), allocates an
+/// 888-byte RM control block (handle @+8) and issues internal RM-dispatch
+/// selector 0xC4 (sub_997F0), copying the reply back from block +24/+32
+/// (u64) and +56/+64/+72 (u32) on success.
+///
+/// Family inference: the 610 dispatcher (sub_963C0, 0x2E30B switch, cases
+/// 0..0xD2) implements NO case for 0xC4 — it falls to the default
+/// `NVAPI_NOT_SUPPORTED (-23)` body, and the selector has exactly one call
+/// site in the whole library (this handler). Implemented selector
+/// neighbours 0xB3..0xD2 speak GPU inforom/VPR (0x20800156/0x2080016b),
+/// PERF_GET_POWERSTATE (0x2080205a), NDA internal groups 0xA0xx
+/// (0x2080A084/0x2080A091) + 0xA7xx (0x2080A707), BUS C2C low-power
+/// (0x20801832/0x20801836) and FB carveout (0x20801360) — i.e. the
+/// device/platform housekeeping cluster, NOT the clock/perf/power/fan
+/// families nvoc drives. Best-supported reading: an NDA platform-status
+/// GET companion to [[Unknown_7B9681DA]]'s SET, whose RM backend this
+/// Linux build never wired up. Do not probe it expecting data.
+Unknown_4E0B05ED = 0x4e0b05ed,
+/// Linux-only SET/action-side of the pair with [[Unknown_4E0B05ED]]
+/// (610.57.04 QI table idx 211, handler @0x12D10). Absent from Windows
+/// tables (WOA 616.00).
+///
+/// Handler shape: validates in-struct `ver<<16|size == 0x10008` (V1, 8B)
+/// and maps the flag byte @+4 `{0->1, 1->2}` into a 12-byte control block
+/// `{0, gpu_handle, mode}`; issues internal RM-dispatch selector 0xC0
+/// (sub_997F0). No output copy — a pure apply/action call taking a mode
+/// enum, mirroring the GET-shaped 0xC4 partner.
+///
+/// Same fate as its partner: dispatcher case 0xC0 is unimplemented in
+/// 610.57.04 (single call site, falls to `NVAPI_NOT_SUPPORTED (-23)`).
+/// Selector neighbourhood and family reading identical — NDA platform
+/// housekeeping cluster; kept as a documentation-only reservation.
+Unknown_7B9681DA = 0x7b9681da,
+
+// ============================================================
 // YOFOO nvapi key-table additions
 // source: reverse/YOFOO.txt (NVIDIA api-key table, see
 //         https://www.cnblogs.com/zzz3265/p/16517057.html). Bulk-
@@ -2433,7 +2490,8 @@ Unknown_593E8644_LifecycleInit = 0x593e8644,
     NvAPI_Diag_GetNvConfigData = 0x843b4f60,
     NvAPI_GPU_GetAppStatistics = 0xad1e4a48,
     NvAPI_EnumAppStatistics = 0xb0c0a5fd,
-    NvAPI_SYS_GetDriverAndBranchVersionEx = 0xbf75a81e,
+    // NvAPI_SYS_GetDriverAndBranchVersionEx (0xbf75a81e) moved to the
+    // Linux-only section above with its 610.57.04 RE evidence.
     NvAPI_Mjolnir_SetupStreamingSession = 0xd1682334,
     NvAPI_GetAppStatisticsVm = 0xdf3e555e,
     NvAPI_Mjolnir_GetStreamingInfo = 0xed94e84c,
