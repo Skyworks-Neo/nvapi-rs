@@ -105,6 +105,15 @@ impl fmt::Display for NvapiError {
             // structured output (e.g. "NVAPI_NOT_SUPPORTED (-104)")
             None => write!(f, " ({})", self.status.raw())?,
         }
+        // Library-load failures fold their OS-level reason into a bare
+        // NVAPI_LIBRARY_NOT_FOUND at the FFI boundary; the sys loader
+        // records the real GetLastError/dlerror detail — append it here so
+        // no consumer ever sees just "cannot be loaded".
+        if matches!(self.status, Status::LibraryNotFound) {
+            if let Some(err) = sys::nvapi::last_load_error() {
+                write!(f, ": {err}")?;
+            }
+        }
         Ok(())
     }
 }

@@ -1,7 +1,9 @@
 use crate::status::{NvAPI_Status, Status};
 use crate::types;
+use std::fmt;
 use std::mem::size_of;
 use std::os::raw::c_void;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 pub use nvapi_macros::{NvInherit, NvStruct, VersionedStructField};
@@ -10,7 +12,14 @@ pub type QueryInterfaceFn = extern "C" fn(id: u32) -> *const c_void;
 
 #[cfg(all(windows, target_pointer_width = "32"))]
 pub const LIBRARY_NAME: &[u8; 10] = b"nvapi.dll\0";
-#[cfg(all(windows, target_pointer_width = "64"))]
+// WOA(Windows on ARM64): 616+ WOA driver installs a dedicated native-ARM64
+// shim `nvapia64.dll` alongside the ARM64X `nvapi64.dll` in System32
+// (nv_surface_woa.inf [nv_system32_copyfiles]). Prefer it on aarch64 targets
+// so we skip ARM64X dual-view resolution entirely; x64 targets keep loading
+// `nvapi64.dll`, whose x64 base view is exactly what an x64 process gets.
+#[cfg(all(windows, target_arch = "aarch64", target_pointer_width = "64"))]
+pub const LIBRARY_NAME: &[u8; 13] = b"nvapia64.dll\0";
+#[cfg(all(windows, target_pointer_width = "64", not(target_arch = "aarch64")))]
 pub const LIBRARY_NAME: &[u8; 12] = b"nvapi64.dll\0";
 #[cfg(target_os = "linux")]
 pub const LIBRARY_NAME: &[u8; 19] = b"libnvidia-api.so.1\0";
@@ -18,6 +27,53 @@ pub const LIBRARY_NAME: &[u8; 19] = b"libnvidia-api.so.1\0";
 pub const FN_NAME: &[u8; 21] = b"nvapi_QueryInterface\0";
 
 static QUERY_INTERFACE_CACHE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+
+/// OS-level detail for the most recent dynamic-library load failure in this
+/// process. The NVAPI ABI can only carry `NVAPI_LIBRARY_NOT_FOUND`, which
+/// folds the real reason away (missing DLL vs wrong machine vs missing
+/// symbol); this side channel preserves it so consumers surface the true
+/// error instead of a bare "library not found".
+#[derive(Debug, Clone)]
+pub struct LoadError {
+    /// Failing call with its argument, e.g. `LoadLibraryA("nvapi64.dll")`.
+    pub call: String,
+    /// Raw OS status code, when the platform has one (Windows `GetLastError`).
+    pub os_code: Option<u32>,
+    /// Human-readable OS message (`io::Error` display / `dlerror` string).
+    pub message: String,
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // On Windows `message` already carries "os error N" via io::Error's
+        // display; dlerror on Linux has no numeric code to add.
+        write!(f, "{} failed: {}", self.call, self.message)
+    }
+}
+
+static LAST_LOAD_ERROR: Mutex<Option<LoadError>> = Mutex::new(None);
+
+pub(crate) fn record_load_error(call: String, os_code: Option<u32>, message: String) {
+    *LAST_LOAD_ERROR.lock().unwrap() = Some(LoadError {
+        call,
+        os_code,
+        message,
+    });
+}
+
+/// The most recent library-load failure in this process, if any. Global (not
+/// thread-local): loads are one-shot and callers only read this on the
+/// failure path, so a racing reader seeing the previous attempt's error is
+/// acceptable for diagnostics.
+pub fn last_load_error() -> Option<LoadError> {
+    LAST_LOAD_ERROR.lock().unwrap().clone()
+}
+
+/// `LIBRARY_NAME` without its NUL terminator, for diagnostics strings.
+#[cfg(not(target_os = "macos"))]
+fn library_name_str() -> &'static str {
+    std::str::from_utf8(&LIBRARY_NAME[..LIBRARY_NAME.len() - 1]).unwrap_or("<nvapi library>")
+}
 
 /// # Safety
 ///
@@ -30,6 +86,11 @@ pub unsafe fn set_query_interface(ptr: QueryInterfaceFn) {
 #[cfg(target_os = "macos")]
 pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
     // TODO: Apparently nvapi is available for macOS?
+    record_load_error(
+        "nvapi loader".to_string(),
+        None,
+        "no NVAPI loader is implemented on this platform".to_string(),
+    );
     Err(Status::LibraryNotFound)
 }
 
@@ -37,7 +98,7 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
 // (many functions are not there, like it's impossible to identify physical handler by pci slot etc)
 #[cfg(target_os = "linux")]
 pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
-    use libc::{RTLD_LAZY, RTLD_LOCAL, dlopen, dlsym};
+    use libc::{RTLD_LAZY, RTLD_LOCAL, dlerror, dlopen, dlsym};
     use std::mem;
     use std::os::raw::c_char;
 
@@ -49,10 +110,22 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
                     RTLD_LAZY | RTLD_LOCAL,
                 );
                 if lib.is_null() {
+                    // dlerror is thread-local and cleared by the next call;
+                    // read it immediately after the failed dlopen
+                    let detail = match dlerror() {
+                        p if p.is_null() => "unknown dlopen failure".to_string(),
+                        msg => std::ffi::CStr::from_ptr(msg).to_string_lossy().into_owned(),
+                    };
+                    record_load_error(format!("dlopen({:?})", library_name_str()), None, detail);
                     Err(Status::LibraryNotFound)
                 } else {
                     let ptr = dlsym(lib, FN_NAME.as_ptr() as *const c_char);
                     if ptr.is_null() {
+                        let detail = match dlerror() {
+                            p if p.is_null() => "symbol not found".to_string(),
+                            msg => std::ffi::CStr::from_ptr(msg).to_string_lossy().into_owned(),
+                        };
+                        record_load_error(format!("dlsym({:?})", library_name_str()), None, detail);
                         Err(Status::LibraryNotFound)
                     } else {
                         QUERY_INTERFACE_CACHE.store(ptr, Ordering::Relaxed);
@@ -73,6 +146,7 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
 #[cfg(windows)]
 pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
     use std::mem;
+    use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 
     unsafe {
@@ -80,6 +154,16 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
             p if p.is_null() => {
                 let lib = LoadLibraryA(LIBRARY_NAME.as_ptr());
                 if lib.is_null() {
+                    // GetLastError must be read before any other API call —
+                    // this is the only place the real reason survives (193
+                    // = bad machine, 126 = not found, 5 = access denied, …)
+                    let code = GetLastError();
+                    let message = std::io::Error::from_raw_os_error(code as i32).to_string();
+                    record_load_error(
+                        format!("LoadLibraryA({:?})", library_name_str()),
+                        Some(code),
+                        message,
+                    );
                     Err(Status::LibraryNotFound)
                 } else {
                     // FARPROC is Option<fn>; a missing symbol is None, and a
@@ -90,6 +174,17 @@ pub fn nvapi_QueryInterface(id: u32) -> crate::Result<*mut c_void> {
                         None => std::ptr::null_mut(),
                     };
                     if ptr.is_null() {
+                        let code = GetLastError();
+                        let message = std::io::Error::from_raw_os_error(code as i32).to_string();
+                        record_load_error(
+                            format!(
+                                "GetProcAddress({:?}, {:?})",
+                                library_name_str(),
+                                "nvapi_QueryInterface"
+                            ),
+                            Some(code),
+                            message,
+                        );
                         Err(Status::LibraryNotFound)
                     } else {
                         QUERY_INTERFACE_CACHE.store(ptr, Ordering::Relaxed);
