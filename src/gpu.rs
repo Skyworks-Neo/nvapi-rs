@@ -6884,6 +6884,98 @@ impl PhysicalGpu {
         rpm: Option<u32>,
     ) -> crate::NvapiResult<Vec<SetFanRpmResult>> {
         trace!("gpu.set_fan_rpm({:?}, {:?})", cooler_index, rpm);
+        self.fan_cooler_rmw(
+            cooler_index,
+            |slot| {
+                let Some(target) = rpm else {
+                    return Ok(None);
+                };
+                // min/max from the control struct are the cooler's PHYSICAL
+                // RPM range (2070 live-verified: fan0 max = 3300 = full
+                // speed). The level register is a 0..65536 scale where
+                // 65536 = 100% = max RPM, so the conversion is a direct
+                // linear map: raw = rpm / max × 65536. (The relative
+                // interpolation ((v-min)<<16)/(max-min) double-converts —
+                // it first normalizes into the min..max span and then the
+                // driver scales again.)
+                // Guard: clamp the input into [min, max] (u64 math, no
+                // overflow). The 0..65536 level scale applies to ALL cooler
+                // types — 2070 live test showed the pwm-tach (type 2) raw
+                // RPM write lands at rpm/65536 ≈ 5% at full speed.
+                if slot.max_rpm == 0 {
+                    // No range reported: reject rather than divide by 0.
+                    return Err(crate::NvapiError::new(
+                        sys::Api::NvAPI_GPU_FanCoolerSetControl,
+                        sys::Status::InvalidArgument,
+                    ));
+                }
+                let v = if slot.min_rpm <= slot.max_rpm {
+                    target.clamp(slot.min_rpm, slot.max_rpm)
+                } else {
+                    target
+                };
+                Ok(Some((((v as u64) << 16) / (slot.max_rpm as u64)) as u32))
+            },
+            |slot, _| SetFanRpmResult {
+                cooler_index: slot.index,
+                cooler_type: slot.cooler_type,
+                min_rpm: slot.min_rpm,
+                max_rpm: slot.max_rpm,
+                applied_rpm: rpm,
+            },
+        )
+    }
+
+    /// Set fan duty by PERCENT through the same private fan-simulation
+    /// surface as [`Self::set_fan_rpm`] (NDA 0xEB44E8AA family). The level
+    /// register is an ABSOLUTE 0..65536 duty scale (65536 = 100% = max RPM,
+    /// live-verified), so a percentage maps linearly with no min/max
+    /// knowledge: `level = percent × 65536 / 100`.
+    ///
+    /// This is the percent fallback pin for drivers where the
+    /// ClientFanCoolers control-block SET (`set_cooler`) is rejected but the
+    /// simulation surface lives — 472.12 live: the percent path's
+    /// `--fan all` count=2 names a phantom Cooler2 and the whole SET returns
+    /// generic -1, while a count matching the presence mask succeeds here.
+    /// `percent = None` disables simulation (clear the enable bit → return
+    /// to driver/auto control), identical to `set_fan_rpm(None)`.
+    pub fn set_fan_percent(
+        &self,
+        cooler_index: Option<u32>,
+        percent: Option<u32>,
+    ) -> crate::NvapiResult<Vec<SetFanPercentResult>> {
+        trace!("gpu.set_fan_percent({:?}, {:?})", cooler_index, percent);
+        if let Some(p) = percent {
+            if p > 100 {
+                return Err(crate::NvapiError::new(
+                    sys::Api::NvAPI_GPU_FanCoolerSetControl,
+                    sys::Status::InvalidArgument,
+                ));
+            }
+        }
+        self.fan_cooler_rmw(
+            cooler_index,
+            |_slot| Ok(percent.map(|p| (((p as u64) * 65536) / 100) as u32)),
+            |slot, _| SetFanPercentResult {
+                cooler_index: slot.index,
+                cooler_type: slot.cooler_type,
+                applied_percent: percent,
+            },
+        )
+    }
+
+    /// Shared RMW core of `set_fan_rpm`/`set_fan_percent` (RE'd byte-exact
+    /// from ref tool 2 `GPUHandle::setFanSim`): GET info → presence mask →
+    /// GET the control snapshot → per-target `patch` (returns the raw
+    /// 0..65536 level, or `None` = clear the enable bit / return to auto) →
+    /// SET back. `build` turns each patched slot into the caller's result
+    /// row; errors abort before the SET.
+    fn fan_cooler_rmw<T>(
+        &self,
+        cooler_index: Option<u32>,
+        mut patch: impl FnMut(&FanCoolerSlot) -> crate::NvapiResult<Option<u32>>,
+        mut build: impl FnMut(FanCoolerSlot, Option<u32>) -> T,
+    ) -> crate::NvapiResult<Vec<T>> {
         if let Some(i) = cooler_index {
             if i >= 32 {
                 return Err(crate::NvapiError::new(
@@ -6941,53 +7033,25 @@ impl PhysicalGpu {
         let mut out = Vec::with_capacity(targets.len());
         for k in targets {
             let base = NV_GPU_FAN_COOLER_ENTRY0_BASE + k as usize * NV_GPU_FAN_COOLER_ENTRY_STRIDE;
-            let cooler_type = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_TYPE);
-            let min_rpm = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MIN_RPM);
-            let max_rpm = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MAX_RPM);
-            match rpm {
-                None => {
-                    // Disable simulation: clear enable bit.
-                    let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
-                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en & !1);
-                }
-                Some(target) => {
-                    // min/max from the control struct are the cooler's PHYSICAL
-                    // RPM range (2070 live-verified: fan0 max = 3300 = full
-                    // speed). The level register is a 0..65536 scale where
-                    // 65536 = 100% = max RPM, so the conversion is a direct
-                    // linear map: raw = rpm / max × 65536. (The relative
-                    // interpolation ((v-min)<<16)/(max-min) double-converts —
-                    // it first normalizes into the min..max span and then the
-                    // driver scales again.)
-                    // Guard: clamp the input into [min, max] (u64 math, no
-                    // overflow). The 0..65536 level scale applies to ALL cooler
-                    // types — 2070 live test showed the pwm-tach (type 2) raw
-                    // RPM write lands at rpm/65536 ≈ 5% at full speed.
-                    if max_rpm == 0 {
-                        // No range reported: reject rather than divide by 0.
-                        return Err(crate::NvapiError::new(
-                            sys::Api::NvAPI_GPU_FanCoolerSetControl,
-                            sys::Status::InvalidArgument,
-                        ));
-                    }
-                    let v = if min_rpm <= max_rpm {
-                        target.clamp(min_rpm, max_rpm)
-                    } else {
-                        target
-                    };
-                    let level = ((v as u64) << 16) / (max_rpm as u64) as u64;
-                    let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
-                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE, en | 1);
-                    write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, level as u32);
-                }
+            let slot = FanCoolerSlot {
+                index: k,
+                cooler_type: read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_TYPE),
+                min_rpm: read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MIN_RPM),
+                max_rpm: read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_MAX_RPM),
+            };
+            let level = patch(&slot)?;
+            // None = disable simulation: clear enable bit; Some = enable and
+            // write the patched duty level.
+            let en = read_u32(&buf, base + NV_GPU_FAN_COOLER_OFF_ENABLE);
+            write_u32(
+                &mut buf,
+                base + NV_GPU_FAN_COOLER_OFF_ENABLE,
+                if level.is_some() { en | 1 } else { en & !1 },
+            );
+            if let Some(level) = level {
+                write_u32(&mut buf, base + NV_GPU_FAN_COOLER_OFF_LEVEL, level);
             }
-            out.push(SetFanRpmResult {
-                cooler_index: k,
-                cooler_type,
-                min_rpm,
-                max_rpm,
-                applied_rpm: rpm,
-            });
+            out.push(build(slot, level));
         }
         unsafe {
             nvcall!(NvAPI_GPU_FanCoolerSetControl(
@@ -8895,6 +8959,26 @@ pub struct SetFanRpmResult {
     pub min_rpm: u32,
     pub max_rpm: u32,
     pub applied_rpm: Option<u32>,
+}
+
+/// Result of a `set_fan_percent` call (percent → 0..65536 duty on the
+/// FanCoolerSetControl simulation surface).
+/// `applied_percent` is `None` when simulation was disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetFanPercentResult {
+    pub cooler_index: u32,
+    /// 0=active, 1=pwm, 2=pwm-tach
+    pub cooler_type: u32,
+    pub applied_percent: Option<u32>,
+}
+
+/// One cooler slot of the control block, as handed to the
+/// `fan_cooler_rmw` patch/build closures.
+struct FanCoolerSlot {
+    index: u32,
+    cooler_type: u32,
+    min_rpm: u32,
+    max_rpm: u32,
 }
 
 // ── PerfLimits large-struct byte offsets (magic 0x6642C, 0x4642C B) ──
