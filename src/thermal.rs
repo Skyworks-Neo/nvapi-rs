@@ -378,6 +378,11 @@ pub struct CoolerSettings {
 }
 
 impl CoolerSettings {
+    /// NOTE: the `None` branch defaults to TemperatureContinuous — the SW
+    /// temperature-curve mode whose ClientFanPolicies table is unpopulated
+    /// by default (0/2/6 RPM stall until 84C). Callers that mean "clear the
+    /// override without switching modes" must construct explicitly (policy
+    /// `None` = 0), not rely on this helper.
     pub fn new(level: Option<Percentage>) -> Self {
         Self {
             policy: match level {
@@ -385,6 +390,18 @@ impl CoolerSettings {
                 None => CoolerPolicy::TemperatureContinuous,
             },
             level,
+        }
+    }
+
+    /// Minimal-semantics override clear: policy None (0) + level None, so
+    /// the control-block write sets bit0=0 without switching modes. Whether
+    /// a given driver accepts policy 0 is board/driver dependent (live A/B
+    /// before relying on it); `ResetNvapiFanControl` keeps
+    /// TemperatureContinuous for cards that reject it.
+    pub fn clear_override() -> Self {
+        Self {
+            policy: CoolerPolicy::None,
+            level: None,
         }
     }
 
