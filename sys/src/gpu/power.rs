@@ -54,8 +54,20 @@ pub mod undocumented {
     //     seed/type u32 @+72 seeded from rail entry +192*bit+76, then SIX u32
     //     @+76..+100 which SPAN PAST the slot stride — the driver's own getter
     //     copies exactly those six.
-    // RM layer: escape 0x07000191, ctrl cmds 0x2080A601 (info) / 0x2080A613
-    // (control), ~500 KB driver-internal buffers.
+    // RM layer (full marshal RE, docs/reverse-engineering/nvapi/
+    // voltrails-family-full-layout-r610.md): escape 0x07000191 through
+    // sub_180389320 with a 500,008-byte (0x7A118) request buffer
+    // (buf[12]=gpu, buf[13]=ctrl cmd, buf[15]=rail-mask filter), one RM
+    // ctrl cmd per op — GetInfo **0x2080B201** (76B records), GetStatus
+    // **0x2080B202** (100B records), GetControl **0x2080B213** / SetControl
+    // **0x2080F214** (32B records, type byte @+0, 6-dword payload @+4).
+    // The cmds previously recorded here (0x2080A601/0x2080A613) belong to
+    // the OTHER family — the percent-ClientVoltRails surface (handler
+    // sub_180235F10, 104B struct, 16B entries) — not this one.
+    //
+    // GetInfo handler sub_1801D1420 sends mask filter 0 (all rails);
+    // GetStatus/GetControl forward the caller's mask; GetStatus also
+    // copies the head when mask==0 (v2 dst[2..7] ← rm[16..21]).
     //
     // VoltVoltRailsSetControl 0x87C55C8A (the µV-offset WRITE path melonVolt
     // drives) is wrapped in the medium layer with the full melonVolt protocol
@@ -64,11 +76,46 @@ pub mod undocumented {
 
     /// Byte offsets into the per-rail entries of
     /// [`NV_GPU_VOLT_RAILS_INFO`].
+    ///
+    /// Full marshal map (R610.74 `sub_1801D1420`, 76B RM records → 192B
+    /// slots; live 4060L values in parens; semantics in brackets are
+    /// structurally pinned but not A/B-confirmed):
+    ///
+    /// | off | width | src | live | meaning |
+    /// |-----|-------|-----|------|---------|
+    /// | +76 | u32 | byte 0x44 → type enc | 0 | format tag (see type enc) |
+    /// | +80 | u32 | byte 0x77 → class enc | 1 | rail class 1..8 (also V1-status "type") |
+    /// | +84 | u8 | 0x53 | 1 | |
+    /// | +88 | u32 | 0x48 | 750000 | µV (0.75 V) [nominal/vfloor candidate] |
+    /// | +92 | u16 | 0x4C | 2 | |
+    /// | +94 | u16 | 0x4E | 0xFFFF | [invalid marker] |
+    /// | +96 | u16 | 0x50 | 8 | |
+    /// | +100 | u32 | 0x64 | 1 | |
+    /// | +104 | u16 | 0x56 | 7 | |
+    /// | +106 | u16 | 0x58 | 10 | |
+    /// | +110 | u16 | 0x5E (byte) | 2 | |
+    /// | +112 | u8 | 0x54 | 1 | |
+    /// | +113 | u8 | const | 0xFF | always 0xFF |
+    /// | +116 | u32 | 0x60 | 29 | |
+    /// | +120 | u8 | 0x5A | 16 | |
+    /// | +124 | u32 | 0x6C | 820000 | µV (0.82 V) [nominal/vfloor candidate] |
+    /// | +128 | u32 | 0x68 | 959 | |
+    /// | +132..+139 | per-type tail | 0x7A..0x84 | 2/17/16 | type-0: u8@132←0x7A, u16@134←0x7C, u16@136←0x7E; type-2: u32@132←0x80, u8@136←min(word 0x84,0xFF); type-3: u32@132←0x7C, u8@136←0x80 |
+    ///
+    /// Struct head outside the loop: `mask(+4) |= 1<<bit` (RM dword 0x3C);
+    /// struct byte +8 ← RM byte +0x40.
     pub mod rail_entry {
         /// stride per rail BIT index
         pub const STRIDE: usize = 192;
         /// u32 type discriminator (copied into control/status entry seeds)
         pub const TYPE: usize = 76;
+        /// u32 rail class 1..8 (`sub_18015B540`: RM byte 1..8 identity,
+        /// else 0 + status -5); the field GetStatus V1 mirrors as "type"
+        pub const CLASS: usize = 80;
+        /// u32 µV reading (0.75 V on live 4060L rail 0)
+        pub const UV_A: usize = 88;
+        /// u32 µV reading (0.82 V on live 4060L rail 0)
+        pub const UV_B: usize = 124;
     }
 
     /// Byte offsets into the dense per-rail entries of the control/status
@@ -118,6 +165,19 @@ pub mod undocumented {
     /// empirically raisable to 1.2V. `values[1..5]` are an opaque blob the
     /// driver blind-copies (SET commit `sub_1801D2450`) with no per-type
     /// dispatch — firmware-interpreted, not driver-interpreted.
+    ///
+    /// Type provenance (IDA `sub_18015B690`): the driver maps the RM raw
+    /// byte to the exported dword — `2 → 0, 4 → 2, 5 → 3, 0xFF → -1,
+    /// other → -2` (never errors). The exported 0/2/3 space is a per-rail
+    /// format tag.
+    ///
+    /// **GetStatus V1 caveat** (handler `sub_1801D1CD0` → back-converter
+    /// `sub_1801C83E0`): the V1 status entry's type@+72 is NOT this RM type
+    /// tag — the V1 path internally re-runs GetInfo and copies the
+    /// descriptor's rail CLASS (GetInfo +80, RM class byte 1..8 identity,
+    /// else 0 + status -5) into +72. That is why the live 4060L status
+    /// reports type=1 while the GetInfo descriptor reports type=0 on the
+    /// same rail: different fields (class 1 vs RM type tag 0).
     pub mod status_values {
         pub const CURRENT_UV: usize = 0;
         pub const TARGET_WALL_UV: usize = 1;
@@ -160,9 +220,10 @@ pub mod undocumented {
         }
 
         /// Raw 192-byte rail descriptor for `bit` as 48 little-endian u32.
-        /// Only the type @dword 19 is decoded so far — the rest is undecoded
-        /// driver data (observed non-zero on 4060 Laptop); dumped for
-        /// cross-platform comparison.
+        /// Decoded dwords: 19 = type, 20 = class, 22/31 = the two µV
+        /// readings (see the [`rail_entry`] map); the rest is marshaled
+        /// but semantically unconfirmed driver data (observed non-zero on
+        /// 4060 Laptop); dumped for cross-platform comparison.
         ///
         /// Rail entry 0 starts at struct offset 0, so its first 8 bytes
         /// overlap the version/mask header — dword 0/1 of entry 0 are the
@@ -218,6 +279,16 @@ pub mod undocumented {
     nvstruct! {
         /// Live-voltage variant: identical layout, but the driver only accepts
         /// the V1 version stamp 0x10AC8 (68296) here.
+        ///
+        /// The handler (`sub_1801D1CD0`) ALSO accepts a V2 stamp **0x21620**
+        /// ((2<<16)|0x1620, 5664 B): entries become 43-dword (172 B) slots
+        /// indexed by RAIL BIT (not dense), entry base = struct +160 +
+        /// 172·bit, each with 9 payload dwords (+4..+39 = values[0..8] —
+        /// [0..5] same semantics as V1, [6..8] extra, live 4060L: 0/625000/0),
+        /// an enum byte @+40 (RM byte +132; 0/1/2 valid, else -1 + status
+        /// -5), and for type-0 entries a tail: dwords +48/+52/+56 ← RM
+        /// dwords +168/+164/+172 (live 810000/820000/29) + byte +44 ← RM
+        /// byte +176 (live 1). V1 is a lossy projection of that V2 form.
         pub struct NV_GPU_VOLT_RAILS_STATUS_V1 {
             pub version: NvVersion,
             /// in: bitmask of rails to read
@@ -339,7 +410,9 @@ pub mod undocumented {
 
     nvapi! {
         /// Private VoltRails live-status GET (per-rail voltages, µV).
-        /// V1-stamped (0x10AC8) struct required; seeded like GetControl.
+        /// V1 stamp 0x10AC8 (dense 84B entries; the production path) or V2
+        /// stamp 0x21620 (5664B, bit-indexed 172B entries — see
+        /// [`NV_GPU_VOLT_RAILS_STATUS_V1`]); seeded like GetControl.
         pub unsafe fn NvAPI_GPU_VoltVoltRailsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_VOLT_RAILS_STATUS) -> NvAPI_Status;
     }
 

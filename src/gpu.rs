@@ -111,12 +111,15 @@ impl VoltRailEntry {
     }
 }
 
-/// Raw 192-byte rail descriptor from GetInfo (only type @dword 19 decoded).
+/// Raw 192-byte rail descriptor from GetInfo. Decoded dwords: 19 = type,
+/// 20 = rail class, 22/31 = the two µV readings (semantics — nominal vs
+/// V/F-floor candidate — not yet A/B-confirmed; see
+/// `sys::gpu::power::undocumented::rail_entry` for the full marshal map).
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct RailDescriptor {
     pub rail_bit: u32,
-    /// 48 little-endian u32; dword 19 = entry type discriminator.
+    /// 48 little-endian u32; decoded dwords pinned by the accessors below.
     pub raw_u32: Vec<u32>,
 }
 
@@ -124,6 +127,26 @@ impl RailDescriptor {
     /// entry type discriminator (dword 19, byte offset +76)
     pub fn entry_type(&self) -> u32 {
         self.raw_u32.get(19).copied().unwrap_or(0)
+    }
+
+    /// rail class 1..8 (dword 20, byte offset +80; identity-encoded from
+    /// the RM class byte, 0 = invalid). The field GetStatus **V1** mirrors
+    /// as its entry "type" — so a status type=1 with a descriptor type=0 on
+    /// the same rail is class 1, not a mismatch.
+    pub fn class(&self) -> u32 {
+        self.raw_u32.get(20).copied().unwrap_or(0)
+    }
+
+    /// µV reading A (dword 22, byte offset +88; live 4060L rail 0: 750000
+    /// = 0.75 V). Nominal-vs-vfloor semantics unconfirmed.
+    pub fn uv_a(&self) -> u32 {
+        self.raw_u32.get(22).copied().unwrap_or(0)
+    }
+
+    /// µV reading B (dword 31, byte offset +124; live 4060L rail 0: 820000
+    /// = 0.82 V). Nominal-vs-vfloor semantics unconfirmed.
+    pub fn uv_b(&self) -> u32 {
+        self.raw_u32.get(31).copied().unwrap_or(0)
     }
 }
 
@@ -138,8 +161,9 @@ pub struct VoltRails {
     pub control: Vec<VoltRailEntry>,
     pub status: Vec<VoltRailEntry>,
     /// raw 192-byte rail descriptors (48×u32) from GetInfo, indexed by rail
-    /// bit — only dword 19 (type @+76) is decoded so far; the rest is
-    /// undecoded driver data dumped for cross-platform comparison.
+    /// bit — decoded dwords (type/class/two µV readings) are exposed by the
+    /// [`RailDescriptor`] accessors; the rest is undecoded driver data
+    /// dumped for cross-platform comparison.
     pub rail_descriptors: Vec<RailDescriptor>,
 }
 
