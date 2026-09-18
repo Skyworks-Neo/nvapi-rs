@@ -2111,9 +2111,16 @@ pub mod undocumented {
         }
 
         /// Records whose raw bytes are (0, 1, 1) = GPC(0)→XBAR(1)
-        /// bidirectional. The NvpwrControl semantic gate requires EXACTLY ONE
-        /// such record before any TopRels write is authorized; treat
-        /// `len() != 1` as fail-closed.
+        /// bidirectional. Deliberately matches on BYTES ONLY: the ratio
+        /// payload is generation-dependent — live RTX 4060 Laptop (R610):
+        /// rec0 matches with enum=2 (wire tag 5) and payload=0 (no ratio on
+        /// Ada), while the NvpwrControl 616.92 audit's tag-3 + 0xE660 shape
+        /// is Blackwell-specific. A tool-style strict gate (enum==0 AND
+        /// payload==0xE660) would MISS the Ada edge. After a hit, check
+        /// [`Self::relation_payload`] for an actual U16.16 ratio before
+        /// treating the edge as ratio-capable. The NvpwrControl semantic
+        /// gate requires EXACTLY ONE such record before any TopRels write;
+        /// treat `len() != 1` as fail-closed.
         pub fn find_gpc_xbar_records(&self) -> Vec<usize> {
             let mut hits = Vec::new();
             for i in 0..255usize {
