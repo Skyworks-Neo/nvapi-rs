@@ -1393,6 +1393,47 @@ pub mod undocumented {
         pub const STAMP: u32 = 0x612E4;
     }
 
+    // ==== RM power-policy object model (kernel) ↔ the wrapped TGP surfaces ====
+    //
+    // The NvpwrControl 616.92 kernel RE
+    // (docs/reverse-engineering/nvapi/nvpwrcontrol-blackwell-tuner-audit.md §2)
+    // resolved nvlddmkm's live power-policy objects. The model UNDER this
+    // wrapped surface reads:
+    //
+    //   global+0x208 → GPU table (stride 0x10) → Major+0x25B0 → PowerRoot:
+    //     init@0x3D10, elig@0x3D11, amountActive@0x3D12, base@0x3D14,
+    //     amount@0x3D18, policyKey@0x3D1C, LOWER@0x3D20, UPPER@0x3D24 (mW)
+    //   Board: setFn@0x2D0, selector2 = MAX (source 0xFE) @0x104,
+    //     selector3 = CURRENT (source 0xF7 = generator output) @0x1F4;
+    //     selector slot = {mode@0, count@1, effective@4, secondary@8,
+    //     src[]@0xC stride 8}
+    //
+    // The F7 generator (RVA 0x4E3EF0 on 616.92) computes
+    //     F7 = min(C+A, U)
+    // from base C, PPAB amount A, LOWER B and UPPER U, active when
+    // elig=1 ∧ amountActive=1 ∧ U>B ∧ A≤U−B. State semantics:
+    //   stock    : elig=0, amount=0, base==UPPER, F7==UPPER (current rides max)
+    //   DB-active: elig=1, base=cTGP, amount=DB budget → F7=min(cTGP+A, U)
+    //
+    // Consequences for THIS crate:
+    //   - A SET above MAX is rejected by the RM policy layer (why the desktop
+    //     power-limit path cannot exceed laptop ceilings) — only the generator
+    //     INPUTS (base/amount via PPAB/TGP-watt, elig via 0x1504FC3D) have
+    //     wrapped exits; the ceilings (UPPER / Board MAX / Type07 / NVPCF
+    //     maxima) have NO command-surface exit (audit §6: user-mode cannot
+    //     raise them).
+    //   - User-mode view mapping: `tgp_watt_range().min_mw` ↔ LOWER,
+    //     `max_mw` ↔ Board MAX/UPPER ceiling, `tgp_watt_status().current_mw`
+    //     ↔ the F7/CURRENT side. The kernel stock base (==UPPER) and the live
+    //     elig/amount flags are NOT directly visible — GetInfo's "default" is
+    //     the slider default, NOT the kernel base (70 W vs 140 W on the
+    //     reference machine).
+    //   - The kernel route (if ever) is a documented three-phase transfer —
+    //     A: stage base+amount under the OEM ceiling, B: raise Board MAX +
+    //     UPPER, C: re-run the native generator + full readback — with
+    //     same-session baseline capture and identity-guarded rollback
+    //     (audit §2.6). Test-signed-driver costs: audit §1.
+
     nvapi! {
         /// Undocumented (NDA, ID 0x67F31384). Private ClientPowerPoliciesGetInfo
         /// variant — the TGP-watts min/default/max range + active policy index.

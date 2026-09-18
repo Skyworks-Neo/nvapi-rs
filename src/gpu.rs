@@ -1244,6 +1244,12 @@ impl PhysicalGpu {
     /// (×2, /2000 = MHz) while MEMORY deltas are plain kHz (/1000 = MHz).
     /// This SetPstates20 path takes plain kHz for both domains (ccminer
     /// writes `freqDelta_kHz.value = delta` then logs `delta/1000`).
+    ///
+    /// 616.92 Blackwell audit cross-check: the driver also accepts a MINIMAL
+    /// V1 request (magic 0x11C94, 7316 B) carrying only P0 + the chosen
+    /// domains with all reserved fields zero — the same minimal-build
+    /// pattern as this wrapper (audit §4.2). The GET-side V2/V1 cascade in
+    /// [`Gpu::pstates`] needs no change.
     pub fn set_pstates<I: IntoIterator<Item = (PState, ClockDomain, KilohertzDelta)>>(
         &self,
         deltas: I,
