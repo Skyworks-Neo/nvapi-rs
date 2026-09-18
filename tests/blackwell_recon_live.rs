@@ -5,8 +5,9 @@
 //!   2. ClockDomains V2 control block: record type bytes (Ada 0x0A vs
 //!      Blackwell 0x0F probe), Blackwell freq/MSVDD anchors, unique-populated
 //!      entry (XBAR discovery heuristic)
-//!   3. Direct measure 0x527FC458 with +4 ∈ {0..4} — captures the 50-series
-//!      index-vs-mask dispute baseline (40-series: 1=XBAR, 2=SYS)
+//!   3. Direct measure 0x527FC458 sweep +4 = 0..15 — captures the 50-series
+//!      index-vs-mask dispute baseline (40-series load-verified:
+//!      0=GPC 1=XBAR 2=SYS 3=fixed~450 4=MCLK)
 //!
 //! Run with:
 //!   cargo test -p nvapi --test blackwell_recon_live -- --nocapture --ignored
@@ -142,8 +143,15 @@ fn blackwell_recon() {
     }
 
     // ---- 4. Direct measure sweep (index-vs-mask dispute) -------------------
-    println!("\n== Direct measure 0x527FC458, +4 = 0..4 ==");
-    for d in 0u32..=4 {
+    // 4060L load-verified attribution (R610): 0=GPC 1=XBAR 2=SYS 3=fixed
+    // ~450 (HUB hypothesis, unconfirmed — differential-write pending)
+    // 4=MCLK. Slot bound is unknown; sweep to 15 to enumerate. On 50-series
+    // the +4=2 slot is the verdict: ≈0.9×GPC ⇒ mask semantics (the tool was
+    // right), ≈slot-1-tracking-SYS ⇒ index semantics persist.
+    println!("\n== Direct measure 0x527FC458, +4 = 0..15 ==");
+    let mut gpc_khz = 0u32;
+    let mut rows: Vec<(u32, i32, u32)> = Vec::new();
+    for d in 0u32..=15 {
         let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT_V1 {
             version: NvVersion::new(
                 size_of::<NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT_V1>(),
@@ -153,10 +161,24 @@ fn blackwell_recon() {
             freq_khz: 0,
         };
         let st = unsafe { sys::api::NvAPI_GPU_ClockClkDomainsMeasureFreq(*gpu.handle(), &mut m) };
+        if d == 0 && st == 0 {
+            gpc_khz = m.freq_khz;
+        }
+        rows.push((d, st, m.freq_khz));
         println!(
-            "  +4={d}: status={st:?} freq={:.3} MHz",
+            "  +4={d:2}: status={st:?} freq={:.3} MHz",
             f64::from(m.freq_khz) / 1000.0
         );
+    }
+    if gpc_khz > 0 {
+        for (d, st, khz) in &rows {
+            if *st == 0 && *d > 0 && *khz > 0 {
+                println!(
+                    "  ratio +4={d} / GPC = {:.4}",
+                    f64::from(*khz) / f64::from(gpc_khz)
+                );
+            }
+        }
     }
     println!("\n(done — nothing was written; audit §4.3 has the 50-series verdict protocol)");
 }
