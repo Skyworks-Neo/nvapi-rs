@@ -147,15 +147,20 @@ fn blackwell_recon() {
     }
 
     // ---- 4. Direct measure sweep (index-vs-mask dispute) -------------------
-    // 4060L load-verified attribution (R610): 0=GPC 1=XBAR 2=SYS 3=fixed
-    // ~450 (HUB hypothesis, unconfirmed — differential-write pending)
-    // 4=MCLK. Slot bound is unknown; sweep to 15 to enumerate. On 50-series
-    // the +4=2 slot is the verdict: ≈0.9×GPC ⇒ mask semantics (the tool was
-    // right), ≈slot-1-tracking-SYS ⇒ index semantics persist.
-    println!("\n== Direct measure 0x527FC458, +4 = 0..15 ==");
+    // MEASURE bit universe = RTSS order (cli parse_clk_domain_table):
+    // 0=GPC 1=XBAR 2=SYS 3=HUB 4=M 5=HOST 6=DISP 7=Hotclk 8=Pclk0 9=Pclk1
+    // 10=Bypclk 11=Xclk 12=Vpv 13=Vps 14=GpuCache 15=Gpc2 16=Xbar2 17=Sys2
+    // 18=Hub2 19=Leg 20=Pwr 21=MSD 22=Utils 23=ColdNv 24=ColdHotclk
+    // 25=Ltc2 28=Host1x. Two IDs share this universe: the counter-based
+    // two-sample 0xFB8F61EC (CLI get-private-freq-domain-status) and this
+    // direct 0x527FC458. Sweep the FULL table — the earlier 0..15 sweep
+    // wrongly concluded "MSD has no measure slot" (msd=21 was out of range).
+    // On 50-series the +4=2 slot is the verdict: ≈0.9×GPC ⇒ mask semantics
+    // (the tool was right), SYS-tracking ⇒ index semantics persist.
+    println!("\n== Direct measure 0x527FC458, +4 = 0..28 ==");
     let mut gpc_khz = 0u32;
     let mut rows: Vec<(u32, i32, u32)> = Vec::new();
-    for d in 0u32..=15 {
+    for d in 0u32..=28 {
         let mut m = NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT_V1 {
             version: NvVersion::new(
                 size_of::<NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT_V1>(),
