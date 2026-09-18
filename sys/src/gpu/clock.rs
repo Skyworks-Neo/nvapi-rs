@@ -1602,9 +1602,20 @@ pub mod undocumented {
         /// load scenario); the counter variant's 50 ms window can SMOOTH gate
         /// transients or return 0 when Δcounter=0 across the sample, so the
         /// direct form is the more robust single-sample read under load.
+        ///
+        /// 50-SERIES CAVEAT (unresolved): the NvpwrControl 616.92 audit reads
+        /// its "physical XBAR clock" through this ID with +4 = 0x2 — under the
+        /// index semantics above that is SYS, not XBAR. Either that tool
+        /// mislabels its display, or Blackwell changed this field to a bit
+        /// mask (bit = 1 << domain, XBAR = 0x2). On first live Blackwell
+        /// contact read +4 ∈ {1, 2} under GPC load and disambiguate with the
+        /// TopRels GPC:XBAR ratio (XBAR ≈ 0.9 × GPC — see
+        /// `NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1`).
         pub struct NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT_V1 {
             pub version: NvVersion,
             /// +4 sequential domain INDEX in (GPC=0, XBAR=1, SYS=2, MCLK=4)
+            /// — ≤40-series live-verified; 50-series encoding under dispute
+            /// (index vs bit mask), see the struct-level 50-SERIES CAVEAT
             pub domain_index: u32,
             /// +8 OUT: measured frequency in kHz (0 on refused/unmeasurable,
             /// or transient GCOFF gate-cycling at idle for GPC/XBAR)
@@ -1745,6 +1756,23 @@ pub mod undocumented {
         pub const VALUE_COUNT: usize = 8;
     }
 
+    /// Blackwell (50-series) anchors for the V2 ClockDomains control
+    /// records, recovered from the NvpwrControl 616.92 RE (audited 0x304
+    /// stride — the SAME 772B record family as Ada, different type byte and
+    /// value field map). See
+    /// docs/reverse-engineering/nvapi/nvpwrcontrol-blackwell-tuner-audit.md
+    /// §4.1. Static anchors: verify against MEASURE readback on first live
+    /// Blackwell contact.
+    pub mod clk_ctrl_entry_v2_blackwell {
+        /// record+0 low byte type discriminator on Blackwell (Ada reports
+        /// 0x0A) — a runtime generation probe for this block.
+        pub const TYPE_BLACKWELL: u8 = 0x0F;
+        /// record+0x114: domain frequency delta, kHz (== VALUES[2])
+        pub const FREQ_KHZ: usize = 0x114;
+        /// record+0x11C: MSVDD request offset, µV (== VALUES[4])
+        pub const MSVDD_UV: usize = 0x11C;
+    }
+
     nvstruct! {
         /// V2 control block for the private ClockClient GetControl/SetControl.
         /// Magic 0x261A4 = version 2 | size 0x61A4 = 24996 bytes. NOTE: an
@@ -1830,6 +1858,68 @@ pub mod undocumented {
             }
             m
         }
+
+        /// Blackwell generation check: record type low byte == 0x0F (Ada
+        /// reports 0x0A). See [`clk_ctrl_entry_v2_blackwell`].
+        pub fn record_type_blackwell(&self, bit: u32) -> Option<bool> {
+            self.record_type(bit)
+                .map(|t| t == clk_ctrl_entry_v2_blackwell::TYPE_BLACKWELL)
+        }
+
+        fn bw_u32(&self, bit: u32, field_off: usize) -> Option<i32> {
+            self.rec_off(bit, field_off, 4).and_then(|off| {
+                self.rest
+                    .get(off..off + 4)
+                    .and_then(|s| s.try_into().ok())
+                    .map(u32::from_le_bytes)
+                    .map(|v| v as i32)
+            })
+        }
+
+        fn set_bw_u32(&mut self, bit: u32, field_off: usize, v: i32) -> Option<()> {
+            let off = self.rec_off(bit, field_off, 4)?;
+            self.rest[off..off + 4].copy_from_slice(&(v as u32).to_le_bytes());
+            Some(())
+        }
+
+        /// Blackwell domain frequency delta (kHz) @rec+0x114 (== VALUES[2]).
+        pub fn bw_freq_khz(&self, bit: u32) -> Option<i32> {
+            self.bw_u32(bit, clk_ctrl_entry_v2_blackwell::FREQ_KHZ)
+        }
+
+        /// Write the Blackwell frequency delta (kHz) @rec+0x114.
+        pub fn set_bw_freq_khz(&mut self, bit: u32, khz: i32) -> Option<()> {
+            self.set_bw_u32(bit, clk_ctrl_entry_v2_blackwell::FREQ_KHZ, khz)
+        }
+
+        /// Blackwell MSVDD request offset (µV) @rec+0x11C (== VALUES[4]).
+        pub fn bw_msvdd_uv(&self, bit: u32) -> Option<i32> {
+            self.bw_u32(bit, clk_ctrl_entry_v2_blackwell::MSVDD_UV)
+        }
+
+        /// Write the Blackwell MSVDD request offset (µV) @rec+0x11C.
+        pub fn set_bw_msvdd_uv(&mut self, bit: u32, uv: i32) -> Option<()> {
+            self.set_bw_u32(bit, clk_ctrl_entry_v2_blackwell::MSVDD_UV, uv)
+        }
+
+        /// NvpwrControl XBAR discovery heuristic: among the 32 record slots,
+        /// the SINGLE entry whose freq or MSVDD field is nonzero. None on 0
+        /// or ≥2 candidates — fail-closed; do not fall back to the NvAPI
+        /// enum default (XBAR=1) without your own validation.
+        pub fn find_unique_populated_entry(&self) -> Option<u32> {
+            let mut hit: Option<u32> = None;
+            for bit in 0..32u32 {
+                let populated = self.bw_freq_khz(bit).unwrap_or(0) != 0
+                    || self.bw_msvdd_uv(bit).unwrap_or(0) != 0;
+                if populated {
+                    if hit.is_some() {
+                        return None;
+                    }
+                    hit = Some(bit);
+                }
+            }
+            hit
+        }
     }
 
     nvstruct! {
@@ -1893,6 +1983,462 @@ pub mod undocumented {
         /// for verifying a ClkDomains offset took effect (XBAR=domain 1,
         /// SYS=domain 2). 12-byte V1 struct, magic 0x0001000C.
         pub unsafe fn NvAPI_GPU_ClockClkDomainsMeasureFreq(hPhysicalGPU: NvPhysicalGpuHandle, pMeasure: *mut NV_GPU_CLOCK_CLIENT_CLK_DOMAIN_MEASURE_FREQ_DIRECT) -> NvAPI_Status;
+    }
+
+    // ==== ClockClkProp TopRels (clock topological relations / GPC→XBAR ratio) ====
+    //
+    // Structure: IDA-audited on 462/610 —
+    // reverse/version-audit/nvclocks-audit/clkprop-tops-toprels-regimes.md.
+    // Semantics: NvpwrControl 616.92 RE —
+    // docs/reverse-engineering/nvapi/nvpwrcontrol-blackwell-tuner-audit.md §4.4.
+    // One relation record describes GPC(0)→XBAR(1) with a bidirectional U16.16
+    // frequency ratio whose Blackwell default raw is 0xE660 (= 0.9001…). Escape
+    // 0x07000049@610 / 0x0700004A@462; the SET has NO privilege gate (plain
+    // escape, audit-verified) — treat as a dangerous clock-tree write.
+
+    /// Byte offsets into [`NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1`]
+    /// (absolute struct offsets; `rest` begins at +4).
+    pub mod clk_top_rels_info {
+        /// literal magic dword the handler compares (full-size family:
+        /// 0x15798 = 0x8E8 + 255×0x150, NOT ver<<16|size)
+        pub const MAGIC: u32 = 0x15798;
+        /// relation count u8
+        pub const COUNT: usize = 4;
+        /// 32B (256-bit) populated-relation mask, bit i ⇔ record i
+        pub const MASK: usize = 8;
+        /// array A base: COUNT × 0x44 records, each 2×u16 raw {src,dst} pairs
+        pub const ARRAY_A: usize = 0x68;
+        /// array A record stride
+        pub const ARRAY_A_STRIDE: usize = 0x44;
+        /// array B base: up to 255 tagged relation records
+        pub const ARRAY_B: usize = 0x8E8;
+        /// array B record stride (user struct; the wire record is 20B)
+        pub const RECORD_STRIDE: usize = 0x150;
+        /// record+0: translated tag enum (wire tag via {3→0, 4→1, 5→2, 6→3, 7→4})
+        pub const REC_ENUM: usize = 0;
+        /// record+4/+5/+6: three raw wire bytes (semantic scan: src=0 GPC,
+        /// dst=1 XBAR, bidir=1)
+        pub const REC_BYTES: usize = 4;
+        /// record+8: payload u32 (for the GPC→XBAR tag-3 record: the ratio)
+        pub const REC_PAYLOAD: usize = 8;
+        /// record+0xC: tag-3 second payload u32 (meaning unpinned)
+        pub const REC_PAYLOAD2: usize = 0xC;
+    }
+
+    nvstruct! {
+        /// Private ClockClkProp TopRels GET_INFO (ID 0xE826E4F0). Returns the
+        /// clock topological relation table: count u8@+4, 256-bit populated
+        /// mask@+8, array A of {src,dst} u16 pairs, then 255 tag-dispatched
+        /// records — see [`clk_top_rels_info`]. On Blackwell laptops the
+        /// GPC→XBAR relation carries the U16.16 clock ratio (default raw
+        /// 0xE660).
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1 {
+            pub version: NvVersion,
+            /// +4 .. +0x15798
+            pub rest: [u8; 0x15794],
+        }
+    }
+
+    // Full-size magic family (0x15798 exceeds 16 size bits) — no `nvversion!`
+    // stamp: callers set `version = NvVersion::with_version(MAGIC)` (the
+    // literal the handler compares), same as the V/F-points family above.
+    pub type NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO =
+        NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1;
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1 {
+        fn rec_off(&self, i: usize, field_off: usize, len: usize) -> Option<usize> {
+            if i >= 255 {
+                return None;
+            }
+            let abs = clk_top_rels_info::ARRAY_B
+                .checked_add(i.checked_mul(clk_top_rels_info::RECORD_STRIDE)?)?
+                .checked_add(field_off)?;
+            let off = abs.checked_sub(4)?;
+            let end = off.checked_add(len)?;
+            if end <= self.rest.len() {
+                Some(off)
+            } else {
+                None
+            }
+        }
+
+        fn u32_at_rec(&self, i: usize, field_off: usize) -> Option<u32> {
+            let off = self.rec_off(i, field_off, 4)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(off..off + 4)?.try_into().ok()?,
+            ))
+        }
+
+        /// Number of relation records (u8 @+4).
+        pub fn relation_count(&self) -> u8 {
+            self.rest[clk_top_rels_info::COUNT - 4]
+        }
+
+        /// Is record `i` claimed by the 256-bit populated mask (bit i)?
+        pub fn relation_masked(&self, i: usize) -> Option<bool> {
+            if i >= 255 {
+                return None;
+            }
+            let off = clk_top_rels_info::MASK - 4 + 4 * (i >> 5);
+            let dword = u32::from_le_bytes(self.rest.get(off..off + 4)?.try_into().ok()?);
+            Some(dword & (1 << (i & 31)) != 0)
+        }
+
+        /// Record `i` translated tag enum (rec+0).
+        pub fn relation_enum(&self, i: usize) -> Option<u32> {
+            self.u32_at_rec(i, clk_top_rels_info::REC_ENUM)
+        }
+
+        /// Record `i` three raw wire bytes (rec+4..+7).
+        pub fn relation_raw_bytes(&self, i: usize) -> Option<[u8; 3]> {
+            let off = self.rec_off(i, clk_top_rels_info::REC_BYTES, 3)?;
+            Some([
+                *self.rest.get(off)?,
+                *self.rest.get(off + 1)?,
+                *self.rest.get(off + 2)?,
+            ])
+        }
+
+        /// Record `i` payload u32 (rec+8). For the GPC→XBAR tag-3 relation
+        /// this is the U16.16 ratio (Blackwell default 0xE660).
+        pub fn relation_payload(&self, i: usize) -> Option<u32> {
+            self.u32_at_rec(i, clk_top_rels_info::REC_PAYLOAD)
+        }
+
+        /// Record `i` second payload u32 (rec+0xC) — tag-3 records only.
+        pub fn relation_payload2(&self, i: usize) -> Option<u32> {
+            self.u32_at_rec(i, clk_top_rels_info::REC_PAYLOAD2)
+        }
+
+        /// Records whose raw bytes are (0, 1, 1) = GPC(0)→XBAR(1)
+        /// bidirectional. The NvpwrControl semantic gate requires EXACTLY ONE
+        /// such record before any TopRels write is authorized; treat
+        /// `len() != 1` as fail-closed.
+        pub fn find_gpc_xbar_records(&self) -> Vec<usize> {
+            let mut hits = Vec::new();
+            for i in 0..255usize {
+                if self.relation_raw_bytes(i) == Some([0, 1, 1]) {
+                    hits.push(i);
+                }
+            }
+            hits
+        }
+    }
+
+    /// Byte offsets into [`NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1`]
+    /// (absolute struct offsets; `rest` begins at +4).
+    pub mod clk_top_rels_control {
+        /// literal magic dword (full-size family: 0x1075C = 0x64 + 255×0x108)
+        pub const MAGIC: u32 = 0x1075C;
+        /// 32B (256-bit) seeded relation mask (462/610 layout; 616.92 seeds
+        /// a first dword at +4 — [`NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1::seed_mask`]
+        /// writes both)
+        pub const MASK: usize = 8;
+        /// record 0 base (record i at +i×0x108)
+        pub const RECORDS: usize = 0x64;
+        /// per-record stride
+        pub const RECORD_STRIDE: usize = 0x108;
+        /// record+0x64: translated relation tag enum (tag 3 on GPC→XBAR)
+        pub const REC_TAG: usize = 0x64;
+        /// record+0x68: tag-3 payload — the U16.16 GPC→XBAR clock ratio.
+        /// Absolute offset for record 0 = 0x68 (the NvpwrControl read slot).
+        pub const REC_RATIO: usize = 0x68;
+        /// Blackwell default ratio raw 0xE660 (≈0.9001). Write this literal
+        /// for "0.9" — 0.9×65536 = 0xE666 fails an exact-dword readback.
+        pub const DEFAULT_RATIO_RAW: u32 = 0xE660;
+        /// U16.16 sanity ceiling: values above 2.0 are not relation ratios
+        pub const MAX_SANE_RAW: u32 = 2 * 65536;
+    }
+
+    nvstruct! {
+        /// Private ClockClkProp TopRels GET/SET_CONTROL (IDs 0xCBFF71D0 /
+        /// 0xEF3D20EA, RM 0x20809083/0x2080D084@610). Per-relation records at
+        /// +i×0x108; the GPC→XBAR ratio is the tag-3 payload at rec+0x68
+        /// (record 0 → absolute 0x68).
+        pub struct NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1 {
+            pub version: NvVersion,
+            /// +4 .. +0x1075C
+            pub rest: [u8; 0x10758],
+        }
+    }
+
+    // Full-size magic family — stamp via `NvVersion::with_version(MAGIC)`.
+    pub type NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL =
+        NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1;
+
+    impl NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1 {
+        /// Seed the relation mask before GET_CONTROL. Layout split by
+        /// generation: 462/610 IDA reads a 256-bit input mask at +8 (32B);
+        /// the 616.92 live capture (NvpwrControl) seeds a first dword 0xFF
+        /// at +4. Write BOTH so either generation accepts (each location is
+        /// don't-care under the other's layout).
+        pub fn seed_mask(&mut self) {
+            self.rest[0..4].copy_from_slice(&0xFFu32.to_le_bytes());
+            let rec0 = clk_top_rels_control::RECORDS - 4;
+            self.rest[rec0..rec0 + 4].copy_from_slice(&0xFFu32.to_le_bytes());
+            let mask = clk_top_rels_control::MASK - 4;
+            self.rest[mask..mask + 32].fill(0xFF);
+        }
+
+        fn u32_abs(&self, abs: usize) -> Option<u32> {
+            let off = abs.checked_sub(4)?;
+            Some(u32::from_le_bytes(
+                self.rest.get(off..off + 4)?.try_into().ok()?,
+            ))
+        }
+
+        /// Record `i` translated tag enum (rec+0x64).
+        pub fn record_tag(&self, i: usize) -> Option<u32> {
+            self.u32_abs(
+                clk_top_rels_control::RECORDS
+                    + i * clk_top_rels_control::RECORD_STRIDE
+                    + clk_top_rels_control::REC_TAG,
+            )
+        }
+
+        /// Resolve the ratio dword offset: absolute 0x68 (record 0
+        /// rec+0x68) when it holds a sane U16.16 value (≤2.0); otherwise the
+        /// UNIQUE occurrence of the default raw 0xE660 anywhere in the block
+        /// (NvpwrControl fallback). None = ambiguous / not found — do not
+        /// guess another offset.
+        pub fn resolve_ratio_offset(&self) -> Option<usize> {
+            if let Some(raw) = self.u32_abs(clk_top_rels_control::REC_RATIO) {
+                if raw <= clk_top_rels_control::MAX_SANE_RAW {
+                    return Some(clk_top_rels_control::REC_RATIO);
+                }
+            }
+            let mut found: Option<usize> = None;
+            for off in (0..self.rest.len().saturating_sub(3)).step_by(4) {
+                let v = u32::from_le_bytes(self.rest[off..off + 4].try_into().ok()?);
+                if v == clk_top_rels_control::DEFAULT_RATIO_RAW {
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some(off + 4);
+                }
+            }
+            found
+        }
+
+        /// Current ratio raw + its absolute offset (see
+        /// [`Self::resolve_ratio_offset`]).
+        pub fn ratio_raw(&self) -> Option<(usize, u32)> {
+            let off = self.resolve_ratio_offset()?;
+            Some((off, self.u32_abs(off)?))
+        }
+
+        /// Patch the ratio raw at a previously RESOLVED offset. U16.16; the
+        /// whole control block is the SET unit — snapshot → patch a copy →
+        /// SET → fresh GET_CONTROL → exact-dword readback → restore on
+        /// mismatch (see the [`NvAPI_GPU_ClockClkPropTopRelsSetControl`]
+        /// doc recipe).
+        pub fn set_ratio_raw(&mut self, abs_off: usize, raw: u32) -> Option<()> {
+            if raw > clk_top_rels_control::MAX_SANE_RAW {
+                return None;
+            }
+            let off = abs_off.checked_sub(4)?;
+            self.rest
+                .get_mut(off..off + 4)?
+                .copy_from_slice(&raw.to_le_bytes());
+            Some(())
+        }
+
+        /// U16.16 encode with the tool's exact-LSB convention: 0.9 maps to
+        /// the hardware default literal 0xE660, anything else rounds
+        /// normally. None outside 0.0..=2.0.
+        pub fn encode_ratio(ratio: f64) -> Option<u32> {
+            if !(0.0..=2.0).contains(&ratio) {
+                return None;
+            }
+            if (ratio - 0.9).abs() < 1e-8 {
+                return Some(clk_top_rels_control::DEFAULT_RATIO_RAW);
+            }
+            Some((ratio * 65536.0).round() as u32)
+        }
+    }
+
+    nvapi! {
+        /// Private ClockClkProp TopRels GET_INFO (ID 0xE826E4F0). READ-ONLY
+        /// surface — returns the topological relation table. Gate any write
+        /// on [`NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1::find_gpc_xbar_records`]
+        /// resolving to EXACTLY ONE record.
+        pub unsafe fn NvAPI_GPU_ClockClkPropTopRelsGetInfo(hPhysicalGPU: NvPhysicalGpuHandle, pRelsInfo: *mut NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private ClockClkProp TopRels GET_CONTROL (ID 0xCBFF71D0). Seed
+        /// [`NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1::seed_mask`]
+        /// first; read the GPC→XBAR ratio via
+        /// [`NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1::ratio_raw`].
+        pub unsafe fn NvAPI_GPU_ClockClkPropTopRelsGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pRelsControl: *mut NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Private ClockClkProp TopRels SET_CONTROL (ID 0xEF3D20EA).
+        /// DANGEROUS clock-tree write with NO privilege gate (plain escape,
+        /// audit-verified): changes the driver-wide GPC→XBAR frequency
+        /// ratio. Mandated recipe: GET_INFO semantic gate (exactly ONE
+        /// GPC→XBAR record) → GET_CONTROL → resolve_ratio_offset → patch a
+        /// COPY → SET → fresh GET_CONTROL → exact-dword readback → restore
+        /// the full snapshot on any mismatch. Encode 0.9 as the literal
+        /// 0xE660 (see
+        /// [`NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1::encode_ratio`]).
+        pub unsafe fn NvAPI_GPU_ClockClkPropTopRelsSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pRelsControl: *const NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL) -> NvAPI_Status;
+    }
+
+    #[cfg(test)]
+    mod clk_top_rels_tests {
+        use super::*;
+
+        /// Layout pins: full-size magics must equal the struct sizes so the
+        /// driver's equality gate and our buffers cannot drift apart.
+        #[test]
+        fn layout_closes_magic() {
+            assert_eq!(
+                size_of::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1>(),
+                0x15798
+            );
+            assert_eq!(
+                size_of::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1>(),
+                0x1075C
+            );
+            // Full-size family invariant: the magic IS the struct size, and
+            // callers stamp it verbatim via NvVersion::with_version(MAGIC).
+            assert_eq!(
+                clk_top_rels_info::MAGIC as usize,
+                size_of::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1>()
+            );
+            assert_eq!(
+                clk_top_rels_control::MAGIC as usize,
+                size_of::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1>()
+            );
+            // The V2 domains control stays 24996B — the Blackwell anchors are
+            // additive constants, never a struct resize.
+            assert_eq!(
+                size_of::<NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V2>(),
+                24996
+            );
+        }
+
+        fn seed_info() -> Box<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1> {
+            unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1>::new_zeroed();
+                b.assume_init()
+            }
+        }
+
+        fn seed_ctrl() -> Box<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1> {
+            unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1>::new_zeroed();
+                b.assume_init()
+            }
+        }
+
+        /// Synthetic GPC→XBAR relation record at slot 0 plus a non-matching
+        /// record at slot 1 — the semantic scan must return exactly [0].
+        #[test]
+        fn info_gpc_xbar_scan() {
+            let mut info = seed_info();
+            let rec0 = clk_top_rels_info::ARRAY_B - 4;
+            info.rest[rec0 + 8..rec0 + 12].copy_from_slice(&0xE660u32.to_le_bytes());
+            info.rest[rec0 + 4..rec0 + 7].copy_from_slice(&[0, 1, 1]);
+            let rec1 = rec0 + clk_top_rels_info::RECORD_STRIDE;
+            info.rest[rec1 + 4..rec1 + 7].copy_from_slice(&[0, 2, 1]);
+            assert_eq!(info.find_gpc_xbar_records(), vec![0]);
+            assert_eq!(info.relation_raw_bytes(0), Some([0, 1, 1]));
+            assert_eq!(info.relation_payload(0), Some(0xE660));
+            // bounds: slot 255 refused
+            assert_eq!(info.relation_raw_bytes(255), None);
+        }
+
+        /// Resolve prefers a sane 0x68 slot, falls back to the unique
+        /// default-raw scan, and fails closed on ambiguity; the setter
+        /// rejects out-of-range raws.
+        #[test]
+        fn control_ratio_resolve_and_set() {
+            let mut ctrl = seed_ctrl();
+            // A fresh (zeroed) block: 0 ≤ 2.0 passes the tool's sanity gate,
+            // so the 0x68 slot resolves with ratio raw 0 — callers MUST
+            // GET_CONTROL first; the accessor mirrors the audited tool logic.
+            assert_eq!(ctrl.ratio_raw(), Some((clk_top_rels_control::REC_RATIO, 0)));
+            // Sane value at the 0x68 slot wins without scanning (0x18000 = 1.5).
+            ctrl.set_ratio_raw(clk_top_rels_control::REC_RATIO, 0x18000)
+                .unwrap();
+            assert_eq!(
+                ctrl.resolve_ratio_offset(),
+                Some(clk_top_rels_control::REC_RATIO)
+            );
+            assert_eq!(
+                ctrl.ratio_raw(),
+                Some((clk_top_rels_control::REC_RATIO, 0x18000))
+            );
+            // set_ratio_raw rejects >2.0 raws.
+            assert_eq!(
+                ctrl.set_ratio_raw(clk_top_rels_control::REC_RATIO, 0x20001),
+                None
+            );
+            // Ambiguous default scan: 0x68 insane (written raw — the setter
+            // refuses it), two default occurrences elsewhere.
+            let slot = clk_top_rels_control::REC_RATIO - 4;
+            ctrl.rest[slot..slot + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+            let a = 0x400 - 4;
+            let b = 0x900 - 4;
+            ctrl.rest[a..a + 4].copy_from_slice(&0xE660u32.to_le_bytes());
+            ctrl.rest[b..b + 4].copy_from_slice(&0xE660u32.to_le_bytes());
+            assert_eq!(ctrl.resolve_ratio_offset(), None);
+            // Unique occurrence resolves.
+            ctrl.rest[b..b + 4].fill(0);
+            assert_eq!(ctrl.resolve_ratio_offset(), Some(0x400));
+        }
+
+        #[test]
+        fn control_encode_ratio() {
+            assert_eq!(
+                NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1::encode_ratio(0.9),
+                Some(0xE660)
+            );
+            assert_eq!(
+                NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1::encode_ratio(1.0),
+                Some(0x10000)
+            );
+            assert_eq!(
+                NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1::encode_ratio(2.1),
+                None
+            );
+        }
+
+        /// Blackwell anchor accessors against a synthetic V2 block: unique
+        /// populated entry, type-generation probe, bounds.
+        #[test]
+        fn blackwell_v2_anchors() {
+            unsafe {
+                let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL_V2>::new_zeroed();
+                let mut ctrl = b.assume_init();
+                let rec =
+                    |bit: u32| clk_ctrl_entry_v2::BASE + (bit as usize) * clk_ctrl_entry_v2::STRIDE;
+                // Nothing populated → None.
+                assert_eq!(ctrl.find_unique_populated_entry(), None);
+                // Populate record 1's freq only.
+                ctrl.set_bw_freq_khz(1, 2_200_000).unwrap();
+                assert_eq!(ctrl.find_unique_populated_entry(), Some(1));
+                assert_eq!(ctrl.bw_freq_khz(1), Some(2_200_000));
+                assert_eq!(ctrl.bw_msvdd_uv(1), Some(0));
+                // A second populated entry → ambiguous None.
+                ctrl.set_bw_msvdd_uv(2, -50_000).unwrap();
+                assert_eq!(ctrl.find_unique_populated_entry(), None);
+                assert_eq!(ctrl.bw_msvdd_uv(2), Some(-50_000));
+                // Type probe: 0x0F = Blackwell, 0x0A = Ada.
+                let t1 = rec(1) - 4;
+                ctrl.rest[t1..t1 + 4].copy_from_slice(&0x0Fu32.to_le_bytes());
+                assert_eq!(ctrl.record_type_blackwell(1), Some(true));
+                let t2 = rec(2) - 4;
+                ctrl.rest[t2..t2 + 4].copy_from_slice(&0x0Au32.to_le_bytes());
+                assert_eq!(ctrl.record_type_blackwell(2), Some(false));
+                // Anchor fields land inside the struct for the last slot too.
+                assert!(ctrl.bw_freq_khz(31).is_some());
+                assert_eq!(ctrl.set_bw_freq_khz(32, 1), None);
+            }
+        }
     }
 
     /// Byte offsets into the private ClockClient V/F-POINTS GetInfo block
