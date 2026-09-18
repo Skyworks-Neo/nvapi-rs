@@ -123,10 +123,14 @@ fn blackwell_recon() {
             if t == 0 {
                 continue;
             }
+            // Type byte is a record SUBTYPE with a generation-skewed
+            // distribution, not a pure gen stamp: Turing mixes {0x08,0x09},
+            // Ada reports 0x0A, Blackwell 0x0F (tool-audited); 0x02 appears
+            // across gens. Only 0x0F is labeled BW — never guess a gen name
+            // for the rest.
             let gen = match dom.record_type_blackwell(bit) {
-                Some(true) => " BW(0x0F)",
-                Some(false) => " ada(0x0A)",
-                None => "",
+                Some(true) => " BW",
+                _ => "",
             };
             println!(
                 "  dom {bit:2}: type={t:#04x}{gen} freq_khz={:?} msvdd_uv={:?}",

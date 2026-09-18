@@ -1859,8 +1859,12 @@ pub mod undocumented {
             m
         }
 
-        /// Blackwell generation check: record type low byte == 0x0F (Ada
-        /// reports 0x0A). See [`clk_ctrl_entry_v2_blackwell`].
+        /// Blackwell record-subtype check: type low byte == 0x0F. NOT a pure
+        /// generation stamp — the byte is a record subtype with a
+        /// generation-skewed distribution: Turing live (RTX 2070) mixes
+        /// {0x08, 0x09}, Ada live (RTX 4060 Laptop) reports 0x0A, Blackwell
+        /// 0x0F (NvpwrControl audit); 0x02 appears across gens. See
+        /// [`clk_ctrl_entry_v2_blackwell`].
         pub fn record_type_blackwell(&self, bit: u32) -> Option<bool> {
             self.record_type(bit)
                 .map(|t| t == clk_ctrl_entry_v2_blackwell::TYPE_BLACKWELL)
