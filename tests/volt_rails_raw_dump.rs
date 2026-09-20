@@ -47,7 +47,8 @@ fn volt_rails_raw_dump() {
         b.version = NvVersion::with_version((2 << 16) | 6220);
         b
     };
-    let st = unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(*gpu.handle(), ptr::from_mut(&mut *info).cast()) };
+    let st =
+        unsafe { NvAPI_GPU_VoltVoltRailsGetInfo(*gpu.handle(), ptr::from_mut(&mut *info).cast()) };
     eprintln!("GetInfo: status={:#x}", st as i32);
     if st != 0 {
         panic!("GetInfo failed");
