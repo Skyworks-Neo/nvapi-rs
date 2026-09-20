@@ -79,6 +79,10 @@ fn blackwell_recon() {
     }
 
     // ---- 2. TopRels GET_CONTROL -------------------------------------------
+    // Two seeds, both read-only GETs: (A) the NvpwrControl-exact form —
+    // 0xFF dword at +4 ONLY (live-proven on 5070Ti/616.92); (B) our
+    // generation-split seed_mask (462/610 32B@+8 + record0 dword). A/B
+    // results disambiguate which mask layout THIS driver generation wants.
     println!(
         "\n== TopRels GetControl (0xCBFF71D0, magic {:#x}) ==",
         nvapi::sys::gpu::clock::undocumented::clk_top_rels_control::MAGIC
@@ -86,17 +90,33 @@ fn blackwell_recon() {
     let mut ctrl = box_zeroed::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1>();
     ctrl.version =
         NvVersion::with_version(nvapi::sys::gpu::clock::undocumented::clk_top_rels_control::MAGIC);
-    ctrl.seed_mask();
+    ctrl.rest[0..4].copy_from_slice(&0xFFu32.to_le_bytes());
     let st =
         unsafe { sys::api::NvAPI_GPU_ClockClkPropTopRelsGetControl(*gpu.handle(), &mut *ctrl) };
-    println!("status: {st:?}");
+    println!("seed A (tool-exact +4=0xFF): status={st:?}");
     if st == 0 {
         match ctrl.ratio_raw() {
             Some((off, raw)) => println!(
-                "ratio: raw={raw:#x} ({:.4}) @abs {off:#x}",
+                "  ratio: raw={raw:#x} ({:.4}) @abs {off:#x}",
                 f64::from(raw) / 65536.0
             ),
-            None => println!("ratio: UNRESOLVED (ambiguous / not populated)"),
+            None => println!("  ratio: UNRESOLVED (ambiguous / not populated)"),
+        }
+    }
+    let mut ctrl_b = box_zeroed::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1>();
+    ctrl_b.version =
+        NvVersion::with_version(nvapi::sys::gpu::clock::undocumented::clk_top_rels_control::MAGIC);
+    ctrl_b.seed_mask();
+    let st_b =
+        unsafe { sys::api::NvAPI_GPU_ClockClkPropTopRelsGetControl(*gpu.handle(), &mut *ctrl_b) };
+    println!("seed B (32B@+8 + rec0 dword): status={st_b:?}");
+    if st_b == 0 {
+        match ctrl_b.ratio_raw() {
+            Some((off, raw)) => println!(
+                "  ratio: raw={raw:#x} ({:.4}) @abs {off:#x}",
+                f64::from(raw) / 65536.0
+            ),
+            None => println!("  ratio: UNRESOLVED (ambiguous / not populated)"),
         }
     }
 
