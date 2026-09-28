@@ -2914,137 +2914,10 @@ impl PhysicalGpu {
             }
         }
 
-        // Segment the filled points into contiguous same-type runs — bank 0
-        // packs multiple domains back-to-back (GPC curve, mem pstate bins,
-        // XBAR curve, ...), so runs are the plottable units.
-        let mut segments: Vec<crate::clock::ClkVfSegment> = Vec::new();
-        // ordinal of each kind within the current bank — the empirical
-        // domain_hint is keyed on it (vf #1=GPC, #2=XBAR, #3=MSD; bins
-        // #1=Mem, #2=Disp; live A/B on 4060 Laptop / R610.74)
-        let mut vf_ordinal = [0usize; 2];
-        let mut bins_ordinal = [0usize; 2];
-        for p in &points {
-            // Merge decision: same bank/type/index-contiguity, and the shared
-            // axis must not reset. The PRIMARY axis is VOLTAGE — a reset there
-            // marks a same-type curve CONCATENATION (GPC then XBAR, both type
-            // 8) — split there, or plotting would glue two domains into one
-            // curve. Some drivers never fill the voltage fields (GP100/TCC
-            // 582.41: every type-1 record reads 0 µV, live-verified); there
-            // the voltage axis is degenerate (segment max stays 0) and the
-            // rule would never fire — fall back to the FREQUENCY axis, which
-            // restarts at exactly the same boundary (P100 bank 0: 80-pt core
-            // curve 405→1328 MHz, then the second 80-pt curve restarts at
-            // 405). Without the fallback the two domains glue into one
-            // 160-point "curve" and the ordinal domain attribution collapses.
-            let merges = segments.last().is_some_and(|s| {
-                s.bank == p.bank
-                    && s.record_type == p.record_type
-                    && s.end_index + 1 == p.index
-                    && if s.voltage_uV_max == 0 {
-                        p.freq_default_mhz >= s.freq_default_mhz_max
-                    } else {
-                        p.voltage_uV >= s.voltage_uV_max
-                    }
-            });
-            if merges {
-                let s = segments.last_mut().expect("is_some_and just verified");
-                s.end_index = p.index;
-                s.count += 1;
-                s.voltage_uV_min = s.voltage_uV_min.min(p.voltage_uV);
-                s.voltage_uV_max = s.voltage_uV_max.max(p.voltage_uV);
-                s.freq_default_mhz_min = s.freq_default_mhz_min.min(p.freq_default_mhz);
-                s.freq_default_mhz_max = s.freq_default_mhz_max.max(p.freq_default_mhz);
-            } else {
-                segments.push(crate::clock::ClkVfSegment {
-                    bank: p.bank,
-                    record_type: p.record_type,
-                    // provisional — re-classified after the runs are built
-                    kind: crate::clock::ClkVfSegmentKind::VfCurve,
-                    domain_hint: crate::clock::ClkVfDomainHint::Unknown,
-                    start_index: p.index,
-                    end_index: p.index,
-                    count: 1,
-                    voltage_uV_min: p.voltage_uV,
-                    voltage_uV_max: p.voltage_uV,
-                    freq_default_mhz_min: p.freq_default_mhz,
-                    freq_default_mhz_max: p.freq_default_mhz,
-                    freq_scale_corrected: false,
-                });
-            }
-        }
-
-        // CLASSIFY by run LENGTH, per the multi-generation census
-        // (Pascal/Turing/Ampere/Ada + A100): every segment is
-        // voltage-and-frequency ascending internally, and a new segment
-        // starts at a voltage-axis reset (the merge rule above). Curves
-        // are long (80 / 127 / 128 points observed); pstate-bin lists
-        // (mem-style: one freq/voltage per pstate) are 4-5 points.
-        // Record TYPE is useless here — generations reuse types across
-        // the two kinds (Turing's GPC curve and Ada's bins share a type).
-        // UNTYPED (type-0) runs are always pstate bins regardless of length —
-        // they are the driver's pstate frequency ladder (P100: 405/648/810/
-        // 1080 doubled), never a V/F curve; without this the 8-record bin
-        // run would cross the ≥8 curve bar and plot as a fake curve.
-        for s in segments.iter_mut() {
-            s.kind = if s.record_type == 0 {
-                crate::clock::ClkVfSegmentKind::PstateBins
-            } else if s.count >= 8 {
-                crate::clock::ClkVfSegmentKind::VfCurve
-            } else {
-                crate::clock::ClkVfSegmentKind::PstateBins
-            };
-        }
-        // Pascal-HBM detection (compute cards: GP100/V100): bank 0 packs
-        // exactly TWO V/F curves of 80 points each — GPC 0..79 then HBM MEM
-        // 80..159. The 2nd was long mislabeled XBAR; live A/B confirmed it
-        // is the MEM domain (MEM domain offset hits 80..159). This is a
-        // STRUCTURAL marker, not a freq-ladder match: it is immune to the
-        // default-frequency drift an active OC introduces, and it cannot
-        // false-fire on consumer Pascal (single 80-pt GPC curve, no 2nd
-        // segment) nor on Ada (127-pt curves, not 80). Only HBM Pascal
-        // produces the 80+80 split.
-        let mut first_vf_curve_count: [u16; 2] = [0; 2];
-        for s in segments.iter() {
-            if s.kind == crate::clock::ClkVfSegmentKind::VfCurve && s.bank as usize <= 1 {
-                // record the FIRST vf_curve's count per bank (others stay 0)
-                if first_vf_curve_count[s.bank as usize] == 0 {
-                    first_vf_curve_count[s.bank as usize] = s.count;
-                }
-            }
-        }
-        for s in segments.iter_mut() {
-            let ord = &mut (match s.kind {
-                crate::clock::ClkVfSegmentKind::VfCurve => &mut vf_ordinal,
-                crate::clock::ClkVfSegmentKind::PstateBins => &mut bins_ordinal,
-            }[s.bank as usize]);
-            s.domain_hint = match (s.kind, *ord) {
-                (crate::clock::ClkVfSegmentKind::VfCurve, 0) => crate::clock::ClkVfDomainHint::Gpc,
-                (crate::clock::ClkVfSegmentKind::VfCurve, 1) => {
-                    // Pascal-HBM: two 80-pt curves in bank 0 → 2nd is HBM MEM.
-                    // Otherwise Ada: GPC(127) then a distinct XBAR(127) curve.
-                    if s.count == 80 && first_vf_curve_count[s.bank as usize] == 80 {
-                        crate::clock::ClkVfDomainHint::Mem
-                    } else {
-                        crate::clock::ClkVfDomainHint::Xbar
-                    }
-                }
-                // attribution history HOST → SYS → MSD: the bit-5 offset
-                // A/B (+200 MHz shifted every point, Host MEASURE unmoved)
-                // pinned MSD (see ClkVfSegment::domain_hint doc)
-                (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Msd,
-                (crate::clock::ClkVfSegmentKind::PstateBins, 0) => {
-                    crate::clock::ClkVfDomainHint::Mem
-                }
-                // 4060: disp pstate ceiling (675/1080/1350 observed live;
-                // initially mislabeled HOST); Turing: unknown 5-bin list —
-                // pstate-family either way
-                (crate::clock::ClkVfSegmentKind::PstateBins, 1) => {
-                    crate::clock::ClkVfDomainHint::Disp
-                }
-                _ => crate::clock::ClkVfDomainHint::Unknown,
-            };
-            *ord += 1;
-        }
+        // Runs are the plottable units (bank 0 packs GPC curve, mem
+        // pstate bins, XBAR curve, ... back-to-back), and the runs also
+        // carry the kind / domain attribution — see `segment_vf_points`.
+        let mut segments = segment_vf_points(&points);
 
         // Driver-dependent Pascal scale defect: SOME Pascal driver builds
         // report the private type-1 frequency terms as f = 2×real − 51 MHz
@@ -9179,6 +9052,374 @@ fn build_perf_freq_cap_buffer(cap: PerfFreqCap) -> Vec<u8> {
         min_khz,
     );
     buf
+}
+
+/// Segment the filled points into contiguous same-type runs — bank 0
+/// packs multiple domains back-to-back (GPC curve, mem pstate bins,
+/// XBAR curve, ...), so runs are the plottable units.
+///
+/// Pure (no GPU handle): unit-tested in `segment_tests` below, whose
+/// fixtures are the live dumps quoted in the merge rule's comment.
+/// Run length at (and above) which a same-type run is classified as a V/F
+/// CURVE rather than a pstate-bin list — curves run 80/127/128 points, bin
+/// lists 2-8. Shared with the merge rule's voltage-drawdown exemption so the
+/// two bars cannot drift apart.
+const CURVE_MIN_POINTS: u16 = 8;
+
+fn segment_vf_points(
+    points: &[crate::clock::ClkVfPointPrivate],
+) -> Vec<crate::clock::ClkVfSegment> {
+    let mut segments: Vec<crate::clock::ClkVfSegment> = Vec::new();
+    // ordinal of each kind within the current bank — the empirical
+    // domain_hint is keyed on it (vf #1=GPC, #2=XBAR, #3=MSD; bins
+    // #1=Mem, #2=Disp; live A/B on 4060 Laptop / R610.74)
+    let mut vf_ordinal = [0usize; 2];
+    let mut bins_ordinal = [0usize; 2];
+    for p in points {
+        // Merge decision: same bank/type/index-contiguity, frequency
+        // non-decreasing, and the voltage either non-decreasing too or
+        // in a drawdown the run is still short enough to absorb.
+        // FREQUENCY is the primary invariant — a V/F table ascends in
+        // frequency inside one domain, so a reset there is the reliable
+        // boundary marker (same-type CONCATENATION: GPC then XBAR, both
+        // type 8; HBM Pascal's two 80-pt curves; two bin lists). It is
+        // also the only axis that is never degenerate, so it can carry
+        // the decision alone.
+        // VOLTAGE is the co-criterion, not a co-equal: it catches
+        // boundaries the frequency axis cannot see, but its own
+        // drawdowns are NOT boundaries inside a bin list — a bin list's
+        // voltage is not pstate-ordered. Live 30-series bank 0
+        // (2026-09-28, user-confirmed ground truth): mem is ONE 5-pt
+        // list 254..258 whose voltage dips 643.8 → 631.2 mV at 256
+        // while frequency climbs 810 → 5001; disp is ONE 7-pt list
+        // 259..265 whose voltage dips again at 265 (712.5 → 706.2).
+        // Splitting there shifted every ordinal below the seam, so both
+        // lists were mislabeled (the disp list rendered as "unknown",
+        // ext legends PCIe gen / Hub included). A pure voltage rule
+        // does exactly that, and a drawdown exemption gated on
+        // frequency alone would glue the GPC curve to a following
+        // same-type curve that happens to start higher — so the
+        // exemption is additionally bounded by CURVE_MIN_POINTS, the
+        // same bar the classifier below uses to call a run a CURVE: it
+        // can only ever bridge short bin lists, never two long curves.
+        // (Known limit: a bin list longer than that bar that wobbles in
+        // voltage would still shatter — none observed, and the bar is
+        // not a new magic number.)
+        // NON-decreasing, not strict: plateaus are normal on both axes
+        // (voltage 643.8/643.8 and 737.5/737.5 in that same dump; the
+        // P100 80-pt ladder holds 405 MHz across points) and a strict
+        // rule would shred every run at its first plateau. Degenerate
+        // drivers need no special case: GP100/TCC 582.41 never fills
+        // the voltage fields (every type-1 record reads 0 µV,
+        // live-verified) so that axis is 0 >= 0 throughout and the
+        // frequency term decides alone — same split as the old
+        // voltage-degenerate fallback (P100 bank 0: 80-pt core curve
+        // 405→1328 MHz, then the second 80-pt curve restarts at 405).
+        let merges = segments.last().is_some_and(|s| {
+            s.bank == p.bank
+                && s.record_type == p.record_type
+                && s.end_index + 1 == p.index
+                && p.freq_default_mhz >= s.freq_default_mhz_max
+                && (p.voltage_uV >= s.voltage_uV_max || s.count < CURVE_MIN_POINTS)
+        });
+        if merges {
+            let s = segments.last_mut().expect("is_some_and just verified");
+            s.end_index = p.index;
+            s.count += 1;
+            s.voltage_uV_min = s.voltage_uV_min.min(p.voltage_uV);
+            s.voltage_uV_max = s.voltage_uV_max.max(p.voltage_uV);
+            s.freq_default_mhz_min = s.freq_default_mhz_min.min(p.freq_default_mhz);
+            s.freq_default_mhz_max = s.freq_default_mhz_max.max(p.freq_default_mhz);
+        } else {
+            segments.push(crate::clock::ClkVfSegment {
+                bank: p.bank,
+                record_type: p.record_type,
+                // provisional — re-classified after the runs are built
+                kind: crate::clock::ClkVfSegmentKind::VfCurve,
+                domain_hint: crate::clock::ClkVfDomainHint::Unknown,
+                start_index: p.index,
+                end_index: p.index,
+                count: 1,
+                voltage_uV_min: p.voltage_uV,
+                voltage_uV_max: p.voltage_uV,
+                freq_default_mhz_min: p.freq_default_mhz,
+                freq_default_mhz_max: p.freq_default_mhz,
+                freq_scale_corrected: false,
+            });
+        }
+    }
+
+    // CLASSIFY by run LENGTH, per the multi-generation census
+    // (Pascal/Turing/Ampere/Ada + A100): every segment is
+    // voltage-and-frequency ascending internally, and a new segment
+    // starts at a reset of EITHER axis (the merge rule above). Curves
+    // are long (80 / 127 / 128 points observed); pstate-bin lists
+    // (mem-style: one freq/voltage per pstate) are 4-5 points.
+    // Record TYPE is useless here — generations reuse types across
+    // the two kinds (Turing's GPC curve and Ada's bins share a type).
+    // UNTYPED (type-0) runs are always pstate bins regardless of length —
+    // they are the driver's pstate frequency ladder (P100: 405/648/810/
+    // 1080 doubled), never a V/F curve; without this the 8-record bin
+    // run would cross the CURVE_MIN_POINTS bar and plot as a fake curve.
+    for s in segments.iter_mut() {
+        s.kind = if s.record_type == 0 {
+            crate::clock::ClkVfSegmentKind::PstateBins
+        } else if s.count >= CURVE_MIN_POINTS {
+            crate::clock::ClkVfSegmentKind::VfCurve
+        } else {
+            crate::clock::ClkVfSegmentKind::PstateBins
+        };
+    }
+    // Pascal-HBM detection (compute cards: GP100/V100): bank 0 packs
+    // exactly TWO V/F curves of 80 points each — GPC 0..79 then HBM MEM
+    // 80..159. The 2nd was long mislabeled XBAR; live A/B confirmed it
+    // is the MEM domain (MEM domain offset hits 80..159). This is a
+    // STRUCTURAL marker, not a freq-ladder match: it is immune to the
+    // default-frequency drift an active OC introduces, and it cannot
+    // false-fire on consumer Pascal (single 80-pt GPC curve, no 2nd
+    // segment) nor on Ada (127-pt curves, not 80). Only HBM Pascal
+    // produces the 80+80 split.
+    let mut first_vf_curve_count: [u16; 2] = [0; 2];
+    for s in segments.iter() {
+        if s.kind == crate::clock::ClkVfSegmentKind::VfCurve && s.bank as usize <= 1 {
+            // record the FIRST vf_curve's count per bank (others stay 0)
+            if first_vf_curve_count[s.bank as usize] == 0 {
+                first_vf_curve_count[s.bank as usize] = s.count;
+            }
+        }
+    }
+    for s in segments.iter_mut() {
+        let ord = &mut (match s.kind {
+            crate::clock::ClkVfSegmentKind::VfCurve => &mut vf_ordinal,
+            crate::clock::ClkVfSegmentKind::PstateBins => &mut bins_ordinal,
+        }[s.bank as usize]);
+        s.domain_hint = match (s.kind, *ord) {
+            (crate::clock::ClkVfSegmentKind::VfCurve, 0) => crate::clock::ClkVfDomainHint::Gpc,
+            (crate::clock::ClkVfSegmentKind::VfCurve, 1) => {
+                // Pascal-HBM: two 80-pt curves in bank 0 → 2nd is HBM MEM.
+                // Otherwise Ada: GPC(127) then a distinct XBAR(127) curve.
+                if s.count == 80 && first_vf_curve_count[s.bank as usize] == 80 {
+                    crate::clock::ClkVfDomainHint::Mem
+                } else {
+                    crate::clock::ClkVfDomainHint::Xbar
+                }
+            }
+            // attribution history HOST → SYS → MSD: the bit-5 offset
+            // A/B (+200 MHz shifted every point, Host MEASURE unmoved)
+            // pinned MSD (see ClkVfSegment::domain_hint doc)
+            (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Msd,
+            (crate::clock::ClkVfSegmentKind::PstateBins, 0) => crate::clock::ClkVfDomainHint::Mem,
+            // 4060: disp pstate ceiling (675/1080/1350 observed live;
+            // initially mislabeled HOST); Turing: unknown 5-bin list —
+            // pstate-family either way
+            (crate::clock::ClkVfSegmentKind::PstateBins, 1) => crate::clock::ClkVfDomainHint::Disp,
+            _ => crate::clock::ClkVfDomainHint::Unknown,
+        };
+        *ord += 1;
+    }
+    segments
+}
+
+#[cfg(test)]
+mod segment_tests {
+    use super::*;
+    use crate::clock::{ClkVfDomainHint, ClkVfPointPrivate, ClkVfSegmentKind};
+
+    fn pt(index: u16, typ: u8, volt_uv: u32, def_mhz: u32) -> ClkVfPointPrivate {
+        ClkVfPointPrivate {
+            bank: 0,
+            index,
+            record_type: typ,
+            voltage_uV: volt_uv,
+            freq_default_mhz: def_mhz,
+            freq_current_mhz: def_mhz,
+            volt_current_uV: volt_uv,
+            volt_offset_uV: 0,
+            domain_freqs_mhz: [0; 4],
+            domain_volts_uV: [0; 4],
+        }
+    }
+
+    /// Live 30-series dump, bank 0 — TWO pstate-bin lists back-to-back
+    /// (the user's own readout, 2026-09-28, with the user's ground truth:
+    /// "254-258都是mem，ext是pcie gen；后面那个才是disp ext是hub"):
+    ///   mem  254-258: 643.8/643.8/631.2/737.5/737.5 mV @ 405/810/5001/7301/7501
+    ///   disp 259-265: 643.8 → 712.5 → 706.2 mV @ 675 → 1283 → 1350 MHz
+    /// Each list dips in voltage internally (mem at 256, disp at 265) while
+    /// its frequency ladder keeps climbing; only the seam between them
+    /// resets frequency (7501 → 675). The drawdowns are therefore NOT
+    /// boundaries: a voltage rule splits mem 2+3 and disp 6+1, shifting
+    /// every ordinal below the seam — the disp list then renders as
+    /// "unknown" and the ext legends (PCIe gen / Hub) go with it. Bin
+    /// lists are short, so the exemption's CURVE_MIN_POINTS bound can
+    /// never swallow a real curve boundary either.
+    #[test]
+    fn pstate_bin_lists_absorb_voltage_dips_and_keep_their_ordinals() {
+        let pts = vec![
+            pt(254, 7, 643_800, 405),
+            pt(255, 7, 643_800, 810),
+            pt(256, 7, 631_200, 5001),
+            pt(257, 7, 737_500, 7301),
+            pt(258, 7, 737_500, 7501),
+            pt(259, 7, 643_800, 675),
+            pt(260, 7, 681_200, 900),
+            pt(261, 7, 693_800, 1013),
+            pt(262, 7, 693_800, 1067),
+            pt(263, 7, 700_000, 1175),
+            pt(264, 7, 712_500, 1283),
+            pt(265, 7, 706_200, 1350),
+        ];
+        let segs = segment_vf_points(&pts);
+        let shape: Vec<(u16, u16, u16, ClkVfSegmentKind, ClkVfDomainHint)> = segs
+            .iter()
+            .map(|s| (s.start_index, s.end_index, s.count, s.kind, s.domain_hint))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                (
+                    254,
+                    258,
+                    5,
+                    ClkVfSegmentKind::PstateBins,
+                    ClkVfDomainHint::Mem
+                ),
+                (
+                    259,
+                    265,
+                    7,
+                    ClkVfSegmentKind::PstateBins,
+                    ClkVfDomainHint::Disp
+                ),
+            ]
+        );
+        // The drawdowns are inside the lists (observed per list) …
+        assert_eq!(segs[0].voltage_uV_min, 631_200);
+        assert_eq!(segs[1].voltage_uV_min, 643_800);
+        // … while the seam the rule DOES split on resets frequency, not
+        // just voltage (7501 → 675), and each list keeps its own ordinal.
+        assert_eq!(segs[0].freq_default_mhz_max, 7501);
+        assert_eq!(segs[1].freq_default_mhz_max, 1350);
+        assert_eq!(segs[0].voltage_uV_max, 737_500);
+        assert_eq!(segs[1].voltage_uV_max, 712_500);
+    }
+
+    /// The drawdown exemption is bounded by CURVE_MIN_POINTS: once a run has
+    /// crossed the curve bar, a voltage reset splits again — two long curves
+    /// can never be glued by a wobble in the middle of one of them.
+    #[test]
+    fn voltage_drawdown_splits_once_the_run_reaches_curve_length() {
+        let mut pts = Vec::new();
+        for i in 0..13u16 {
+            // frequency climbs throughout; voltage climbs, then drops at
+            // index 9 — where the open run is already 9 points long.
+            let volt = if i < 9 {
+                700_000 + i as u32 * 1_000
+            } else {
+                700_000
+            };
+            pts.push(pt(i, 7, volt, 405 + i as u32 * 100));
+        }
+        let segs = segment_vf_points(&pts);
+        assert_eq!(
+            segs.iter()
+                .map(|s| (s.start_index, s.end_index))
+                .collect::<Vec<_>>(),
+            vec![(0, 8), (9, 12)]
+        );
+    }
+
+    /// Two same-type bin lists on a SHARED, non-decreasing voltage axis
+    /// whose frequency ladder restarts low. This is what the old
+    /// voltage-only rule got wrong: 700000 >= 700000 holds across the
+    /// seam, so all 8 points merged into one run, crossed the >=8 curve
+    /// bar and plotted as a fake V/F curve attributed to GPC. The
+    /// frequency axis splits them — and each keeps its own ordinal.
+    #[test]
+    fn frequency_reset_splits_when_voltage_never_resets() {
+        let mut pts = Vec::new();
+        for i in 0..4u16 {
+            pts.push(pt(i, 7, 700_000, 405 + (i as u32) * 400));
+        }
+        for i in 4..8u16 {
+            pts.push(pt(i, 7, 700_000, 405 + ((i - 4) as u32) * 400));
+        }
+        let segs = segment_vf_points(&pts);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(
+            (segs[0].start_index, segs[0].end_index, segs[0].count),
+            (0, 3, 4)
+        );
+        assert_eq!(
+            (segs[1].start_index, segs[1].end_index, segs[1].count),
+            (4, 7, 4)
+        );
+        assert_eq!(
+            segs.iter()
+                .map(|s| (s.kind, s.domain_hint))
+                .collect::<Vec<_>>(),
+            vec![
+                (ClkVfSegmentKind::PstateBins, ClkVfDomainHint::Mem),
+                (ClkVfSegmentKind::PstateBins, ClkVfDomainHint::Disp),
+            ]
+        );
+    }
+
+    /// Voltage-degenerate driver — GP100/TCC 582.41 never fills the
+    /// voltage fields (every type-1 record reads 0 µV, live-verified).
+    /// 0 >= 0 holds throughout, so the frequency term decides alone and
+    /// no special case is needed: P100 bank 0's 80-pt core curve
+    /// (405→) is followed by a second 80-pt curve restarting at 405 —
+    /// the HBM MEM block on this part.
+    #[test]
+    fn zero_voltage_axis_splits_on_frequency_alone() {
+        let mut pts = Vec::new();
+        for i in 0..80u16 {
+            pts.push(pt(i, 1, 0, 405 + (i as u32) * 12));
+        }
+        for i in 80..160u16 {
+            pts.push(pt(i, 1, 0, 405 + ((i - 80) as u32) * 12));
+        }
+        let segs = segment_vf_points(&pts);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(
+            (segs[0].start_index, segs[0].end_index, segs[0].count),
+            (0, 79, 80)
+        );
+        assert_eq!(
+            (segs[1].start_index, segs[1].end_index, segs[1].count),
+            (80, 159, 80)
+        );
+        assert_eq!(
+            segs.iter()
+                .map(|s| (s.kind, s.domain_hint))
+                .collect::<Vec<_>>(),
+            vec![
+                (ClkVfSegmentKind::VfCurve, ClkVfDomainHint::Gpc),
+                // 80+80 in bank 0 = the Pascal-HBM MEM marker
+                (ClkVfSegmentKind::VfCurve, ClkVfDomainHint::Mem),
+            ]
+        );
+    }
+
+    /// Plateaus are normal on BOTH axes (voltage 643.8/643.8 and
+    /// 737.5/737.5 in the dump above; the P100 ladder holds 405 MHz
+    /// across points) — the axes must be NON-decreasing, not strict, or
+    /// every run would be shredded at its first plateau.
+    #[test]
+    fn plateaus_on_either_axis_do_not_split() {
+        let pts = vec![
+            pt(0, 7, 600_000, 405),
+            pt(1, 7, 600_000, 405),
+            pt(2, 7, 650_000, 810),
+            pt(3, 7, 650_000, 810),
+        ];
+        let segs = segment_vf_points(&pts);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].count, 4);
+        assert_eq!(segs[0].voltage_uV_min, 600_000);
+        assert_eq!(segs[0].freq_default_mhz_max, 810);
+    }
 }
 
 #[cfg(test)]
