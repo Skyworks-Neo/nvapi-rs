@@ -773,6 +773,19 @@ pub enum ClkVfDomainHint {
     Msd,
     Disp,
     Mem,
+    /// Pascal server (GP100) bank-0 plane A (points 0..79): the voltage-side
+    /// PRE-OC plane of the 80-point dual-plane GPC curve. A mode-0 offset
+    /// here shifts the point's voltage (live P100/582.41: rail0 += raw/2 µV,
+    /// rail1 += raw µV). Assigned only when the 80+80 structural gate hits.
+    GpcPreOc,
+    /// Pascal server bank-0 plane B (points 80..159, index = plane A + 80):
+    /// the frequency-side OC plane. Coherent updates require the paired
+    /// write (plane A first on the way up, plane B first on the way down)
+    /// with plane-B offset ≤ plane-A offset at every instant — a B > A
+    /// differential feeds the GPU a non-monotonic table and soft-hangs it.
+    /// Long mislabeled XBAR, then MEM; the 2026-09-30 paired-write live
+    /// campaign identified the dual-plane structure.
+    GpcOc,
     #[default]
     Unknown,
 }
@@ -786,8 +799,21 @@ impl ClkVfDomainHint {
             ClkVfDomainHint::Msd => "msd",
             ClkVfDomainHint::Disp => "disp",
             ClkVfDomainHint::Mem => "mem",
+            ClkVfDomainHint::GpcPreOc => "gpc_pre_oc",
+            ClkVfDomainHint::GpcOc => "gpc_oc",
             ClkVfDomainHint::Unknown => "unknown",
         }
+    }
+
+    /// True for every GPC curve plane — the plain single-plane GPC curve and
+    /// the Pascal server dual-plane PRE-OC/OC pair. The Pascal (f+50)/2
+    /// frequency scale-defect correction applies to all of them: the two
+    /// planes carry the SAME GPC ladder, so a scale defect shows up in both.
+    pub fn is_gpc_curve_plane(self) -> bool {
+        matches!(
+            self,
+            ClkVfDomainHint::Gpc | ClkVfDomainHint::GpcPreOc | ClkVfDomainHint::GpcOc
+        )
     }
 }
 

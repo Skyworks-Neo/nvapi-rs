@@ -2941,7 +2941,7 @@ impl PhysicalGpu {
             segments
                 .iter()
                 .filter(|s| {
-                    s.domain_hint == crate::clock::ClkVfDomainHint::Gpc
+                    s.domain_hint.is_gpc_curve_plane()
                         && s.kind == crate::clock::ClkVfSegmentKind::VfCurve
                 })
                 .map(|s| s.freq_default_mhz_max)
@@ -2952,7 +2952,7 @@ impl PhysicalGpu {
             let gpc_range: Vec<(u16, u16)> = segments
                 .iter()
                 .filter(|s| {
-                    s.domain_hint == crate::clock::ClkVfDomainHint::Gpc
+                    s.domain_hint.is_gpc_curve_plane()
                         && s.kind == crate::clock::ClkVfSegmentKind::VfCurve
                 })
                 .map(|s| (s.bank as u16, s.start_index..=s.end_index))
@@ -2968,7 +2968,7 @@ impl PhysicalGpu {
                 }
             }
             for s in segments.iter_mut() {
-                if s.domain_hint == crate::clock::ClkVfDomainHint::Gpc
+                if s.domain_hint.is_gpc_curve_plane()
                     && s.kind == crate::clock::ClkVfSegmentKind::VfCurve
                 {
                     s.freq_default_mhz_min = (s.freq_default_mhz_min + 50) / 2;
@@ -9170,36 +9170,54 @@ fn segment_vf_points(
             crate::clock::ClkVfSegmentKind::PstateBins
         };
     }
-    // Pascal-HBM detection (compute cards: GP100/V100): bank 0 packs
-    // exactly TWO V/F curves of 80 points each — GPC 0..79 then HBM MEM
-    // 80..159. The 2nd was long mislabeled XBAR; live A/B confirmed it
-    // is the MEM domain (MEM domain offset hits 80..159). This is a
-    // STRUCTURAL marker, not a freq-ladder match: it is immune to the
-    // default-frequency drift an active OC introduces, and it cannot
-    // false-fire on consumer Pascal (single 80-pt GPC curve, no 2nd
-    // segment) nor on Ada (127-pt curves, not 80). Only HBM Pascal
-    // produces the 80+80 split.
+    // Pascal server dual-plane detection (GP100/V100 compute cards): bank 0
+    // packs exactly TWO V/F curves of 80 points each — plane A 0..79 (the
+    // voltage-side PRE-OC plane) then plane B 80..159 (the frequency-side OC
+    // plane, index = A + 80). The 2nd was long mislabeled XBAR, then MEM
+    // ("MEM domain offset hits 80..159"); the 2026-09-30 P100 paired-write
+    // campaign re-identified it: equal-offset writes to BOTH planes move the
+    // REAL frequency axis (+100 MHz at constant voltage, live 750 mV lock →
+    // 1328 MHz), while single-plane writes only shift voltage or soft-hang
+    // the GPU on a non-monotonic table. This is a STRUCTURAL marker, not a
+    // freq-ladder match: it is immune to the default-frequency drift an
+    // active OC introduces, and it cannot false-fire on consumer Pascal
+    // (single 80-pt GPC curve, no 2nd segment) nor on Ada (127-pt curves,
+    // not 80). Only HBM Pascal produces the 80+80 split.
     let mut first_vf_curve_count: [u16; 2] = [0; 2];
+    let mut second_vf_curve_is_80: [bool; 2] = [false; 2];
     for s in segments.iter() {
         if s.kind == crate::clock::ClkVfSegmentKind::VfCurve && s.bank as usize <= 1 {
             // record the FIRST vf_curve's count per bank (others stay 0)
             if first_vf_curve_count[s.bank as usize] == 0 {
                 first_vf_curve_count[s.bank as usize] = s.count;
+            } else if s.count == 80 {
+                second_vf_curve_is_80[s.bank as usize] = true;
             }
         }
     }
+    let dual_plane =
+        |bank: usize| -> bool { first_vf_curve_count[bank] == 80 && second_vf_curve_is_80[bank] };
     for s in segments.iter_mut() {
         let ord = &mut (match s.kind {
             crate::clock::ClkVfSegmentKind::VfCurve => &mut vf_ordinal,
             crate::clock::ClkVfSegmentKind::PstateBins => &mut bins_ordinal,
         }[s.bank as usize]);
         s.domain_hint = match (s.kind, *ord) {
-            (crate::clock::ClkVfSegmentKind::VfCurve, 0) => crate::clock::ClkVfDomainHint::Gpc,
+            (crate::clock::ClkVfSegmentKind::VfCurve, 0) => {
+                // Pascal server dual-plane: plane A = voltage-side PRE-OC;
+                // every other generation: the plain GPC curve.
+                if dual_plane(s.bank as usize) {
+                    crate::clock::ClkVfDomainHint::GpcPreOc
+                } else {
+                    crate::clock::ClkVfDomainHint::Gpc
+                }
+            }
             (crate::clock::ClkVfSegmentKind::VfCurve, 1) => {
-                // Pascal-HBM: two 80-pt curves in bank 0 → 2nd is HBM MEM.
-                // Otherwise Ada: GPC(127) then a distinct XBAR(127) curve.
-                if s.count == 80 && first_vf_curve_count[s.bank as usize] == 80 {
-                    crate::clock::ClkVfDomainHint::Mem
+                // Pascal server dual-plane: plane B = frequency-side OC
+                // (index = plane A + 80). Otherwise Ada: GPC(127) then a
+                // distinct XBAR(127) curve.
+                if dual_plane(s.bank as usize) {
+                    crate::clock::ClkVfDomainHint::GpcOc
                 } else {
                     crate::clock::ClkVfDomainHint::Xbar
                 }
@@ -9370,7 +9388,7 @@ mod segment_tests {
     /// 0 >= 0 holds throughout, so the frequency term decides alone and
     /// no special case is needed: P100 bank 0's 80-pt core curve
     /// (405→) is followed by a second 80-pt curve restarting at 405 —
-    /// the HBM MEM block on this part.
+    /// the frequency-side OC plane of the dual-plane GPC curve.
     #[test]
     fn zero_voltage_axis_splits_on_frequency_alone() {
         let mut pts = Vec::new();
@@ -9395,11 +9413,40 @@ mod segment_tests {
                 .map(|s| (s.kind, s.domain_hint))
                 .collect::<Vec<_>>(),
             vec![
-                (ClkVfSegmentKind::VfCurve, ClkVfDomainHint::Gpc),
-                // 80+80 in bank 0 = the Pascal-HBM MEM marker
-                (ClkVfSegmentKind::VfCurve, ClkVfDomainHint::Mem),
+                (ClkVfSegmentKind::VfCurve, ClkVfDomainHint::GpcPreOc),
+                // 80+80 in bank 0 = the dual-plane OC marker
+                (ClkVfSegmentKind::VfCurve, ClkVfDomainHint::GpcOc),
             ]
         );
+        // plane correspondence: B starts exactly at A's end + 1
+        assert_eq!(segs[1].start_index, segs[0].end_index + 1);
+        assert_eq!(segs[1].count, segs[0].count);
+    }
+
+    /// A SINGLE 80-pt curve (consumer Pascal) must stay plain `Gpc` — the
+    /// dual-plane rename requires a second 80-pt curve in the same bank.
+    #[test]
+    fn single_80pt_curve_keeps_plain_gpc() {
+        let pts: Vec<_> = (0..80u16)
+            .map(|i| pt(i, 1, 0, 405 + (i as u32) * 12))
+            .collect();
+        let segs = segment_vf_points(&pts);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].domain_hint, ClkVfDomainHint::Gpc);
+    }
+
+    /// A second curve that is NOT 80 points (Ada-style 127-pt XBAR after a
+    /// 127-pt GPC, or any other shape) must not trip the dual-plane gate.
+    #[test]
+    fn non_80_second_curve_stays_xbar() {
+        let mut pts: Vec<_> = (0..80u16)
+            .map(|i| pt(i, 1, 0, 405 + (i as u32) * 12))
+            .collect();
+        pts.extend((80..207u16).map(|i| pt(i, 1, 0, 405 + ((i - 80) as u32) * 12)));
+        let segs = segment_vf_points(&pts);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].domain_hint, ClkVfDomainHint::Gpc);
+        assert_eq!(segs[1].domain_hint, ClkVfDomainHint::Xbar);
     }
 
     /// Plateaus are normal on BOTH axes (voltage 643.8/643.8 and
