@@ -1303,7 +1303,20 @@ pub mod undocumented {
     }
 
     /// Byte offsets / identity constants for
-    /// [`NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4`].
+    /// [`NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4`]. Channel identities are
+    /// generation-skewed — live E3 round 1 (2026-10-05, RTX 2070 + RTX 3060
+    /// + Tesla P100):
+    ///
+    /// - board power = policyId 0, **raw mW**, on all three generations:
+    ///   2070 (0,9) def 175000/max 219000 (= the 175 W spec), 3060 (0,0)
+    ///   def 170000/max 212000 (= 170 W), P100 (0,0) def=max=250000
+    ///   (= 250 W, Tesla-locked; min 125000) — match on policyId alone.
+    /// - OCP current = raw mA, identity per generation: 50-series (19,13)/
+    ///   (19,12) (xOCD pairing), Ampere (13,19) (3060: def 135000 / max
+    ///   138068), Turing (6,19) (2070: def 215860 / max 240000). P100 has
+    ///   NO current-OCP channel — its (6,1)/(3,7) entries are sentinels.
+    /// - `default == max == 5001000` (and the (x,11)/(3,7) 1001000)
+    ///   entries are "unbounded" sentinels — not real limits.
     pub mod power_channels_info_v4 {
         /// first per-channel entry (buffer-absolute)
         pub const ENTRY_BASE: usize = 56;
@@ -1314,18 +1327,22 @@ pub mod undocumented {
         pub const MIN: usize = 16;
         pub const DEFAULT: usize = 20;
         pub const MAX: usize = 24;
-        /// NVVDD OCP (policyId, subtype)
+        /// board-power channel policyId (raw mW; subtype generation-skewed)
+        pub const BOARD_POWER_POLICY_ID: u32 = 0;
+        /// NVVDD OCP (policyId, subtype) — 50-series pairing (xOCD)
         pub const OCP_NVVDD: (u32, u32) = (19, 13);
-        /// NVVDD OCP legacy fallback
-        pub const OCP_NVVDD_LEGACY: (u32, u32) = (13, 19);
-        /// MSVDD OCP (policyId, subtype)
+        /// NVVDD OCP Ampere pairing (RTX 3060 live E3)
+        pub const OCP_NVVDD_AMPERE: (u32, u32) = (13, 19);
+        /// NVVDD OCP Turing pairing (RTX 2070 live E3)
+        pub const OCP_NVVDD_TURING: (u32, u32) = (6, 19);
+        /// MSVDD OCP (policyId, subtype) — 50-series pairing (xOCD)
         pub const OCP_MSVDD: (u32, u32) = (19, 12);
-        /// MSVDD OCP legacy fallback
+        /// MSVDD OCP legacy fallback (xOCD); present-but-sentinel on Ampere
         pub const OCP_MSVDD_LEGACY: (u32, u32) = (14, 19);
         /// write-value hard clamp from xOCD (raw mA)
         pub const OCP_RAW_MIN: u32 = 1000;
-        /// write-value hard clamp from xOCD (raw mA); entries whose driver
-        /// max exceeds this are treated as unusable
+        /// write-value hard clamp from xOCD (raw mA) AND the family's
+        /// "unbounded" sentinel value
         pub const OCP_RAW_MAX: u32 = 5_001_000;
     }
 

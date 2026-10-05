@@ -49,9 +49,24 @@ fn hex_head(buf: &[u8], n: usize) -> String {
 }
 
 fn write_json(name: &str, json: &str) {
-    let path = format!("../reverse/xocd/{name}");
+    // Test CWD is the WORKSPACE root when invoked from the parent repo
+    // (nvoc/), so a relative "../reverse/xocd" escapes the repo. Anchor on
+    // the crate dir instead — independent of the invocation directory.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crate parent")
+        .join("reverse")
+        .join("xocd");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!(
+            "mkdir {} failed ({e:?}) — JSON follows:\n{json}",
+            dir.display()
+        );
+        return;
+    }
+    let path = dir.join(name);
     match std::fs::write(&path, json) {
-        Ok(()) => eprintln!("snapshot written: {path}"),
+        Ok(()) => eprintln!("snapshot written: {}", path.display()),
         Err(e) => eprintln!("snapshot write failed ({e:?}) — JSON follows:\n{json}"),
     }
 }
@@ -125,7 +140,12 @@ fn e1_vf_points_geometry() {
 }
 
 /// E3 — PowerChannels info v4 + control geometry detection (audit ⑤ and
-/// the 0x10A4C stride question). GET-only.
+/// the 0x10A4C stride question). GET-only. Round 2 addition: when the
+/// compact 0x10A4C control is rejected (pre-50-series, live-confirmed -9
+/// on Turing/Ampere/Pascal), scan the 10016B 0x12720 control (the stamp
+/// `set_tgp_watt` drives) for dwords matching the info-side channel
+/// defaults — those hits are the candidate OCP value offsets for a future
+/// pre-50-series write path.
 #[test]
 #[ignore]
 fn e3_power_channels() {
@@ -138,8 +158,8 @@ fn e3_power_channels() {
     let st = unsafe {
         NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(*gpu.handle(), ibuf.as_mut_ptr() as *mut _)
     };
-    let _ = &st;
     eprintln!("info v4 (stamp 264816): status={st:?}");
+    let mut channels: Vec<(u32, u32, u32, u32, u32)> = Vec::new(); // (pid,sub,min,def,max)
     if st == 0 {
         let info = unsafe { &*(ibuf.as_ptr() as *const NV_GPU_CLIENT_POWER_CHANNELS_INFO) };
         eprintln!("info mask: {:#010x}", info.mask);
@@ -147,12 +167,17 @@ fn e3_power_channels() {
             if info.mask & (1 << bit) == 0 {
                 continue;
             }
+            let id = info.channel_id(bit as usize);
+            let range = info.channel_range(bit as usize);
             eprintln!(
                 "  ch[{bit:2}] id=({},{}) min/def/max={:?}",
-                info.channel_id(bit as usize).map(|x| x.0).unwrap_or(0xFFFF),
-                info.channel_id(bit as usize).map(|x| x.1).unwrap_or(0xFFFF),
-                info.channel_range(bit as usize)
+                id.map(|x| x.0).unwrap_or(0xFFFF),
+                id.map(|x| x.1).unwrap_or(0xFFFF),
+                range
             );
+            if let (Some((p, s)), Some((mn, df, mx))) = (id, range) {
+                channels.push((p, s, mn, df, mx));
+            }
         }
     }
 
@@ -197,6 +222,44 @@ fn e3_power_channels() {
             hex_head(ctrl.payload.get(0..96).unwrap_or(&[]), 96)
         );
         write_json("e3-power-channels.json", &json);
+    }
+
+    // Round 2: 10016B 0x12720 control — default-value dword scan against
+    // the info channels (skip sentinels def==max==5001000/1001000).
+    let mut tbuf: Vec<u8> = vec![0u8; 10016];
+    tbuf[..4].copy_from_slice(&0x0001_2720u32.to_ne_bytes());
+    let st =
+        unsafe { NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), tbuf.as_mut_ptr() as *mut _) };
+    eprintln!("control 0x12720 (10016B): status={st:?}");
+    if st == 0 {
+        let real_defs: Vec<(u32, u32, u32)> = channels
+            .iter()
+            .copied()
+            .filter(|&(_, _, mn, df, mx)| {
+                !(df == mx && (df == 5_001_000 || df == 1_001_000 || df == 0))
+            })
+            .map(|(_, _, mn, df, mx)| (df, mn, mx))
+            .collect();
+        for &(def, mn, mx) in &real_defs {
+            let mut hits = Vec::new();
+            for off in (0..10016 - 4).step_by(4) {
+                let v = u32::from_le_bytes(tbuf[off..off + 4].try_into().unwrap());
+                if v == def || (v >= mn && v <= mx && v != 0 && v != 0xFFFF_FFFF) {
+                    hits.push(off);
+                    if hits.len() >= 8 {
+                        break;
+                    }
+                }
+            }
+            eprintln!("  def={def} [{mn},{mx}] → buffer offsets {hits:?}");
+        }
+        write_json(
+            "e3-10016-scan.json",
+            &format!(
+                "{{\"e\":\"e3b\",\"defs\":{real_defs:?},\"head128\":\"{}\"}}",
+                hex_head(&tbuf, 128)
+            ),
+        );
     }
 }
 
@@ -352,4 +415,149 @@ fn e6_boost_locks() {
         }
         Err(e) => eprintln!("boost_lock_snapshot: Err {e:?}"),
     }
+}
+
+/// E1b — DECISIVE V/F boost-table geometry adjudication (audit ①/⑥).
+/// MUTATING, opt-in TWICE: `#[ignore]` AND the `NVOC_ALLOW_VF_WRITE_PROBE=1`
+/// environment variable. Without the variable this test prints and exits.
+///
+/// Protocol (house RMW recipe, single dword):
+///   1. GET the 9248B table (snapshot)
+///   2. pick the victim point (last table-count point, else point 4)
+///   3. patch +15000 kHz at the NVAPIOC offset (60+36*i) only
+///   4. SET → fresh GET → print BOTH geometry columns
+///   5. restore the original snapshot → SET → full byte-compare verify
+///
+/// Verdict: the column showing 15000 after the SET is the driver's real
+/// delta field. Run:
+///   NVOC_ALLOW_VF_WRITE_PROBE=1 cargo test -p nvapi --test xocd_gap_probe_live -- --nocapture --ignored e1b
+#[test]
+#[ignore]
+fn e1b_vf_points_write_read() {
+    if std::env::var("NVOC_ALLOW_VF_WRITE_PROBE").as_deref() != Ok("1") {
+        eprintln!("e1b skipped: mutating probe — set NVOC_ALLOW_VF_WRITE_PROBE=1 to run");
+        return;
+    }
+    let gpu = first_gpu();
+    let info = gpu.vfp_info().expect("vfp_info");
+
+    let mut orig = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
+    orig.mask = info.mask.mask;
+    let st = unsafe {
+        NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut orig).cast())
+    };
+    assert_eq!(st, 0, "snapshot GET rejected");
+    let as_bytes = |r: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL| unsafe {
+        core::slice::from_raw_parts(ptr::from_ref(r).cast::<u8>(), std::mem::size_of_val(r))
+    };
+    let orig_bytes = as_bytes(&orig).to_vec();
+    let rd = |b: &[u8], abs: usize| -> i32 {
+        u32::from_le_bytes(b[abs..abs + 4].try_into().unwrap()) as i32
+    };
+
+    // victim point: last table-count point (count dword @+20), else point 4
+    let count = rd(&orig_bytes, 20) as usize;
+    let victim = if count > 1 { count - 1 } else { 4 };
+    let nv_off = 60 + 36 * victim; // nvapioc delta slot for point i
+    let xo_off = 124 + 36 * (victim - 1); // xOCD delta slot for point i (i>=1)
+    eprintln!(
+        "victim point {victim} (count={count}): nvapioc abs {nv_off} = {}, xocd abs {xo_off} = {}",
+        rd(&orig_bytes, nv_off),
+        rd(&orig_bytes, xo_off)
+    );
+
+    // patch a copy at the NVAPIOC offset only
+    let mut modified = orig_bytes.clone();
+    modified[nv_off..nv_off + 4].copy_from_slice(&15_000u32.to_le_bytes());
+    let mut m = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
+    unsafe {
+        ptr::copy_nonoverlapping(
+            modified.as_ptr(),
+            ptr::from_mut(&mut m).cast::<u8>(),
+            modified.len(),
+        )
+    };
+    let st = unsafe {
+        nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsSetControl(
+            *gpu.handle(),
+            ptr::from_ref(&m).cast(),
+        )
+    };
+    eprintln!("SET (nvapioc-offset patch): status={st:?}");
+    if st != 0 {
+        eprintln!("SET rejected — nothing to restore (driver refused the write)");
+        return;
+    }
+
+    // readback
+    let mut verify = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
+    verify.mask = info.mask.mask;
+    let st = unsafe {
+        NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut verify).cast())
+    };
+    assert_eq!(st, 0, "readback GET rejected");
+    let vb = as_bytes(&verify);
+    eprintln!(
+        "after SET: nvapioc abs {nv_off} = {}, xocd abs {xo_off} = {}",
+        rd(vb, nv_off),
+        rd(vb, xo_off)
+    );
+    for i in 0..8usize {
+        eprintln!(
+            "  pt{i:>2}: nvapioc {} / xocd {}",
+            rd(vb, 60 + 36 * i),
+            rd(vb, 124 + 36 * i)
+        );
+    }
+    let verdict = if rd(vb, nv_off) == 15_000 {
+        "NVAPIOC geometry (delta @ entry+20, base 40) holds"
+    } else if rd(vb, xo_off) == 15_000 {
+        "xOCD geometry (delta @ entry+24, base 100) holds"
+    } else {
+        "NEITHER column retained 15000 — geometry still unresolved (check dump above)"
+    };
+    eprintln!("VERDICT: {verdict}");
+    let json = format!(
+        "{{\"e\":\"e1b\",\"victim\":{victim},\"nv_off\":{nv_off},\"xo_off\":{xo_off},\"verdict\":\"{}\",\"after_nv\":{},\"after_xo\":{}}}",
+        verdict,
+        rd(vb, nv_off),
+        rd(vb, xo_off)
+    );
+    write_json("e1b-vf-write-read.json", &json);
+
+    // restore + verify (full byte compare)
+    let mut r = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
+    unsafe {
+        ptr::copy_nonoverlapping(
+            orig_bytes.as_ptr(),
+            ptr::from_mut(&mut r).cast::<u8>(),
+            orig_bytes.len(),
+        )
+    };
+    let st = unsafe {
+        nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsSetControl(
+            *gpu.handle(),
+            ptr::from_ref(&r).cast(),
+        )
+    };
+    eprintln!("restore SET: status={st:?}");
+    let mut back = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
+    back.mask = info.mask.mask;
+    let st = unsafe {
+        NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut back).cast())
+    };
+    assert_eq!(st, 0, "restore-verify GET rejected");
+    let same = as_bytes(&back) == orig_bytes.as_slice();
+    eprintln!(
+        "restore verify: {}",
+        if same {
+            "OK (byte-identical)"
+        } else {
+            "MISMATCH — inspect diff before continuing!"
+        }
+    );
+    assert!(
+        same,
+        "restore did not return the table to its original bytes"
+    );
 }

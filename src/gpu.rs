@@ -2762,21 +2762,23 @@ impl PhysicalGpu {
     )> {
         use power::undocumented::power_channels_info_v4;
         let all = self.power_channel_policies()?;
-        let pick = |exact: (u32, u32), legacy: (u32, u32)| {
-            all.iter()
-                .find(|c| (c.policy_id, c.subtype) == exact)
-                .or_else(|| all.iter().find(|c| (c.policy_id, c.subtype) == legacy))
-                .copied()
+        let pick = |ids: &[(u32, u32)]| {
+            ids.iter().find_map(|id| {
+                all.iter()
+                    .find(|c| (c.policy_id, c.subtype) == *id)
+                    .copied()
+            })
         };
         Ok((
-            pick(
+            pick(&[
                 power_channels_info_v4::OCP_NVVDD,
-                power_channels_info_v4::OCP_NVVDD_LEGACY,
-            ),
-            pick(
+                power_channels_info_v4::OCP_NVVDD_AMPERE,
+                power_channels_info_v4::OCP_NVVDD_TURING,
+            ]),
+            pick(&[
                 power_channels_info_v4::OCP_MSVDD,
                 power_channels_info_v4::OCP_MSVDD_LEGACY,
-            ),
+            ]),
         ))
     }
 
@@ -2843,7 +2845,8 @@ impl PhysicalGpu {
             (policy_id, subtype),
             power_channels_info_v4::OCP_NVVDD
                 | power_channels_info_v4::OCP_MSVDD
-                | power_channels_info_v4::OCP_NVVDD_LEGACY
+                | power_channels_info_v4::OCP_NVVDD_AMPERE
+                | power_channels_info_v4::OCP_NVVDD_TURING
                 | power_channels_info_v4::OCP_MSVDD_LEGACY
         ) && !(power_channels_info_v4::OCP_RAW_MIN..=power_channels_info_v4::OCP_RAW_MAX)
             .contains(&value_raw)

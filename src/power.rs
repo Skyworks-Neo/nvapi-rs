@@ -40,13 +40,23 @@ pub struct PowerChannelPolicy {
 }
 
 impl PowerChannelPolicy {
-    /// True when this channel is one of the four known OCP-current
-    /// identities (raw unit mA).
+    /// True when this channel is one of the known OCP-current identities
+    /// (raw unit mA): 50-series (19,13)/(19,12), Ampere (13,19), Turing
+    /// (6,19), xOCD's (14,19) MSVDD fallback. Live-verified identities:
+    /// RTX 2070 (6,19) def 215860 mA, RTX 3060 (13,19) def 135000 mA.
     pub fn is_ocp_current(&self) -> bool {
         matches!(
             (self.policy_id, self.subtype),
-            (19, 13) | (19, 12) | (13, 19) | (14, 19)
+            (19, 13) | (19, 12) | (13, 19) | (6, 19) | (14, 19)
         )
+    }
+
+    /// True for the board-power channel (policyId 0, raw **mW**) — the one
+    /// identity stable across Pascal/Turing/Ampere/50-series (subtypes
+    /// (0,0)/(0,9) observed; match on policyId alone). Defaults match the
+    /// card TGP spec exactly (2070 175 W, 3060 170 W, P100 250 W).
+    pub fn is_board_power(&self) -> bool {
+        self.policy_id == 0
     }
 }
 

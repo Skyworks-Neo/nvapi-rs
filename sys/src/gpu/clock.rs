@@ -1910,10 +1910,15 @@ pub mod undocumented {
 
         /// Blackwell record-subtype check: type low byte == 0x0F. NOT a pure
         /// generation stamp — the byte is a record subtype with a
-        /// generation-skewed distribution: Turing live (RTX 2070) mixes
-        /// {0x08, 0x09}, Ada live (RTX 4060 Laptop) reports 0x0A, Blackwell
-        /// 0x0F (NvpwrControl audit); 0x02 appears across gens. See
-        /// [`clk_ctrl_entry_v2_blackwell`].
+        /// generation- AND driver-version-skewed distribution (E4 census,
+        /// 2026-10-05): Turing 2070 mixes {0x08, 0x09}, Pascal P100
+        /// {0x04, 0x05}, Disp 0x02 across gens; Ampere 3060 and Ada 4060
+        /// Laptop report 0x10 on current drivers — the SAME Ada card
+        /// previously reported 0x0A on an older driver (0x10 = the +1
+        /// protocol remap of internal 0x0F), so treat 0x0F/0x10 as one
+        /// modern family when interpreting. Blackwell 0x0F (NvpwrControl
+        /// audit). xOCD keys its slot map on tag==15 (0x0F) exactly like
+        /// this check. See [`clk_ctrl_entry_v2_blackwell`].
         pub fn record_type_blackwell(&self, bit: u32) -> Option<bool> {
             self.record_type(bit)
                 .map(|t| t == clk_ctrl_entry_v2_blackwell::TYPE_BLACKWELL)

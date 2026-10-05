@@ -446,12 +446,19 @@ impl BoostLockEntry {
     /// id ∈ {0,1} + mode 2 + value ≤ 1e7 ⇒ an external clock-RANGE lock is
     /// active (nvidia-smi `-lgc` class). xOCD refuses to stack a voltage
     /// lock on top of this; nvoc writers should check before locking.
+    ///
+    /// Live-verified (RTX 2070, 2026-10-05): a `-lgc` range lock populates
+    /// BOTH id=0 and id=1 with mode 2 and the kHz bounds (1995000/1935000).
     pub fn is_clock_range_lock(&self) -> bool {
         matches!(self.id, 0 | 1) && self.mode == 2 && self.value <= 10_000_000
     }
 
     /// id == 6 + mode 3 + value in 300000..=1500000 µV ⇒ the V/F voltage
     /// lock is active (300–1500 mV sanity window from xOCD).
+    ///
+    /// Live-verified (RTX 2070, 2026-10-05, user-applied lock): a voltage
+    /// lock reads id=6/mode=3/value=800000 µV; the unlocked state is
+    /// mode=0 across all seven entries (Tesla P100 control).
     pub fn is_voltage_lock(&self) -> bool {
         self.id == 6 && self.mode == 3 && (300_000..=1_500_000).contains(&self.value)
     }
