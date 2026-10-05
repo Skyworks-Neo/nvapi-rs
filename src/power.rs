@@ -71,6 +71,40 @@ impl PowerChannelPolicy {
     }
 }
 
+/// Safety envelope for a power-command lease write: the requested value may
+/// not exceed the board-power default (policyId 0, mW) times this multiple.
+/// Sizing: the proven use case (P100 lease 250→300 W) is 1.2×; 2× leaves
+/// headroom for modded cards while a unit slip (`300000` typed bare = 300 kW
+/// in watts) dies at the gate instead of echoing an absurd cap. See
+/// [`power_command_envelope_max_mw`].
+pub const POWER_COMMAND_ENVELOPE_MULTIPLE: u32 = 2;
+
+/// Floor for a power-command lease write: below 1 W the cell is noise.
+pub const POWER_COMMAND_ENVELOPE_FLOOR_MW: u32 = 1000;
+
+/// Envelope ceiling for one power-command lease write (see
+/// [`POWER_COMMAND_ENVELOPE_MULTIPLE`]). Pure so core/cli can mirror the
+/// gate's bound in their refusal messages without duplicating the constant.
+#[must_use]
+pub fn power_command_envelope_max_mw(board_default_mw: u32) -> u32 {
+    board_default_mw.saturating_mul(POWER_COMMAND_ENVELOPE_MULTIPLE)
+}
+
+/// Outcome of [`crate::Gpu::set_power_command_checked`]: the applied value
+/// plus the facts a caller needs to render recovery (the pre-write cell) and
+/// the anchor the envelope used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct PowerCommandWrite {
+    /// The cell before the write. `None` when the GET refused (the write
+    /// itself still verified by re-read).
+    pub baseline: Option<u32>,
+    /// The value the driver accepted and read back.
+    pub applied: u32,
+    /// The policyId-0 board default (mW) the envelope was anchored on.
+    pub board_default_mw: Option<u32>,
+}
+
 /// Version-independent view of a PowerMonitor GetInfo result: the channel
 /// mask + the raw descriptor bytes (owned, so it outlives the source struct).
 /// The v1|2728 / v3|3240 / v4|6312 layouts share an identical header +
@@ -947,6 +981,26 @@ pub struct PowerControlInput {
     pub shared: u32,
     /// Root-role entry value.
     pub root: u32,
+}
+
+#[cfg(test)]
+mod power_command_envelope_tests {
+    use super::*;
+
+    #[test]
+    fn envelope_matches_live_cases() {
+        // Proven lease use: P100 250 W board default, 300 W write accepted
+        // (1.2×) — inside the envelope.
+        assert_eq!(power_command_envelope_max_mw(250_000), 500_000);
+        assert!(300_000 <= power_command_envelope_max_mw(250_000));
+        // The user's live typo ("300000" bare = 300 kW in W) dies here.
+        assert!(300_000_000 > power_command_envelope_max_mw(250_000));
+        // 4060L board default 100 W.
+        assert_eq!(power_command_envelope_max_mw(100_000), 200_000);
+        // Saturating, not wrapping.
+        assert_eq!(power_command_envelope_max_mw(u32::MAX), u32::MAX);
+        assert_eq!(POWER_COMMAND_ENVELOPE_FLOOR_MW, 1000);
+    }
 }
 
 #[cfg(test)]

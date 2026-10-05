@@ -3154,6 +3154,60 @@ impl PhysicalGpu {
         Ok(())
     }
 
+    /// The board-power default (policyId 0, mW) — the card-spec anchor the
+    /// power-command envelope is sized against. `None` when the driver
+    /// answers without a policyId-0 row.
+    pub fn board_power_default_mw(&self) -> crate::Result<Option<u32>> {
+        let rows = self.power_channel_policies()?;
+        Ok(rows
+            .iter()
+            .find(|row| row.policy_id == 0)
+            .map(|row| row.default_raw))
+    }
+
+    /// Checked write of one power-command lease cell: baseline capture,
+    /// board-power envelope, then the raw write (which verifies by re-read).
+    ///
+    /// **Echo-layer semantics** (2026-10-06 P100 load test): the lease cell
+    /// is what GET/NVML/`nvidia-smi` display as the cap, but load-time
+    /// enforcement still clamps at the legal slider window — the lease does
+    /// NOT move the enforced wall. The envelope therefore exists to keep the
+    /// echo sane (no 300 kW unit slips), not to make the write safe.
+    ///
+    /// Refusals ([`crate::Error::ArgumentRange`]): no policyId-0 anchor
+    /// (envelope undecidable — capability gate, per the nvpwrctl audit
+    /// §7.6 layout/range/readback triple), value outside
+    /// `[POWER_COMMAND_ENVELOPE_FLOOR_MW, power_command_envelope_max_mw]`.
+    /// The unchecked [`Self::set_power_command`] remains for explicit
+    /// opt-out callers.
+    pub fn set_power_command_checked(
+        &self,
+        channel: u8,
+        command: u32,
+        value: u32,
+    ) -> crate::Result<crate::power::PowerCommandWrite> {
+        trace!("gpu.set_power_command_checked({channel}, 0x{command:X}, {value})");
+        let baseline = self.power_command(channel, command).ok();
+        let anchor = self.board_power_default_mw()?.ok_or_else(|| {
+            trace!("set_power_command_checked: no policyId-0 default, envelope undecidable");
+            crate::Error::ArgumentRange(Default::default())
+        })?;
+        let max = crate::power::power_command_envelope_max_mw(anchor);
+        if value < crate::power::POWER_COMMAND_ENVELOPE_FLOOR_MW || value > max {
+            trace!(
+                "set_power_command_checked: {value} mW outside [{}, {max}]",
+                crate::power::POWER_COMMAND_ENVELOPE_FLOOR_MW
+            );
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        self.set_power_command(channel, command, value)?;
+        Ok(crate::power::PowerCommandWrite {
+            baseline,
+            applied: value,
+            board_default_mw: Some(anchor),
+        })
+    }
+
     /// Power-graph policy roles (NDA 0x67F31384; xOCD 2.0 `PolicyGraph` +
     /// `BlackwellNativePort.PowerGraph`). Reads the 2,727,984-byte graph
     /// (stamp 0x2BA030); on INCOMPATIBLE_STRUCT_VERSION (-9) falls back to

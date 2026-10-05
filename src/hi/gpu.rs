@@ -1879,6 +1879,27 @@ impl Gpu {
         self.gpu.set_power_command(channel, command, value)
     }
 
+    /// The board-power default (policyId 0, mW) — the envelope anchor.
+    /// `None` when the driver answers without a policyId-0 row.
+    pub fn board_power_default_mw(&self) -> crate::Result<Option<u32>> {
+        self.gpu.board_power_default_mw()
+    }
+
+    /// Checked power-command write: baseline capture → board-power envelope
+    /// (policyId-0 default × 2, floor 1 W; no anchor = refuse) → raw write
+    /// with re-read verification. **Echo-layer semantics** (2026-10-06 P100
+    /// load test): the lease is what GET/NVML/`nvidia-smi` display, but
+    /// load-time enforcement stays at the legal slider window. The unchecked
+    /// [`Self::set_power_command`] remains for explicit opt-out.
+    pub fn set_power_command_checked(
+        &self,
+        channel: u8,
+        command: u32,
+        value: u32,
+    ) -> crate::Result<crate::power::PowerCommandWrite> {
+        self.gpu.set_power_command_checked(channel, command, value)
+    }
+
     /// Power-graph policy roles (xOCD 2.0 `PolicyGraph`; NDA 0x67F31384).
     /// The 2,727,984-byte read falls back to the 347,124-byte layout on -9;
     /// role contracts are structural, so a violation is an error (not
