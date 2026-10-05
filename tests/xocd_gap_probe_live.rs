@@ -1033,14 +1033,15 @@ fn fmt_diff(d: &[(usize, i32, i32)]) -> String {
     s.join(", ")
 }
 
-/// E9 — xOCD 2.0 ExtendedLimits surface live read (audit
-/// docs/reverse-engineering/nvapi/xocd-2.0.0-capability-delta.md §4). The
-/// audit's §4 wrappers (`power_graph_roles` / `power_command` /
-/// `power_control_input`) so far have only offline byte-replay unit tests —
-/// this exercises them against the real driver. **GET-only**: the graph /
-/// command reads use no SET, and `power_control_input` is a GET. Read-only
-/// and safe; `set_power_command` (the only ExtendedLimits SET) is NOT called
-/// here (add an env-gated arm if you want a write).
+/// E9 — xOCD 2.0 ExtendedLimits surface live probe (audit
+/// docs/reverse-engineering/nvapi/xocd-2.0.0-capability-delta.md §4). Covers
+/// every wrapper the audit added: `power_graph_roles`, `power_command` (both
+/// packet command ids 0xF8/0xFE across all 32 channels), `power_control_input`,
+/// and — when enabled — the one SET, `set_power_command`. The GET arms are
+/// read-only and safe. The write arm is **double-gated** (`#[ignore]` here plus
+/// `NVOC_ALLOW_PWR_CMD_WRITE=1`) and **self-restoring**: it identity-writes the
+/// baseline, perturbs once, then restores the baseline and verifies each step,
+/// so a failing restore is loud rather than silent.
 #[test]
 #[ignore]
 fn e9_extended_limits_surface() {
@@ -1057,16 +1058,19 @@ fn e9_extended_limits_surface() {
         Err(e) => eprintln!("e9 power_graph_roles: Err({e:?})"),
     }
 
-    // --- power_command: GET-only observed (0xF8) read across the channel
-    // range; a rejected channel/command pair is the packet contract working. ---
+    // --- power_command: GET-only read of both xOCD packet command ids
+    // (0xF8 observed, 0xFE request) across the channel range; a rejected
+    // channel/command pair is the packet contract working. ---
     let mut cmd_json: Vec<String> = Vec::new();
-    for ch in 0..32u8 {
-        match gpu.power_command(ch, 0xF8) {
-            Ok(v) => {
-                eprintln!("e9 power_command ch[{ch:2}] cmd=0xF8 (observed) value={v}");
-                cmd_json.push(format!("{{\"ch\":{ch},\"cmd\":248,\"value\":{v}}}"));
+    for command in [0xF8u32, 0xFEu32] {
+        for ch in 0..32u8 {
+            match gpu.power_command(ch, command) {
+                Ok(v) => {
+                    eprintln!("e9 power_command ch[{ch:2}] cmd=0x{command:X} value={v}");
+                    cmd_json.push(format!("{{\"ch\":{ch},\"cmd\":{command},\"value\":{v}}}"));
+                }
+                Err(e) => eprintln!("e9 power_command ch[{ch:2}] cmd=0x{command:X}: Err({e:?})"),
             }
-            Err(e) => eprintln!("e9 power_command ch[{ch:2}] cmd=0xF8: Err({e:?})"),
         }
     }
 
@@ -1096,6 +1100,59 @@ fn e9_extended_limits_surface() {
         eprintln!("e9 power_control_input: skipped (no graph/shared role)");
     }
 
+    // --- set_power_command: the only ExtendedLimits SET. Double-gated and
+    // self-restoring. Writes the 0xF8 (observed) channel only — 0xFE drives the
+    // kernel-side power-cap request and is left for the caller to arm
+    // explicitly. A channel whose baseline is a 0 / 0xFFFFFFFF sentinel is
+    // skipped (nothing safe to perturb). ---
+    let mut write_arm_json = "null".to_string();
+    if std::env::var("NVOC_ALLOW_PWR_CMD_WRITE").as_deref() == Ok("1") {
+        let mut done = false;
+        for ch in 0..32u8 {
+            let Ok(baseline) = gpu.power_command(ch, 0xF8) else {
+                continue;
+            };
+            if baseline == 0 || baseline == u32::MAX {
+                continue;
+            }
+            eprintln!("e9 set_power_command ch[{ch}] baseline={baseline}");
+            match gpu.set_power_command(ch, 0xF8, baseline) {
+                Ok(()) => eprintln!("e9   identity SET(0xF8) accepted + read back"),
+                Err(e) => {
+                    eprintln!("e9   identity SET(0xF8): Err({e:?}) — aborting this arm");
+                    continue;
+                }
+            }
+            let perturbed = if baseline == u32::MAX - 1 {
+                baseline - 1
+            } else {
+                baseline + 1
+            };
+            match gpu.set_power_command(ch, 0xF8, perturbed) {
+                Ok(()) => eprintln!("e9   perturb SET({perturbed}) accepted + read back"),
+                Err(e) => {
+                    eprintln!("e9   perturb SET({perturbed}): Err({e:?}) (driver may clamp/reject)")
+                }
+            }
+            match gpu.set_power_command(ch, 0xF8, baseline) {
+                Ok(()) => eprintln!("e9   restored baseline={baseline}"),
+                Err(e) => eprintln!("e9   !! RESTORE FAILED: {e:?} (baseline={baseline})"),
+            }
+            write_arm_json = format!(
+                "{{\"ch\":{ch},\"cmd\":248,\"baseline\":{baseline},\"perturbed\":{perturbed}}}"
+            );
+            done = true;
+            break;
+        }
+        if !done {
+            eprintln!(
+                "e9 set_power_command: no writable 0xF8 channel (all sentinel/absent) — skipped"
+            );
+        }
+    } else {
+        eprintln!("e9 set_power_command: skipped (set NVOC_ALLOW_PWR_CMD_WRITE=1 to write)");
+    }
+
     let roles_json = match &roles {
         Ok(r) => format!(
             "{{\"family\":\"{:?}\",\"board\":{},\"shared\":{},\"root\":{},\"core\":{},\"memory\":{}}}",
@@ -1117,7 +1174,7 @@ fn e9_extended_limits_surface() {
     write_json(
         "e9-extended-limits.json",
         &format!(
-            "{{\"e\":\"e9\",\"roles\":{roles_json},\"command\":[{}],\"control_input\":{input_json}}}",
+            "{{\"e\":\"e9\",\"roles\":{roles_json},\"command\":[{}],\"control_input\":{input_json},\"write\":{write_arm_json}}}",
             cmd_json.join(",")
         ),
     );
