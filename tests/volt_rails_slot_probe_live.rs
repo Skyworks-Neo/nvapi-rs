@@ -55,7 +55,16 @@ fn volt_rails_slot_mapping_probe() {
     for entry in &before.control {
         let rail = entry.rail_bit;
         let original = entry.values;
-        for (slot, &base) in original.iter().enumerate().skip(1) {
+        // slots 4/5 crashed the driver on 4060 Laptop / 610 (2026-10-06
+        // field report, -300 write ×2) — skipped unless explicitly forced.
+        let unsafe_slots = std::env::var("NVOC_VOLT_SLOT_PROBE_UNSAFE").is_ok();
+        let last_slot = if unsafe_slots { original.len() } else { 4 };
+        for (slot, &base) in original
+            .iter()
+            .enumerate()
+            .skip(1)
+            .take(last_slot.saturating_sub(1))
+        {
             let perturbed = base.wrapping_add(step as i32);
             println!("--- rail{rail} slot{slot}: {base} -> {perturbed} ---");
             match gpu.set_volt_rail_slot(rail, slot, perturbed) {
@@ -82,6 +91,6 @@ fn volt_rails_slot_mapping_probe() {
     }
     println!("DONE — 槽位→语义以「status 哪个位跟随扰动」判定");
     println!(
-        "已钉:slot1=VBIOS max wall 偏移(values[2],用户 A/B;P100 上 vbios wall=0 故不可见)、slot2=VRM max wall 偏移(status[3] 跟随)、slot3=VMIN 偏移(status[5] 跟随)、slot4/5 保留"
+        "已钉:slot1=VBIOS max wall 偏移(values[2],用户 A/B)、slot2=VRM max wall 偏移(status[3] 跟随)、slot3=VMIN 偏移(status[5] 跟随);⚠️slot4/5 在 4060L/610 上写入即爆驱动(-300 实测),默认跳过,强制需 NVOC_VOLT_SLOT_PROBE_UNSAFE=1"
     );
 }

@@ -1805,14 +1805,16 @@ impl PhysicalGpu {
     /// | 1 | **VBIOS max wall offset** — status values[2] follows (user A/B; invisible on P100 where vbios wall = 0) |
     /// | 2 | **VRM max wall offset** — status values[3] follows 1:1 (P100/582.41) |
     /// | 3 | **VMIN / min-hold offset** — status values[5] follows 1:1 (P100/582.41) |
-    /// | 4 | retained; no observed effect |
-    /// | 5 | retained; no observed effect |
+    /// | 4 | ⚠️ **DO NOT WRITE** — crashed the driver on 4060 Laptop / 610 |
+    /// | 5 | ⚠️ **DO NOT WRITE** — crashed the driver on 4060 Laptop / 610 |
     ///
     /// Slot 1 explains the wall model end to end: effective wall =
     /// min(target, vbios_wall, vrm_max_wall) — on mobile (vbios wall = 0)
     /// its offset is invisible, on desktop it moves values[2]. Slots 4/5
-    /// are firmware-interpreted (the SET path blind-copies all six dwords)
-    /// — treat them as opaque and re-probe per driver build.
+    /// look like plain retained dwords on desktop Turing/Pascal but a −300
+    /// write on 4060 Laptop / 610 took the driver down (2026-10-06 field
+    /// report, reproduced on both slots) — they are live policy fields on
+    /// that generation, not padding. Never write them outside a lab.
     #[allow(non_snake_case)]
     pub fn set_volt_rail_slot(
         &self,
