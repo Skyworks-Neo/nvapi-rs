@@ -1791,12 +1791,22 @@ impl PhysicalGpu {
     /// Generalized [`Self::set_volt_rail_value`]: write payload **slot**
     /// `0..6` of one rail's control entry.
     ///
-    /// Slot semantics (mVolt+ cross-reference, 2026-10-06): slot 0 = the µV
-    /// operating offset we already expose; the remaining slots are the
-    /// unwired policy offsets mVolt+ edits as `VMIN / REL / ALT(OP) / OV`
-    /// (min-voltage policy, reliability wall, max-operating Vop, overvoltage
-    /// ceiling). Which index is which is NOT yet pinned — map it with the
-    /// slot-probe live test before exposing anything beyond slot 0.
+    /// Slot semantics — **empirically pinned on Tesla P100 / 582.41**
+    /// (slot-probe: +6.25 mV perturbation per slot, status diff; mVolt+
+    /// cross-reference says the family hosts VMIN/REL/ALT(OP)/OV policy
+    /// offsets):
+    ///
+    /// | slot | semantics (P100/582.41 live) |
+    /// |---|---|
+    /// | 0 | µV operating offset (the wired `set_volt_rail_value` path) |
+    /// | 1 | retained by the driver; no wall movement on P100 (quiet) |
+    /// | 2 | **VRM max wall offset** — status values[3] follows 1:1 |
+    /// | 3 | **VMIN / min-hold offset** — status values[5] follows 1:1 |
+    /// | 4 | retained; quiet on P100 |
+    /// | 5 | retained; quiet on P100 |
+    ///
+    /// Quiet slots are firmware-interpreted (the SET path blind-copies all
+    /// six dwords) — treat them as opaque and re-probe per driver build.
     #[allow(non_snake_case)]
     pub fn set_volt_rail_slot(
         &self,

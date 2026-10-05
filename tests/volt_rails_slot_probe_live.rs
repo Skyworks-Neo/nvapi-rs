@@ -55,12 +55,9 @@ fn volt_rails_slot_mapping_probe() {
     for entry in &before.control {
         let rail = entry.rail_bit;
         let original = entry.values;
-        for slot in 1..original.len() {
-            let perturbed = original[slot].wrapping_add(step as i32);
-            println!(
-                "--- rail{rail} slot{slot}: {} -> {} ---",
-                original[slot], perturbed
-            );
+        for (slot, &base) in original.iter().enumerate().skip(1) {
+            let perturbed = base.wrapping_add(step as i32);
+            println!("--- rail{rail} slot{slot}: {base} -> {perturbed} ---");
             match gpu.set_volt_rail_slot(rail, slot, perturbed) {
                 Ok(retained) => {
                     println!("    SET retained={retained}");
@@ -84,4 +81,7 @@ fn volt_rails_slot_mapping_probe() {
         }
     }
     println!("DONE — 槽位→语义以「status 哪个位跟随扰动」判定");
+    println!(
+        "P100/582.41 已钉:slot2=VRM max wall 偏移(status[3] 跟随)、slot3=VMIN 偏移(status[5] 跟随)、slot1/4/5 保留但安静"
+    );
 }
