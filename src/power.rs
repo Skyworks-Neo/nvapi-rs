@@ -890,7 +890,7 @@ pub fn power_rail_name_owned(rail: u32) -> String {
 /// Power-graph policy roles decoded from the 0x67F31384 graph (xOCD 2.0
 /// `PolicyGraph.Roles`): the board/shared/root policy indexes the kernel
 /// power objects hang off, plus the clock roles. Read-only research surface —
-/// see [`crate::Gpu::power_graph_roles`].
+/// see [`crate::PhysicalGpu::power_graph_roles`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PowerGraphRoles {
