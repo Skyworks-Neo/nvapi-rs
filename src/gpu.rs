@@ -1796,17 +1796,23 @@ impl PhysicalGpu {
     /// cross-reference says the family hosts VMIN/REL/ALT(OP)/OV policy
     /// offsets):
     ///
-    /// | slot | semantics (P100/582.41 live) |
+    /// Slot semantics — slot 1 confirmed by user A/B (VBIOS wall nonzero
+    /// machine), slots 2/3 by the P100/582.41 probe:
+    ///
+    /// | slot | semantics |
     /// |---|---|
     /// | 0 | µV operating offset (the wired `set_volt_rail_value` path) |
-    /// | 1 | retained by the driver; no wall movement on P100 (quiet) |
-    /// | 2 | **VRM max wall offset** — status values[3] follows 1:1 |
-    /// | 3 | **VMIN / min-hold offset** — status values[5] follows 1:1 |
-    /// | 4 | retained; quiet on P100 |
-    /// | 5 | retained; quiet on P100 |
+    /// | 1 | **VBIOS max wall offset** — status values[2] follows (user A/B; invisible on P100 where vbios wall = 0) |
+    /// | 2 | **VRM max wall offset** — status values[3] follows 1:1 (P100/582.41) |
+    /// | 3 | **VMIN / min-hold offset** — status values[5] follows 1:1 (P100/582.41) |
+    /// | 4 | retained; no observed effect |
+    /// | 5 | retained; no observed effect |
     ///
-    /// Quiet slots are firmware-interpreted (the SET path blind-copies all
-    /// six dwords) — treat them as opaque and re-probe per driver build.
+    /// Slot 1 explains the wall model end to end: effective wall =
+    /// min(target, vbios_wall, vrm_max_wall) — on mobile (vbios wall = 0)
+    /// its offset is invisible, on desktop it moves values[2]. Slots 4/5
+    /// are firmware-interpreted (the SET path blind-copies all six dwords)
+    /// — treat them as opaque and re-probe per driver build.
     #[allow(non_snake_case)]
     pub fn set_volt_rail_slot(
         &self,

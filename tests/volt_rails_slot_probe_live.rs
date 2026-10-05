@@ -82,6 +82,6 @@ fn volt_rails_slot_mapping_probe() {
     }
     println!("DONE — 槽位→语义以「status 哪个位跟随扰动」判定");
     println!(
-        "P100/582.41 已钉:slot2=VRM max wall 偏移(status[3] 跟随)、slot3=VMIN 偏移(status[5] 跟随)、slot1/4/5 保留但安静"
+        "已钉:slot1=VBIOS max wall 偏移(values[2],用户 A/B;P100 上 vbios wall=0 故不可见)、slot2=VRM max wall 偏移(status[3] 跟随)、slot3=VMIN 偏移(status[5] 跟随)、slot4/5 保留"
     );
 }
