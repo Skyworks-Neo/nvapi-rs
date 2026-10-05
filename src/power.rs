@@ -58,6 +58,17 @@ impl PowerChannelPolicy {
     pub fn is_board_power(&self) -> bool {
         self.policy_id == 0
     }
+
+    /// Live-unit taxonomy (2026-10-05, P100/2070/3060/4060L table evidence):
+    /// `min == 1` → current channel (the mA driver unit). Beats identity
+    /// matching — it also classifies rows the OCP-identity list misses (the
+    /// (3,12) 1001 A and (14,1) 5001 A rows on 4060L). Everything else
+    /// (min ≥ 1000, plus the degenerate all-zero policyId-0 rows) is a power
+    /// channel in mW — so every populated row renders with a unit and there
+    /// is no "unbounded sentinel" case.
+    pub fn is_current_channel(&self) -> bool {
+        self.min_raw == 1
+    }
 }
 
 /// Version-independent view of a PowerMonitor GetInfo result: the channel
