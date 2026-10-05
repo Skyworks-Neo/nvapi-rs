@@ -293,6 +293,120 @@ fn e3_power_channels() {
     }
 }
 
+/// E8 — full-table vs compact-table view alignment. The 0x12720 full table
+/// (v1|10016) and the xOCD compact 0x10A4C table (v1|2636) are two views of
+/// ONE control table: same stride (40), same value-field offset (entry+4),
+/// different base (0x8A0 vs 28). This probe seeds both stamps with the SAME
+/// info-returned mask and compares channel values per info bit against the
+/// info defaults, printing ALIGNED/MISMATCH per index. GET-only.
+#[test]
+#[ignore]
+fn e8_tgp_full_compact_alignment() {
+    use nvapi::sys::gpu::power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS_V1 as Full;
+
+    let gpu = first_gpu();
+
+    let mut ibuf: Vec<u8> = vec![0u8; std::mem::size_of::<NV_GPU_CLIENT_POWER_CHANNELS_INFO>()];
+    let ver =
+        <NV_GPU_CLIENT_POWER_CHANNELS_INFO as nvapi::sys::nvapi::StructVersion>::NVAPI_VERSION;
+    ibuf[..4].copy_from_slice(&ver.data.to_ne_bytes());
+    let st = unsafe {
+        NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(*gpu.handle(), ibuf.as_mut_ptr() as *mut _)
+    };
+    eprintln!("e8 info v4: status={st:?}");
+    if st != 0 {
+        return;
+    }
+    let info = unsafe { &*(ibuf.as_ptr() as *const NV_GPU_CLIENT_POWER_CHANNELS_INFO) };
+    let info_mask = info.mask;
+    let seed = info_mask & 0x7FFF;
+    eprintln!("e8 info mask: {:#010x} (seed {:#06x})", info_mask, seed);
+
+    // (bit, pid, subtype, min, default, max)
+    let mut channels: Vec<(u32, u32, u32, u32, u32, u32)> = Vec::new();
+    for bit in 0..15u32 {
+        if info_mask & (1 << bit) == 0 {
+            continue;
+        }
+        if let (Some((p, s)), Some((mn, df, mx))) = (
+            info.channel_id(bit as usize),
+            info.channel_range(bit as usize),
+        ) {
+            channels.push((bit, p, s, mn, df, mx));
+        }
+    }
+
+    // Compact GET (xOCD stamp 0x10A4C, seed = info mask).
+    let mut cbuf: Vec<u8> =
+        vec![0u8; std::mem::size_of::<NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>()];
+    cbuf[..4].copy_from_slice(&NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::STAMP.to_ne_bytes());
+    cbuf[4..8].copy_from_slice(&seed.to_ne_bytes());
+    let cst =
+        unsafe { NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), cbuf.as_mut_ptr() as *mut _) };
+    eprintln!("e8 compact 0x10A4C (seed {seed:#06x}): status={cst:?}");
+
+    // Full GET (0x12720 v1|10016, same seed).
+    let mut fbuf: Vec<u8> = vec![0u8; std::mem::size_of::<Full>()];
+    fbuf[..4].copy_from_slice(&((1u32 << 16) | 10016).to_ne_bytes());
+    fbuf[4..8].copy_from_slice(&seed.to_ne_bytes());
+    let fst =
+        unsafe { NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), fbuf.as_mut_ptr() as *mut _) };
+    eprintln!("e8 full 0x12720 (seed {seed:#06x}): status={fst:?}");
+
+    let compact_ok = cst == 0;
+    let full_ok = fst == 0;
+    let compact = unsafe { &*(cbuf.as_ptr() as *const NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1) };
+    let full = unsafe { &*(fbuf.as_ptr() as *const Full) };
+
+    eprintln!("e8 per-index (compact vs full vs info-default):");
+    let mut aligned = 0usize;
+    let mut mismatched = 0usize;
+    let mut rows_json: Vec<String> = Vec::new();
+    for &(bit, pid, subtype, mn, df, mx) in &channels {
+        let cv = if compact_ok {
+            compact.channel_value_compact(bit as usize)
+        } else {
+            None
+        };
+        let fv = if full_ok {
+            full.power_mw(bit as usize)
+        } else {
+            None
+        };
+        let verdict = match (cv, fv) {
+            (Some(c), Some(f)) if c == f => {
+                aligned += 1;
+                "ALIGNED"
+            }
+            (Some(c), Some(f)) => {
+                mismatched += 1;
+                eprintln!("  [MISMATCH] compact={c} full={f}");
+                "MISMATCH"
+            }
+            _ => {
+                mismatched += 1;
+                "UNAVAILABLE"
+            }
+        };
+        eprintln!(
+            "  idx {bit:2} id=({pid},{subtype}) def={df} [{mn},{mx}] compact={cv:?} full={fv:?} {verdict}"
+        );
+        rows_json.push(format!(
+            "{{\"bit\":{bit},\"pid\":{pid},\"subtype\":{subtype},\"default\":{df},\"min\":{mn},\"max\":{mx},\"compact\":{},\"full\":{},\"verdict\":\"{verdict}\"}}",
+            cv.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
+            fv.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
+        ));
+    }
+    eprintln!("e8 summary: {aligned} aligned, {mismatched} mismatched/unavailable");
+    write_json(
+        "e8-tgp-alignment.json",
+        &format!(
+            "{{\"e\":\"e8\",\"info_mask\":{info_mask},\"seed\":{seed},\"compact_status\":{cst},\"full_status\":{fst},\"aligned\":{aligned},\"mismatched\":{mismatched},\"rows\":[{}]}}",
+            rows_json.join(",")
+        ),
+    );
+}
+
 /// E4 — ClkDomains V2 control records under the xOCD semantic map (typed
 /// freq/volt slot dispatch per record type). GET-only.
 #[test]

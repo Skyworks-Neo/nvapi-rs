@@ -1863,6 +1863,56 @@ impl Gpu {
         self.gpu.set_top_rels_ratio(ratio)
     }
 
+    /// Power-command channel read (xOCD 2.0 `ReadPowerCommand`; NDA
+    /// 0x33AB0353 GET). `command` ∈ {0xF8, 0xFE}, channel 0..=31. Read-only;
+    /// the packet's preconditions are structural, so a refusal is an error
+    /// (not `Ok(None)`).
+    pub fn power_command(&self, channel: u8, command: u32) -> crate::Result<u32> {
+        self.gpu.power_command(channel, command)
+    }
+
+    /// Power-command channel write (xOCD 2.0 `SetPowerCommand`; NDA
+    /// 0x17695269 SET): value 0/0xFFFFFFFF rejected, verified by re-read, no
+    /// implicit restore. DANGEROUS where `command` = 0xFE — it drives the
+    /// kernel-side power-cap request; the caller owns the baseline.
+    pub fn set_power_command(&self, channel: u8, command: u32, value: u32) -> crate::Result<()> {
+        self.gpu.set_power_command(channel, command, value)
+    }
+
+    /// Power-graph policy roles (xOCD 2.0 `PolicyGraph`; NDA 0x67F31384).
+    /// The 2,727,984-byte read falls back to the 347,124-byte layout on -9;
+    /// role contracts are structural, so a violation is an error (not
+    /// `Ok(None)`). Read-only.
+    pub fn power_graph_roles(&self) -> crate::Result<crate::PowerGraphRoles> {
+        self.gpu.power_graph_roles()
+    }
+
+    /// Input-policy CONTROL request state (xOCD 2.0
+    /// `ReadPowerControlObservation`): Modern then Legacy geometry, `-9`
+    /// continuing; `Ok(None)` when both are rejected. Request state only —
+    /// not an enforced maximum, not a physical measurement.
+    pub fn power_control_input(
+        &self,
+        board: usize,
+        shared: usize,
+        root: usize,
+    ) -> crate::Result<Option<crate::PowerControlInput>> {
+        match self.gpu.power_control_input(board, shared, root) {
+            Ok(v) => Ok(v),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn set_vfp<
         I: Iterator<Item = (usize, KilohertzDelta)>,
         M: Iterator<Item = (usize, KilohertzDelta)>,

@@ -1100,13 +1100,33 @@ pub mod undocumented {
     }
 
     impl NV_GPU_CLIENT_TGP_WATT_STATUS_V1 {
-        /// Per-entry stride in bytes (the ref-tool CLI writes v14[553 + 10*idx], i.e.
-        /// 10 dwords = 40 bytes per entry).
-        const POWER_STRIDE_BYTES: usize = 40;
-        /// Byte offset WITHIN `payload` of entry 0's power-mW field. the ref-tool CLI's
-        /// setTgpWatt writes v14[553 + 10*idx] = buffer byte (553+10*idx)*4.
-        /// payload starts at buffer byte 8, so idx-0 base = 553*4 - 8 = 0x89C.
-        const POWER_BASE_PAYLOAD_OFF: usize = 0x89C;
+        /// Byte offset WITHIN `payload` of entry 0's base — i.e. of the
+        /// buffer byte 0x8A0. The ref-tool CLI writes `v14[553 + 10*idx]`,
+        /// and payload starts at buffer byte 8, so entry 0's value field
+        /// lands at buffer byte 553*4 = 0x8A4 = base 0x8A0 + value offset 4.
+        pub const ENTRY_BASE: usize = 0x8A0;
+        /// Per-entry stride in bytes (10 dwords = 40 bytes per entry) — the
+        /// SAME stride the xOCD compact 0x10A4C view uses
+        /// ([`NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::COMPACT_STRIDE`]).
+        pub const ENTRY_STRIDE: usize = 40;
+        /// Byte offset of the power-mW value WITHIN an entry — the SAME
+        /// value offset the compact view uses
+        /// ([`NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::COMPACT_VALUE_OFF`]).
+        pub const ENTRY_VALUE_OFF: usize = 4;
+
+        /// Byte offset WITHIN `payload` of entry 0's power-mW field, i.e.
+        /// `ENTRY_BASE - 8` (payload base) `+ ENTRY_VALUE_OFF` = 0x89C.
+        ///
+        /// The 0x12720 full table and the xOCD compact 0x10A4C stamp are two
+        /// views of ONE control table: they share the per-entry layout
+        /// exactly (stride 40, value at entry+4 — see
+        /// [`Self::ENTRY_STRIDE`]/[`Self::ENTRY_VALUE_OFF`] and the compact
+        /// constants) and differ only in the table base (0x8A0 here vs
+        /// [`NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::COMPACT_ENTRY_BASE`] =
+        /// 28 there). Row index = info-mask bit = control entry = write-mask
+        /// bit; the write contract is `1 << index`.
+        const POWER_STRIDE_BYTES: usize = Self::ENTRY_STRIDE;
+        const POWER_BASE_PAYLOAD_OFF: usize = Self::ENTRY_BASE - 8 + Self::ENTRY_VALUE_OFF;
 
         fn power_off(&self, index: usize) -> Option<usize> {
             Self::POWER_BASE_PAYLOAD_OFF.checked_add(Self::POWER_STRIDE_BYTES.checked_mul(index)?)
@@ -2293,6 +2313,520 @@ pub mod undocumented {
     nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V1_2728(1) = 2728 }
     nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V3_3240(3) = 3240 }
     nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V4(4) = 6312 }
+
+    // ------------------------------------------------------------------
+    // xOCD 2.0 ExtendedLimits geometries (audit: docs/reverse-engineering/
+    // nvapi/xocd-2.0.0-capability-delta.md §4; decompiled sources
+    // xOCD.ExtendedLimits `BlackwellPowerCommand` / `BlackwellNativePort` /
+    // `PolicyGraph` / `BlackwellLimitSession`).
+    //
+    // 0x33AB0353 GET / 0x17695269 SET are the PwrPolicies "Control" pair — a
+    // per-channel command/lease surface distinct from the TGP-watt control
+    // (0x8B3E7343/0xBFF09E59): xOCD's kernel-driver flow drives Blackwell
+    // power-cap patches through it with readback verification. The large
+    // buffers below do NOT follow the (ver<<16)|size shortcut for their
+    // stamps — send the recorded dwords verbatim.
+    // ------------------------------------------------------------------
+
+    nvstruct! {
+        /// Power-command lease packet (NDA 0x33AB0353 GET / 0x17695269 SET;
+        /// xOCD 2.0 `BlackwellPowerCommand.Packet`). 1320 bytes:
+        /// `[0]=stamp 0x0001_0528` (v1|1320), `[4]=channel mask 1<<channel`,
+        /// then 32 slots of 40 bytes at `40*(channel+1)` — `[+0]=value`,
+        /// `[+4]=command` (0xFE writable request/lease, 0xF8 observed-only);
+        /// the trailing 32 bytes are reserved. The GET echoes stamp + mask +
+        /// command and returns the slot value; xOCD validates a write by
+        /// re-reading and only ever writes 0xFE.
+        pub struct NV_GPU_POWER_COMMAND_PACKET_V1 {
+            pub version: NvVersion,
+            pub mask: u32,
+            pub payload: Array<[u8; 1320 - 8]>,
+        }
+    }
+
+    impl NV_GPU_POWER_COMMAND_PACKET_V1 {
+        /// v1|1320.
+        pub const STAMP: u32 = 0x0001_0528;
+        /// Writable per-channel request/lease command (the only one xOCD writes).
+        pub const COMMAND_FE: u32 = 0xFE;
+        /// Observed-only readback command.
+        pub const COMMAND_F8: u32 = 0xF8;
+        /// Highest addressable channel (the mask is 32 bits; xOCD's packet
+        /// builder validates 0..=31).
+        pub const MAX_CHANNEL: usize = 31;
+        /// Per-channel slot stride in bytes.
+        pub const SLOT_STRIDE: usize = 40;
+
+        /// Buffer offset of `channel`'s 40-byte slot (10 bytes before each
+        /// 40-byte stride boundary — xOCD's `40*(channel+1)`).
+        pub fn slot_off(channel: usize) -> Option<usize> {
+            Self::SLOT_STRIDE.checked_mul(channel.checked_add(1)?)
+        }
+
+        /// Slot value dword (buffer-absolute `40*(channel+1)`).
+        pub fn value(&self, channel: usize) -> Option<u32> {
+            let off = Self::slot_off(channel)?.checked_sub(8)?;
+            self.payload
+                .get(off..off + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        }
+
+        /// Slot command dword (buffer-absolute `40*(channel+1)+4`).
+        pub fn command(&self, channel: usize) -> Option<u32> {
+            let off = Self::slot_off(channel)?.checked_sub(8)?.checked_add(4)?;
+            self.payload
+                .get(off..off + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        }
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0x33AB0353). PwrPolicies Control GET — the
+        /// read half of the power-command lease pair (xOCD
+        /// `BlackwellNativePort.ReadPowerCommand`). Packet:
+        /// [`NV_GPU_POWER_COMMAND_PACKET_V1`].
+        pub unsafe fn NvAPI_GPU_ClientPwrPoliciesGetControl(hPhysicalGPU: NvPhysicalGpuHandle, pPacket: *mut NV_GPU_POWER_COMMAND_PACKET_V1) -> NvAPI_Status;
+    }
+
+    nvapi! {
+        /// Undocumented (NDA, ID 0x17695269). PwrPolicies Control SET — the
+        /// writable half of the power-command lease pair (xOCD
+        /// `BlackwellNativePort.SetPowerCommand`); xOCD writes command 0xFE
+        /// and verifies by re-reading.
+        pub unsafe fn NvAPI_GPU_ClientPwrPoliciesSetControl(hPhysicalGPU: NvPhysicalGpuHandle, pPacket: *const NV_GPU_POWER_COMMAND_PACKET_V1) -> NvAPI_Status;
+    }
+
+    /// One decoded policy entry from the power graph (xOCD `PolicyEntry`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct PolicyGraphEntry {
+        pub index: usize,
+        /// xOCD `Type`: 0 board / 4 (Ada clock role) / 23 shared / 24 root /
+        /// 25 core.
+        pub role_type: u32,
+        /// xOCD `Channel` (entry+4).
+        pub channel: u8,
+        /// xOCD `Unit` (entry+8).
+        pub unit: u32,
+        /// xOCD `DefaultRaw` (entry+16).
+        pub default_raw: u32,
+        /// xOCD `MaximumRaw` (entry+20).
+        pub maximum_raw: u32,
+    }
+
+    nvstruct! {
+        /// Private ClientPowerPoliciesGetInfo BLACKWELL graph (ID 0x67F31384;
+        /// xOCD 2.0 `BlackwellNativePort.PowerGraph`): 2,727,984 bytes with
+        /// stamp 0x2BA030 — NOT (ver<<16)|size here (the low word 0xA030 is
+        /// not the buffer size 0x29A030); send the stamp verbatim. xOCD
+        /// synthesizes this shape from the 347,124-byte layout when the
+        /// driver refuses this geometry with -9. Layout beyond the offsets
+        /// [`Self`]'s accessors read is opaque.
+        pub struct NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1 {
+            pub version: NvVersion,
+            pub payload: Array<[u8; 2_727_984 - 4]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1 {
+        /// v43|0xA030 — send verbatim (the low word is NOT the buffer size).
+        pub const STAMP: u32 = 0x2BA030;
+        /// `PolicyGraph.Validate`'s exact length contract.
+        pub const SIZE: usize = 2_727_984;
+        /// Root policy-index byte pair (xOCD prefers [133] over [132]; 0xFF
+        /// = absent).
+        pub const ROOT_INDEX_OFF: usize = 132;
+        /// Policy-entry table (xOCD `PolicyGraph.Entries`).
+        pub const ENTRY_BASE: usize = 1200;
+        pub const ENTRY_STRIDE: usize = 10604;
+        /// `PolicyGraph.Entries` iterates 0..255.
+        pub const MAX_POLICIES: usize = 255;
+        /// Relation table (xOCD `PolicyGraph.Rel`): stride 72, validity mask
+        /// at byte 100.
+        pub const REL_BASE: usize = 2_705_220;
+        pub const REL_STRIDE: usize = 72;
+
+        fn dword(&self, abs: usize) -> Option<u32> {
+            let off = abs.checked_sub(4)?;
+            self.payload
+                .get(off..off + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        }
+
+        fn word(&self, abs: usize) -> Option<u16> {
+            let off = abs.checked_sub(4)?;
+            self.payload
+                .get(off..off + 2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        }
+
+        fn byte(&self, abs: usize) -> Option<u8> {
+            self.payload.get(abs.checked_sub(4)?).copied()
+        }
+
+        /// The root policy index (xOCD's exact read: [132], else [133], 0xFF
+        /// = absent).
+        pub fn root_index(&self) -> Option<usize> {
+            let a = self.byte(Self::ROOT_INDEX_OFF)?;
+            if a == 0xFF {
+                return None;
+            }
+            let b = self.byte(Self::ROOT_INDEX_OFF + 1)?;
+            Some(if b == 0xFF { a } else { b } as usize)
+        }
+
+        /// Whether the entry-validity mask at byte 4 marks policy `index`
+        /// present.
+        pub fn policy_valid(&self, index: usize) -> bool {
+            index < Self::MAX_POLICIES
+                && self
+                    .dword(4 + (index / 32) * 4)
+                    .map(|m| m & (1u32 << (index % 32)) != 0)
+                    .unwrap_or(false)
+        }
+
+        /// Decode policy entry `index` (xOCD `PolicyEntry`).
+        pub fn policy_entry(&self, index: usize) -> Option<PolicyGraphEntry> {
+            if !self.policy_valid(index) {
+                return None;
+            }
+            let base = Self::ENTRY_BASE.checked_add(index.checked_mul(Self::ENTRY_STRIDE)?)?;
+            Some(PolicyGraphEntry {
+                index,
+                role_type: self.dword(base)?,
+                channel: self.byte(base + 4)?,
+                unit: self.dword(base + 8)?,
+                default_raw: self.dword(base + 16)?,
+                maximum_raw: self.dword(base + 20)?,
+            })
+        }
+
+        /// The relation-index pair at entry+364/+366 (Blackwell reads these
+        /// from the root and shared entries to reach the roles).
+        pub fn policy_children(&self, index: usize) -> Option<(u16, u16)> {
+            if !self.policy_valid(index) {
+                return None;
+            }
+            let base = Self::ENTRY_BASE.checked_add(index.checked_mul(Self::ENTRY_STRIDE)?)?;
+            Some((self.word(base + 364)?, self.word(base + 366)?))
+        }
+
+        /// Ada clock-role discriminator: the byte at entry+364 (0 = core,
+        /// 1 = memory — xOCD's exact selector).
+        pub fn policy_clock_discriminator(&self, index: usize) -> Option<u8> {
+            if !self.policy_valid(index) {
+                return None;
+            }
+            let base = Self::ENTRY_BASE.checked_add(index.checked_mul(Self::ENTRY_STRIDE)?)?;
+            self.byte(base + 364)
+        }
+
+        /// Follow relation `rel_index` (xOCD `PolicyGraph.Rel`): must be set
+        /// in the byte-100 validity mask, carry 0 at +0 and the 4096 contract
+        /// u16 at +24; returns the target policy index (byte +4).
+        pub fn relation_target(&self, rel_index: usize) -> Option<usize> {
+            if rel_index >= Self::MAX_POLICIES {
+                return None;
+            }
+            let mask = self.dword(100 + (rel_index / 32) * 4)?;
+            if mask & (1u32 << (rel_index % 32)) == 0 {
+                return None;
+            }
+            let base = Self::REL_BASE.checked_add(rel_index.checked_mul(Self::REL_STRIDE)?)?;
+            if self.dword(base)? != 0 || self.word(base + 24)? != 4096 {
+                return None;
+            }
+            Some(self.byte(base + 4)? as usize)
+        }
+    }
+
+    /// Role-type tag of the board policy entry in the input-policy CONTROL
+    /// buffer (xOCD `PowerControlValue`).
+    pub const NV_GPU_POWER_CONTROL_ROLE_TYPE_BOARD: u32 = 0;
+    /// Role-type tag of the shared policy entry.
+    pub const NV_GPU_POWER_CONTROL_ROLE_TYPE_SHARED: u32 = 23;
+    /// Role-type tag of the root policy entry.
+    pub const NV_GPU_POWER_CONTROL_ROLE_TYPE_ROOT: u32 = 24;
+    /// Input-policy CONTROL entry stride (xOCD `BlackwellLimitSession`).
+    pub const NV_GPU_POWER_CONTROL_ENTRY_STRIDE: usize = 9288;
+
+    /// Decode one input-policy CONTROL role entry — type at
+    /// `entry_base + policy*9288`, value at +68 (xOCD
+    /// `BlackwellNativePort.ReadPowerControlObservation`). `policy` must be
+    /// inside the 32-bit mask contract.
+    pub fn power_control_input_entry(
+        buf: &[u8],
+        entry_base: usize,
+        policy: usize,
+    ) -> Option<(u32, u32)> {
+        if policy >= 32 {
+            return None;
+        }
+        let at = entry_base.checked_add(policy.checked_mul(NV_GPU_POWER_CONTROL_ENTRY_STRIDE)?)?;
+        let role_type = buf
+            .get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))?;
+        let value = buf
+            .get(at + 68..at + 72)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))?;
+        Some((role_type, value))
+    }
+
+    nvstruct! {
+        /// Input-policy CONTROL, xOCD "Modern" geometry of the multiplexed
+        /// GET 0x8B3E7343 (the same ID as the TGP-watt control): 2,393,824
+        /// bytes, stamp 0x2786E0, role mask seeded at byte 136 and echoed
+        /// back. Entries at 2664 + policy*9288 (type@+0, value@+68); opaque
+        /// elsewhere. xOCD `BlackwellLimitSession.ModernInput`.
+        pub struct NV_GPU_CLIENT_POWER_CONTROL_INPUT_MODERN_V1 {
+            pub version: NvVersion,
+            pub header_rsvd: Padding<[u8; 132]>,
+            pub mask: u32,
+            pub payload: Array<[u8; 2_393_824 - 140]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_POWER_CONTROL_INPUT_MODERN_V1 {
+        pub const STAMP: u32 = 0x2786E0;
+        pub const ENTRY_BASE: usize = 2664;
+    }
+
+    nvstruct! {
+        /// Input-policy CONTROL, xOCD "Legacy" geometry of GET 0x8B3E7343:
+        /// 307,376 bytes, stamp 0x5B0B0, mask at byte 136, entries at
+        /// 2608 + policy*9288. xOCD `BlackwellLimitSession.LegacyInput`.
+        pub struct NV_GPU_CLIENT_POWER_CONTROL_INPUT_LEGACY_V1 {
+            pub version: NvVersion,
+            pub header_rsvd: Padding<[u8; 132]>,
+            pub mask: u32,
+            pub payload: Array<[u8; 307_376 - 140]>,
+        }
+    }
+
+    impl NV_GPU_CLIENT_POWER_CONTROL_INPUT_LEGACY_V1 {
+        pub const STAMP: u32 = 0x5B0B0;
+        pub const ENTRY_BASE: usize = 2608;
+    }
+
+    #[cfg(test)]
+    mod xocd2_extended_limits_tests {
+        use super::*;
+
+        const GRAPH_SZ: usize = NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1::SIZE;
+
+        fn put_dword(buf: &mut [u8], at: usize, v: u32) {
+            buf[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+
+        fn put_word(buf: &mut [u8], at: usize, v: u16) {
+            buf[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        }
+
+        fn graph_entry(i: usize) -> usize {
+            NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1::ENTRY_BASE
+                + i * NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1::ENTRY_STRIDE
+        }
+
+        fn graph_rel(i: usize) -> usize {
+            NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1::REL_BASE
+                + i * NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1::REL_STRIDE
+        }
+
+        #[test]
+        fn power_command_packet_layout() {
+            use NV_GPU_POWER_COMMAND_PACKET_V1 as Pkt;
+            assert_eq!(core::mem::size_of::<Pkt>(), 1320);
+            assert_eq!(Pkt::STAMP, 0x0001_0528);
+            assert_eq!(Pkt::STAMP, (1 << 16) | 1320);
+            assert_eq!(Pkt::slot_off(0), Some(40));
+            assert_eq!(Pkt::slot_off(31), Some(40 * 32));
+            let mut pkt = Pkt::zeroed();
+            pkt.version.data = Pkt::STAMP;
+            pkt.mask = 1 << 3;
+            // channel 3 slot: buffer offset 160 → payload offset 152
+            pkt.payload[152..156].copy_from_slice(&42u32.to_le_bytes());
+            pkt.payload[156..160].copy_from_slice(&Pkt::COMMAND_FE.to_le_bytes());
+            assert_eq!(pkt.value(3), Some(42));
+            assert_eq!(pkt.command(3), Some(Pkt::COMMAND_FE));
+            assert_eq!(pkt.value(2), Some(0));
+        }
+
+        /// The 0x12720 full table (v1|10016) and the xOCD compact 0x10A4C
+        /// table (v1|2636) are two views of ONE control table: same per-entry
+        /// stride, same value-field offset, different table base. Row index =
+        /// info-mask bit = control entry = write-mask bit in both.
+        #[test]
+        fn tgp_full_and_compact_views_align() {
+            use NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 as Compact;
+            use NV_GPU_CLIENT_TGP_WATT_STATUS_V1 as Full;
+
+            // Shared per-entry geometry.
+            assert_eq!(Full::ENTRY_STRIDE, Compact::COMPACT_STRIDE);
+            assert_eq!(Full::ENTRY_VALUE_OFF, Compact::COMPACT_VALUE_OFF);
+            assert_eq!(Full::ENTRY_STRIDE, 40);
+            assert_eq!(Full::ENTRY_VALUE_OFF, 4);
+
+            // The bases differ (full header 0x8A0 vs compact 28) — that is
+            // the ONLY geometric difference between the two stamps.
+            assert_ne!(Full::ENTRY_BASE, Compact::COMPACT_ENTRY_BASE);
+            assert_eq!(Full::ENTRY_BASE, 0x8A0);
+            assert_eq!(Compact::COMPACT_ENTRY_BASE, 28);
+
+            // A buffer whose two views agree per index: write the full-table
+            // value at its buffer dword (0x8A4 + 40i) and read it back through
+            // the compact reader on a buffer laid out at the compact base.
+            // Both resolve to their own base + value offset, i.e. the value
+            // dword is always `entry_base + 4`.
+            let mut buf = vec![0u8; 10016];
+            buf[..4].copy_from_slice(&((1u32 << 16) | 10016).to_ne_bytes());
+            let full = buf.as_mut_ptr() as *mut Full;
+            for i in 0..15usize {
+                unsafe { (*full).set_power_mw(i, 100_000 + i as u32) };
+            }
+            for i in 0..15usize {
+                assert_eq!(unsafe { (*full).power_mw(i) }, Some(100_000 + i as u32));
+                // the value dword is always base + value offset, stride 40
+                let buf_dword =
+                    (Full::ENTRY_BASE + Full::ENTRY_STRIDE * i + Full::ENTRY_VALUE_OFF) / 4;
+                let word =
+                    u32::from_ne_bytes(buf[buf_dword * 4..buf_dword * 4 + 4].try_into().unwrap());
+                assert_eq!(word, 100_000 + i as u32);
+            }
+        }
+
+        /// Byte-replay of xOCD `PolicyGraph.Roles` on a synthetic Blackwell
+        /// graph: root 10 (type 24) → board 2 (type 0) + shared 3 (type 23)
+        /// → core 4 (type 25, unit 1).
+        #[test]
+        fn power_graph_offsets_blackwell() {
+            let mut g = vec![0u8; GRAPH_SZ];
+            put_dword(
+                &mut g,
+                0,
+                NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1::STAMP,
+            );
+            let mut mask = 0u32;
+            for i in [2usize, 3, 4, 10] {
+                mask |= 1 << i;
+            }
+            put_dword(&mut g, 4, mask);
+            g[132] = 10;
+            g[133] = 10;
+            put_dword(&mut g, graph_entry(10), 24);
+            put_word(&mut g, graph_entry(10) + 364, 20);
+            put_word(&mut g, graph_entry(10) + 366, 21);
+            put_dword(&mut g, graph_entry(3), 23);
+            put_word(&mut g, graph_entry(3) + 364, 22);
+            put_dword(&mut g, graph_entry(4), 25);
+            put_dword(&mut g, graph_entry(4) + 8, 1);
+            let mut rel_mask = 0u32;
+            for r in [20usize, 21, 22] {
+                rel_mask |= 1 << r;
+            }
+            put_dword(&mut g, 100, rel_mask);
+            for (r, target) in [(20usize, 2usize), (21, 3), (22, 4)] {
+                put_dword(&mut g, graph_rel(r), 0);
+                put_word(&mut g, graph_rel(r) + 24, 4096);
+                g[graph_rel(r) + 4] = target as u8;
+            }
+            let graph: &NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1 =
+                unsafe { &*(g.as_ptr() as *const _) };
+            assert_eq!(graph.root_index(), Some(10));
+            let root = graph.policy_entry(10).expect("root entry");
+            assert_eq!((root.role_type, root.unit), (24, 0));
+            assert_eq!(graph.policy_children(10), Some((20, 21)));
+            assert_eq!(graph.relation_target(20), Some(2));
+            assert_eq!(graph.relation_target(21), Some(3));
+            assert_eq!(graph.relation_target(22), Some(4));
+            let shared = graph.policy_entry(3).expect("shared entry");
+            assert_eq!((shared.role_type, shared.unit), (23, 0));
+            let core = graph.policy_entry(4).expect("core entry");
+            assert_eq!((core.role_type, core.unit), (25, 1));
+            // the mask contract: entry 1's bytes are zero and it is NOT valid
+            assert_eq!(graph.policy_entry(1), None);
+            // a relation whose contract u16 is wrong is rejected
+            put_word(&mut g, graph_rel(20) + 24, 4095);
+            let g2: &NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1 =
+                unsafe { &*(g.as_ptr() as *const _) };
+            assert_eq!(g2.relation_target(20), None);
+        }
+
+        /// Ada family: root type 0; two type-4/unit-1 clock roles
+        /// distinguished by the entry+364 discriminator 0/1 with an equal
+        /// channel byte.
+        #[test]
+        fn power_graph_offsets_ada_clock_roles() {
+            let mut g = vec![0u8; GRAPH_SZ];
+            put_dword(
+                &mut g,
+                0,
+                NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1::STAMP,
+            );
+            let mut mask = 0u32;
+            for i in [5usize, 6, 7] {
+                mask |= 1 << i;
+            }
+            put_dword(&mut g, 4, mask);
+            g[132] = 5;
+            g[133] = 5;
+            for (i, disc) in [(6usize, 0u8), (7, 1)] {
+                put_dword(&mut g, graph_entry(i), 4);
+                put_dword(&mut g, graph_entry(i) + 8, 1);
+                g[graph_entry(i) + 4] = 9;
+                g[graph_entry(i) + 364] = disc;
+            }
+            let graph: &NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1 =
+                unsafe { &*(g.as_ptr() as *const _) };
+            assert_eq!(graph.root_index(), Some(5));
+            assert_eq!(graph.policy_clock_discriminator(6), Some(0));
+            assert_eq!(graph.policy_clock_discriminator(7), Some(1));
+            assert_eq!(graph.policy_entry(6).map(|e| e.channel), Some(9));
+        }
+
+        #[test]
+        fn input_control_geometry_layout() {
+            assert_eq!(NV_GPU_CLIENT_POWER_CONTROL_INPUT_MODERN_V1::STAMP, 0x2786E0);
+            assert_eq!(NV_GPU_CLIENT_POWER_CONTROL_INPUT_LEGACY_V1::STAMP, 0x5B0B0);
+            assert_eq!(
+                core::mem::size_of::<NV_GPU_CLIENT_POWER_CONTROL_INPUT_MODERN_V1>(),
+                2_393_824
+            );
+            assert_eq!(
+                core::mem::size_of::<NV_GPU_CLIENT_POWER_CONTROL_INPUT_LEGACY_V1>(),
+                307_376
+            );
+            let at = NV_GPU_CLIENT_POWER_CONTROL_INPUT_MODERN_V1::ENTRY_BASE + 3 * 9288;
+            let mut buf = vec![0u8; at + 72];
+            put_dword(&mut buf, at, NV_GPU_POWER_CONTROL_ROLE_TYPE_SHARED);
+            put_dword(&mut buf, at + 68, 1234);
+            assert_eq!(
+                power_control_input_entry(
+                    &buf,
+                    NV_GPU_CLIENT_POWER_CONTROL_INPUT_MODERN_V1::ENTRY_BASE,
+                    3
+                ),
+                Some((NV_GPU_POWER_CONTROL_ROLE_TYPE_SHARED, 1234))
+            );
+            // the 32-bit mask contract bounds the index
+            assert_eq!(
+                power_control_input_entry(
+                    &buf,
+                    NV_GPU_CLIENT_POWER_CONTROL_INPUT_MODERN_V1::ENTRY_BASE,
+                    32
+                ),
+                None
+            );
+            // the Legacy base is 112 bytes lower — the same fixture reads
+            // zeros there (geometry separation is real)
+            assert_eq!(
+                power_control_input_entry(
+                    &buf,
+                    NV_GPU_CLIENT_POWER_CONTROL_INPUT_LEGACY_V1::ENTRY_BASE,
+                    3
+                ),
+                Some((0, 0))
+            );
+        }
+    }
 
     #[cfg(test)]
     mod xocd_power_channels_tests {

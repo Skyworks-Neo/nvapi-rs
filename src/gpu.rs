@@ -3037,6 +3037,342 @@ impl PhysicalGpu {
         }
     }
 
+    // ------------------------------------------------------------------
+    // xOCD 2.0 ExtendedLimits surface (audit: docs/reverse-engineering/nvapi/
+    // xocd-2.0.0-capability-delta.md §4; decompiled xOCD.ExtendedLimits
+    // sources). This is the user-mode half of xOCD's kernel-driver flow: the
+    // PwrPolicies command/lease pair, the power-graph policy roles, and the
+    // input-policy CONTROL request state. xOCD's lease discipline (baseline
+    // capture + restore, `BlackwellPowerCommandLease`) is session-level
+    // policy and deliberately left to the caller — these wrappers do the
+    // single-call validation and readback only.
+    // ------------------------------------------------------------------
+
+    /// xOCD's power-command packet contract: channel 0..=31, command ∈
+    /// {0xF8 observed-only, 0xFE writable request}.
+    fn power_command_packet_ok(channel: u8, command: u32) -> bool {
+        use power::undocumented::NV_GPU_POWER_COMMAND_PACKET_V1 as Pkt;
+        channel as usize <= Pkt::MAX_CHANNEL && matches!(command, Pkt::COMMAND_F8 | Pkt::COMMAND_FE)
+    }
+
+    /// Read a power-command channel value (NDA 0x33AB0353 GET; xOCD 2.0
+    /// `BlackwellNativePort.ReadPowerCommand`). `channel` 0..=31 and
+    /// `command` ∈ {0xF8, 0xFE} (xOCD's packet contract). The response must
+    /// echo the stamp, the channel mask and the command — any mismatch is an
+    /// `Error::ArgumentRange`. Read-only.
+    pub fn power_command(&self, channel: u8, command: u32) -> crate::Result<u32> {
+        trace!("gpu.power_command({channel}, 0x{command:X})");
+        use crate::sys::api::NvAPI_GPU_ClientPwrPoliciesGetControl;
+        use power::undocumented::NV_GPU_POWER_COMMAND_PACKET_V1 as Pkt;
+        if !Self::power_command_packet_ok(channel, command) {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let mut buf = vec![0u8; std::mem::size_of::<Pkt>()];
+        buf[..4].copy_from_slice(&Pkt::STAMP.to_ne_bytes());
+        buf[4..8].copy_from_slice(&(1u32 << channel).to_ne_bytes());
+        let off = Pkt::slot_off(channel as usize)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        buf[off + 4..off + 8].copy_from_slice(&command.to_ne_bytes());
+        let status =
+            unsafe { NvAPI_GPU_ClientPwrPoliciesGetControl(self.0, buf.as_mut_ptr() as *mut _) };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientPwrPoliciesGetControl, status)
+            .map_err(crate::Error::from)?;
+        let pkt = unsafe { &*(buf.as_ptr() as *const Pkt) };
+        if pkt.version.data != Pkt::STAMP
+            || pkt.mask != 1u32 << channel
+            || pkt.command(channel as usize) != Some(command)
+        {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        pkt.value(channel as usize)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))
+    }
+
+    /// Write a power-command channel value (NDA 0x17695269 SET; xOCD 2.0
+    /// `BlackwellNativePort.SetPowerCommand`). Validates the value (0 and
+    /// 0xFFFFFFFF are xOCD's unset sentinels), writes, and then re-reads via
+    /// [`Self::power_command`] — a value that does not read back is an
+    /// `Error::ArgumentRange`. No implicit restore (see the module note
+    /// above). DANGEROUS where `command` = 0xFE — it drives the kernel-side
+    /// power-cap request; the caller owns the baseline.
+    pub fn set_power_command(&self, channel: u8, command: u32, value: u32) -> crate::Result<()> {
+        trace!("gpu.set_power_command({channel}, 0x{command:X}, {value})");
+        use crate::sys::api::NvAPI_GPU_ClientPwrPoliciesSetControl;
+        use power::undocumented::NV_GPU_POWER_COMMAND_PACKET_V1 as Pkt;
+        if value == 0 || value == u32::MAX || !Self::power_command_packet_ok(channel, command) {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let mut buf = vec![0u8; std::mem::size_of::<Pkt>()];
+        buf[..4].copy_from_slice(&Pkt::STAMP.to_ne_bytes());
+        buf[4..8].copy_from_slice(&(1u32 << channel).to_ne_bytes());
+        let off = Pkt::slot_off(channel as usize)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        buf[off..off + 4].copy_from_slice(&value.to_ne_bytes());
+        buf[off + 4..off + 8].copy_from_slice(&command.to_ne_bytes());
+        let status =
+            unsafe { NvAPI_GPU_ClientPwrPoliciesSetControl(self.0, buf.as_ptr() as *const _) };
+        crate::status_result(sys::Api::NvAPI_GPU_ClientPwrPoliciesSetControl, status)
+            .map_err(crate::Error::from)?;
+        if self.power_command(channel, command)? != value {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        Ok(())
+    }
+
+    /// Power-graph policy roles (NDA 0x67F31384; xOCD 2.0 `PolicyGraph` +
+    /// `BlackwellNativePort.PowerGraph`). Reads the 2,727,984-byte graph
+    /// (stamp 0x2BA030); on INCOMPATIBLE_STRUCT_VERSION (-9) falls back to
+    /// the 347,124-byte layout (stamp 0xF4BF4 — the struct
+    /// [`Self::tgp_watt_range`] reads) and synthesizes the graph shape from
+    /// it byte-for-byte the way xOCD does. Read-only; the roles are the
+    /// policy indexes the driver's power objects hang off.
+    pub fn power_graph_roles(&self) -> crate::Result<crate::power::PowerGraphRoles> {
+        trace!("gpu.power_graph_roles()");
+        use power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1 as Graph;
+        let mut buf = vec![0u8; std::mem::size_of::<Graph>()];
+        buf[..4].copy_from_slice(&Graph::STAMP.to_ne_bytes());
+        let status = unsafe {
+            sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(
+                self.0,
+                buf.as_mut_ptr() as *mut _,
+            )
+        };
+        match crate::status_result(
+            sys::Api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate,
+            status,
+        ) {
+            Ok(()) => {
+                let graph = unsafe { &*(buf.as_ptr() as *const Graph) };
+                Self::decode_power_graph_roles(graph)
+            }
+            Err(err) if err.status == crate::Status::IncompatibleStructVersion => {
+                trace!(
+                    "gpu.power_graph_roles: 0x2BA030 rejected (-9); synthesizing from the 347124-byte layout"
+                );
+                // Same shape/stamp as `tgp_watt_range`'s primary read
+                // (ver-15 0xF4BF4).
+                let mut small = vec![0u8; 347_124];
+                small[..4].copy_from_slice(&0xF4BF4u32.to_ne_bytes());
+                let status = unsafe {
+                    sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(
+                        self.0,
+                        small.as_mut_ptr() as *mut _,
+                    )
+                };
+                crate::status_result(
+                    sys::Api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate,
+                    status,
+                )
+                .map_err(crate::Error::from)?;
+                let graph_buf = Self::synthesize_power_graph(&small);
+                let graph = unsafe { &*(graph_buf.as_ptr() as *const Graph) };
+                Self::decode_power_graph_roles(graph)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// xOCD `BlackwellNativePort.PowerGraph`'s -9 fallback: byte-copy the
+    /// 347,124-byte layout into the 2,727,984-byte graph shape so a single
+    /// decoder handles both (xOCD's five regions exactly — entry mask,
+    /// relation mask, root bytes, the 32-entry policy table at its graph
+    /// offset, and the 32-entry relation table).
+    fn synthesize_power_graph(small: &[u8]) -> Vec<u8> {
+        use power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1 as Graph;
+        let mut graph = vec![0u8; Graph::SIZE];
+        graph[..4].copy_from_slice(&Graph::STAMP.to_ne_bytes());
+        graph[4..8].copy_from_slice(&small[4..8]); // entry-validity mask
+        graph[100..104].copy_from_slice(&small[16..20]); // relation mask
+        graph[132] = small[20]; // root policy index bytes
+        graph[133] = small[21];
+        graph[1_200..1_200 + 339_328].copy_from_slice(&small[1_088..1_088 + 339_328]);
+        graph[2_705_220..2_705_220 + 2_304].copy_from_slice(&small[340_416..340_416 + 2_304]);
+        graph
+    }
+
+    /// Decode xOCD `PolicyGraph.Roles` from a full graph image, mirroring the
+    /// decompiled contracts (root unit/type, Ada's two clock roles with the
+    /// +364 discriminator and equal channels, Blackwell's consecutive root
+    /// relations → board/shared → core). Any contract violation is an
+    /// `Error::ArgumentRange`.
+    fn decode_power_graph_roles(
+        graph: &power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1,
+    ) -> crate::Result<crate::power::PowerGraphRoles> {
+        use crate::power::{PowerGraphFamily, PowerGraphRoles};
+        use power::undocumented::PolicyGraphEntry;
+        let arg = || crate::Error::ArgumentRange(Default::default());
+        let root = graph
+            .root_index()
+            .and_then(|i| graph.policy_entry(i))
+            .ok_or_else(arg)?;
+        if root.unit != 0 {
+            trace!("power_graph_roles: root unit {} != 0", root.unit);
+            return Err(arg());
+        }
+        if root.role_type == 0 {
+            // Ada: two unit-1 clock roles (type 4) distinguished by the
+            // entry+364 discriminator; board == root, no shared role.
+            let mut core: Option<usize> = None;
+            let mut memory: Option<usize> = None;
+            let mut channel: Option<u8> = None;
+            for i in 0..power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1::MAX_POLICIES {
+                let Some(e) = graph.policy_entry(i) else {
+                    continue;
+                };
+                if e.role_type != 4 || e.unit != 1 {
+                    continue;
+                }
+                if let Some(c) = channel {
+                    if c != e.channel {
+                        return Err(arg());
+                    }
+                } else {
+                    channel = Some(e.channel);
+                }
+                match graph.policy_clock_discriminator(i) {
+                    Some(0) if core.is_none() => core = Some(i),
+                    Some(1) if memory.is_none() => memory = Some(i),
+                    _ => return Err(arg()),
+                }
+            }
+            let core = core.ok_or_else(arg)?;
+            return Ok(PowerGraphRoles {
+                family: PowerGraphFamily::Ada,
+                board: root.index,
+                shared: None,
+                root: root.index,
+                core,
+                memory: Some(memory.ok_or_else(arg)?),
+            });
+        }
+        if root.role_type != 24 {
+            trace!(
+                "power_graph_roles: unrecognized root type {}",
+                root.role_type
+            );
+            return Err(arg());
+        }
+        // Blackwell: the root's consecutive relation pair reaches the
+        // board/shared entries; the shared entry's first relation reaches
+        // the unit-1 type-25 core entry.
+        let (r1, r2) = graph.policy_children(root.index).ok_or_else(arg)?;
+        if r2 != r1.wrapping_add(1) {
+            return Err(arg());
+        }
+        let rel = |ri: u16| -> crate::Result<PolicyGraphEntry> {
+            let target = graph.relation_target(ri as usize).ok_or_else(arg)?;
+            graph.policy_entry(target).ok_or_else(arg)
+        };
+        let (a, b) = (rel(r1)?, rel(r2)?);
+        let (board, shared) = match ((a.role_type, a.unit), (b.role_type, b.unit)) {
+            ((0, 0), (23, 0)) => (a.index, b.index),
+            ((23, 0), (0, 0)) => (b.index, a.index),
+            _ => return Err(arg()),
+        };
+        let (s1, _) = graph.policy_children(shared).ok_or_else(arg)?;
+        let core = rel(s1)?;
+        if core.role_type != 25 || core.unit != 1 {
+            return Err(arg());
+        }
+        Ok(PowerGraphRoles {
+            family: PowerGraphFamily::Blackwell,
+            board,
+            shared: Some(shared),
+            root: root.index,
+            core: core.index,
+            memory: None,
+        })
+    }
+
+    /// Input-policy CONTROL request state (xOCD 2.0
+    /// `BlackwellNativePort.ReadPowerControlObservation`): the
+    /// board/shared/root role entries of whichever control geometry the
+    /// driver accepts — Modern (2,393,824 B, stamp 0x2786E0, entries at 2664)
+    /// then Legacy (307,376 B, stamp 0x5B0B0, entries at 2608), continuing on
+    /// INCOMPATIBLE_STRUCT_VERSION (-9). `board`/`shared`/`root` are policy
+    /// indexes from [`Self::power_graph_roles`]; each entry's type tag must
+    /// match its role (0/23/24) and the seeded mask must echo. Request state
+    /// only — NOT an enforced maximum and not a physical measurement.
+    /// `Ok(None)` when both formats are rejected.
+    pub fn power_control_input(
+        &self,
+        board: usize,
+        shared: usize,
+        root: usize,
+    ) -> crate::Result<Option<crate::power::PowerControlInput>> {
+        trace!("gpu.power_control_input({board}, {shared}, {root})");
+        use crate::sys::api::NvAPI_GPU_ClientTgpWattGetStatus;
+        use power::undocumented::{
+            NV_GPU_CLIENT_POWER_CONTROL_INPUT_LEGACY_V1 as Legacy,
+            NV_GPU_CLIENT_POWER_CONTROL_INPUT_MODERN_V1 as Modern,
+            NV_GPU_POWER_CONTROL_ROLE_TYPE_BOARD, NV_GPU_POWER_CONTROL_ROLE_TYPE_ROOT,
+            NV_GPU_POWER_CONTROL_ROLE_TYPE_SHARED, power_control_input_entry,
+        };
+        if board >= 32 || shared >= 32 || root >= 32 {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let mask = (1u32 << board) | (1u32 << shared) | (1u32 << root);
+
+        /// Probe one control geometry: seed the mask at byte 136, call the
+        /// multiplexed GET with this geometry's size+stamp, then require the
+        /// mask echo and the per-role type tags. `Ok(None)` = this format
+        /// was rejected with -9; hard errors (including tag mismatches)
+        /// abort the whole read like xOCD's `Check`.
+        macro_rules! probe {
+            ($ty:ty) => {{
+                let mut buf = vec![0u8; std::mem::size_of::<$ty>()];
+                buf[..4].copy_from_slice(&<$ty>::STAMP.to_ne_bytes());
+                buf[136..140].copy_from_slice(&mask.to_ne_bytes());
+                let status =
+                    unsafe { NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _) };
+                match crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status) {
+                    Ok(()) => {
+                        let pkt = unsafe { &*(buf.as_ptr() as *const $ty) };
+                        if pkt.mask != mask {
+                            return Err(crate::Error::ArgumentRange(Default::default()));
+                        }
+                        let mut values = [0u32; 3];
+                        for (slot, index) in [board, shared, root].into_iter().enumerate() {
+                            let expected = if index == board {
+                                NV_GPU_POWER_CONTROL_ROLE_TYPE_BOARD
+                            } else if index == shared {
+                                NV_GPU_POWER_CONTROL_ROLE_TYPE_SHARED
+                            } else {
+                                NV_GPU_POWER_CONTROL_ROLE_TYPE_ROOT
+                            };
+                            let (role_type, value) =
+                                power_control_input_entry(&buf, <$ty>::ENTRY_BASE, index)
+                                    .ok_or_else(|| {
+                                        crate::Error::ArgumentRange(Default::default())
+                                    })?;
+                            if role_type != expected {
+                                return Err(crate::Error::ArgumentRange(Default::default()));
+                            }
+                            values[slot] = value;
+                        }
+                        Ok(Some(crate::power::PowerControlInput {
+                            stamp: <$ty>::STAMP,
+                            mask,
+                            board: values[0],
+                            shared: values[1],
+                            root: values[2],
+                        }))
+                    }
+                    Err(e) if e.status == crate::Status::IncompatibleStructVersion => Ok(None),
+                    Err(e) => Err(crate::Error::from(e)),
+                }
+            }};
+        }
+
+        if let Some(input) = probe!(Modern)? {
+            return Ok(Some(input));
+        }
+        if let Some(input) = probe!(Legacy)? {
+            return Ok(Some(input));
+        }
+        Ok(None)
+    }
+
     /// Full PerfClientLimits 7-domain lock snapshot (xOCD `DecodeBoostLock`):
     /// seeds entries 0..=6 and decodes them; see
     /// [`crate::clock::BoostLockEntry`] for the lock semantics.
@@ -10439,5 +10775,142 @@ mod fan_curve_tests {
             (slot.points[0].rpm_q16 as u64 * 100).div_ceil(65536) as u32,
             1600
         );
+    }
+}
+
+#[cfg(test)]
+mod xocd2_power_graph_decode_tests {
+    use super::PhysicalGpu;
+    use crate::sys::gpu::power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1 as Graph;
+
+    const ENTRY: usize = Graph::ENTRY_BASE;
+    const STRIDE: usize = Graph::ENTRY_STRIDE;
+    const REL: usize = Graph::REL_BASE;
+    const REL_STRIDE: usize = Graph::REL_STRIDE;
+
+    fn entry(i: usize) -> usize {
+        ENTRY + i * STRIDE
+    }
+
+    fn rel(i: usize) -> usize {
+        REL + i * REL_STRIDE
+    }
+
+    fn put_dword(buf: &mut [u8], at: usize, v: u32) {
+        buf[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    }
+
+    fn put_word(buf: &mut [u8], at: usize, v: u16) {
+        buf[at..at + 2].copy_from_slice(&v.to_le_bytes());
+    }
+
+    fn graph(bytes: &[u8]) -> &Graph {
+        unsafe { &*(bytes.as_ptr() as *const Graph) }
+    }
+
+    fn decode(bytes: &[u8]) -> crate::Result<crate::power::PowerGraphRoles> {
+        PhysicalGpu::decode_power_graph_roles(graph(bytes))
+    }
+
+    /// Byte-replay of xOCD `PolicyGraph.Roles` (Blackwell): root 10 (type 24,
+    /// children 20/21) → relations 20→board 2 (type 0) and 21→shared 3
+    /// (type 23, children 22) → relation 22→core 4 (type 25, unit 1).
+    #[test]
+    fn decode_power_graph_roles_blackwell() {
+        let mut g = vec![0u8; Graph::SIZE];
+        put_dword(&mut g, 0, Graph::STAMP);
+        let mut mask = 0u32;
+        for i in [2usize, 3, 4, 10] {
+            mask |= 1 << i;
+        }
+        put_dword(&mut g, 4, mask);
+        g[132] = 10;
+        g[133] = 10;
+        put_dword(&mut g, entry(10), 24);
+        put_word(&mut g, entry(10) + 364, 20);
+        put_word(&mut g, entry(10) + 366, 21);
+        put_dword(&mut g, entry(2), 0);
+        put_dword(&mut g, entry(3), 23);
+        put_word(&mut g, entry(3) + 364, 22);
+        put_dword(&mut g, entry(4), 25);
+        put_dword(&mut g, entry(4) + 8, 1);
+        let mut rel_mask = 0u32;
+        for r in [20usize, 21, 22] {
+            rel_mask |= 1 << r;
+        }
+        put_dword(&mut g, 100, rel_mask);
+        for (r, target) in [(20usize, 2usize), (21, 3), (22, 4)] {
+            put_dword(&mut g, rel(r), 0);
+            put_word(&mut g, rel(r) + 24, 4096);
+            g[rel(r) + 4] = target as u8;
+        }
+
+        let roles = decode(&g).expect("blackwell roles");
+        assert_eq!(roles.family, crate::power::PowerGraphFamily::Blackwell);
+        assert_eq!((roles.board, roles.shared, roles.core), (2, Some(3), 4));
+        assert_eq!((roles.root, roles.memory), (10, None));
+
+        // non-consecutive root relation pair → contract error
+        put_word(&mut g, entry(10) + 366, 23);
+        assert!(decode(&g).is_err());
+        put_word(&mut g, entry(10) + 366, 21);
+
+        // broken relation contract (+24 u16 must be 4096) → contract error
+        put_word(&mut g, rel(20) + 24, 4095);
+        assert!(decode(&g).is_err());
+        put_word(&mut g, rel(20) + 24, 4096);
+
+        // core entry must be type 25/unit 1
+        put_dword(&mut g, entry(4), 24);
+        assert!(decode(&g).is_err());
+        put_dword(&mut g, entry(4), 25);
+
+        assert!(decode(&g).is_ok());
+    }
+
+    /// Ada branch: root 5 (type 0, unit 0) with the two type-4/unit-1 clock
+    /// roles 6/7 discriminated by +364 = 0/1 and sharing channel 9.
+    #[test]
+    fn decode_power_graph_roles_ada() {
+        let mut g = vec![0u8; Graph::SIZE];
+        put_dword(&mut g, 0, Graph::STAMP);
+        let mut mask = 0u32;
+        for i in [5usize, 6, 7] {
+            mask |= 1 << i;
+        }
+        put_dword(&mut g, 4, mask);
+        g[132] = 5;
+        g[133] = 5;
+        for (i, disc) in [(6usize, 0u8), (7, 1)] {
+            put_dword(&mut g, entry(i), 4);
+            put_dword(&mut g, entry(i) + 8, 1);
+            g[entry(i) + 4] = 9;
+            g[entry(i) + 364] = disc;
+        }
+
+        let roles = decode(&g).expect("ada roles");
+        assert_eq!(roles.family, crate::power::PowerGraphFamily::Ada);
+        assert_eq!(
+            (roles.board, roles.root, roles.core, roles.memory),
+            (5, 5, 6, Some(7))
+        );
+        assert_eq!(roles.shared, None);
+
+        // channels of the two clock roles must match
+        g[entry(7) + 4] = 8;
+        assert!(decode(&g).is_err());
+        g[entry(7) + 4] = 9;
+
+        // duplicate discriminator (both 0) → contract error
+        g[entry(7) + 364] = 0;
+        assert!(decode(&g).is_err());
+        g[entry(7) + 364] = 1;
+
+        // root unit must be 0
+        put_dword(&mut g, entry(5) + 8, 3);
+        assert!(decode(&g).is_err());
+        put_dword(&mut g, entry(5) + 8, 0);
+
+        assert!(decode(&g).is_ok());
     }
 }

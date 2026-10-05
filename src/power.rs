@@ -887,6 +887,57 @@ pub fn power_rail_name_owned(rail: u32) -> String {
     }
 }
 
+/// Power-graph policy roles decoded from the 0x67F31384 graph (xOCD 2.0
+/// `PolicyGraph.Roles`): the board/shared/root policy indexes the kernel
+/// power objects hang off, plus the clock roles. Read-only research surface —
+/// see [`crate::Gpu::power_graph_roles`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct PowerGraphRoles {
+    /// Which family's role topology the graph carries (xOCD classifies by
+    /// the root policy entry's type).
+    pub family: PowerGraphFamily,
+    /// Board policy index (type 0).
+    pub board: usize,
+    /// Shared policy index (type 23); absent on Ada graphs.
+    pub shared: Option<usize>,
+    /// Root policy index (type 24 on Blackwell, type 0 on Ada, where board
+    /// and root are the same object).
+    pub root: usize,
+    /// Core clock-role policy index (type 25 on Blackwell, type 4 on Ada).
+    pub core: usize,
+    /// Memory clock-role policy index — Ada only.
+    pub memory: Option<usize>,
+}
+
+/// Graph family as classified by xOCD `PolicyGraph.Roles`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum PowerGraphFamily {
+    Ada,
+    Blackwell,
+}
+
+/// Input-policy CONTROL request state (xOCD `PowerControlSnapshot`): the
+/// board/shared/root role entry values of whichever control geometry the
+/// driver accepted. Request state only — xOCD's own disclaimer: NOT an
+/// enforced maximum and not a physical power measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct PowerControlInput {
+    /// Geometry stamp the driver accepted: 0x2786E0 (Modern) or 0x5B0B0
+    /// (Legacy).
+    pub stamp: u32,
+    /// Echoed role mask (bits = the seeded policy indexes).
+    pub mask: u32,
+    /// Board-role entry value.
+    pub board: u32,
+    /// Shared-role entry value.
+    pub shared: u32,
+    /// Root-role entry value.
+    pub root: u32,
+}
+
 #[cfg(test)]
 mod rail_name_tests {
     use super::*;
