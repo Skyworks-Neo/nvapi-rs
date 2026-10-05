@@ -90,12 +90,15 @@ fn first_gpu() -> PhysicalGpu {
 }
 
 /// E3 — PowerChannels info v4 + control geometry detection (audit ⑤ and
-/// the 0x10A4C stride question). GET-only. Round 2 addition: when the
-/// compact 0x10A4C control is rejected (pre-50-series, live-confirmed -9
-/// on Turing/Ampere/Pascal), scan the 10016B 0x12720 control (the stamp
-/// `set_tgp_watt` drives) for dwords matching the info-side channel
-/// defaults — those hits are the candidate OCP value offsets for a future
-/// pre-50-series write path.
+/// the 0x10A4C stride question). GET-only. The control call now drives the
+/// CORRECTED stamp (`STAMP` = 0x0001_0A4C = v1|2636 = 68172, the xOCD
+/// `ReferenceOcp.Layout Small` header) with the info-returned mask seeded
+/// at +4, mirroring production and xOCD's non-50 `SetPowerChannelLimit`.
+/// The pre-fix literal 0x0010_0A4C (v16|2636) made EVERY generation answer
+/// -9; that was a version-nibble typo, not a pre-50 generation gate. The
+/// legacy-stamp matrix keeps the v16 literal as a labeled control row, and
+/// the 10016B 0x12720 alternate-layout scan is retained as a second
+/// geometry instrument.
 #[test]
 #[ignore]
 fn e3_power_channels() {
@@ -109,9 +112,12 @@ fn e3_power_channels() {
         NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(*gpu.handle(), ibuf.as_mut_ptr() as *mut _)
     };
     eprintln!("info v4 (stamp 264816): status={st:?}");
-    let mut channels: Vec<(u32, u32, u32, u32, u32)> = Vec::new(); // (pid,sub,min,def,max)
+    // (bit, pid, subtype, min, default, max)
+    let mut channels: Vec<(u32, u32, u32, u32, u32, u32)> = Vec::new();
+    let mut info_mask = 0u32;
     if st == 0 {
         let info = unsafe { &*(ibuf.as_ptr() as *const NV_GPU_CLIENT_POWER_CHANNELS_INFO) };
+        info_mask = info.mask;
         eprintln!("info mask: {:#010x}", info.mask);
         for bit in 0..15u32 {
             if info.mask & (1 << bit) == 0 {
@@ -126,23 +132,40 @@ fn e3_power_channels() {
                 range
             );
             if let (Some((p, s)), Some((mn, df, mx))) = (id, range) {
-                channels.push((p, s, mn, df, mx));
+                channels.push((bit, p, s, mn, df, mx));
             }
         }
     }
 
+    // Production/xOCD control GET: corrected v1|2636 stamp + info-mask seed
+    // (the driver fills only masked entries).
     let mut cbuf: Vec<u8> =
         vec![0u8; std::mem::size_of::<NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>()];
-    cbuf[..4].copy_from_slice(&0x0010_0A4Cu32.to_ne_bytes());
+    cbuf[..4].copy_from_slice(&NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::STAMP.to_ne_bytes());
+    cbuf[4..8].copy_from_slice(&(info_mask & 0x7FFF).to_ne_bytes());
     let st =
         unsafe { NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), cbuf.as_mut_ptr() as *mut _) };
-    eprintln!("control 0x10A4C: status={st:?}");
+    eprintln!(
+        "control 0x10A4C v1|2636 (seed {:#06x}): status={st:?}",
+        info_mask & 0x7FFF
+    );
     if st == 0 {
         let ctrl = unsafe { &*(cbuf.as_ptr() as *const NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1) };
         eprintln!("mask: {:#010x}", ctrl.mask);
         eprintln!(
-            "compact values (xOCD 40B@28): {:?}",
-            (0..6)
+            "compact values at info bits (xOCD 40B@28, value@32+40i): {:?}",
+            channels
+                .iter()
+                .map(|&(bit, ..)| (
+                    bit,
+                    ctrl.channel_value_compact(bit as usize)
+                        .unwrap_or(0xFFFF_FFFF)
+                ))
+                .collect::<Vec<_>>()
+        );
+        eprintln!(
+            "compact values (dense 0..15): {:?}",
+            (0..15)
                 .map(|i| ctrl.channel_value_compact(i).unwrap_or(0xFFFF_FFFF))
                 .collect::<Vec<_>>()
         );
@@ -152,13 +175,22 @@ fn e3_power_channels() {
                 .map(|i| ctrl.power_mw(i).unwrap_or(0xFFFF_FFFF))
                 .collect::<Vec<_>>()
         );
+        let rows: Vec<(usize, u32, u32, u32)> = channels
+            .iter()
+            .map(|&(bit, _, _, mn, df, mx)| (bit as usize, mn, df, mx))
+            .collect();
+        eprintln!(
+            "geometry detection: {:?} (Some(true)=xOCD compact, Some(false)=R465, None=ambiguous)",
+            ctrl.detect_compact_geometry(&rows)
+        );
         eprintln!(
             "payload head[96]: {}",
             hex_head(ctrl.payload.get(0..96).unwrap_or(&[]), 96)
         );
         let json = format!(
-            "{{\"e\":\"e3\",\"compact\":[{}],\"r465\":[{}],\"head96\":\"{}\"}}",
-            (0..6)
+            "{{\"e\":\"e3\",\"info_mask\":{},\"compact\":[{}],\"r465\":[{}],\"geometry\":\"{:?}\",\"head96\":\"{}\"}}",
+            info_mask,
+            (0..15)
                 .map(|i| ctrl
                     .channel_value_compact(i)
                     .unwrap_or(0xFFFF_FFFF)
@@ -169,6 +201,7 @@ fn e3_power_channels() {
                 .map(|i| ctrl.power_mw(i).unwrap_or(0xFFFF_FFFF).to_string())
                 .collect::<Vec<_>>()
                 .join(","),
+            ctrl.detect_compact_geometry(&rows),
             hex_head(ctrl.payload.get(0..96).unwrap_or(&[]), 96)
         );
         write_json("e3-power-channels.json", &json);
@@ -182,12 +215,14 @@ fn e3_power_channels() {
     // (nvapi64). nvapi64 R465's switch accepted {0x10298, 0x106DC, 0x10A4C,
     // 0x11F10}; the R538+ 0x12720 was added later. Test which stamps the
     // 610.47 nvapi64 still accepts on THIS generation (GET-only): a
-    // populated legacy buffer is the pre-50-series OCP write-path candidate.
+    // populated buffer is the write-path candidate. The v16 row is the
+    // pre-fix production literal — its verdict isolates the version field.
     {
         let stamps: &[(u32, &str)] = &[
             (0x0001_0298, "0x10298 v1|664B"),
             (0x0001_06DC, "0x106DC v1|1756B (R465 136B-stride)"),
-            (0x0001_0A4C, "0x10A4C v1|2636B (compact, 50-series)"),
+            (0x0001_0A4C, "0x10A4C v1|2636B (xOCD compact)"),
+            (0x0010_0A4C, "0x10A4C v16|2636B (pre-fix typo literal)"),
             (0x0001_1F10, "0x11F10 v1|7952B"),
             (0x0001_2720, "0x12720 v1|10016B (R538+)"),
         ];
@@ -195,7 +230,7 @@ fn e3_power_channels() {
             let size = (stamp & 0xFFFF) as usize;
             let mut b: Vec<u8> = vec![0u8; size];
             b[..4].copy_from_slice(&stamp.to_ne_bytes());
-            b[4..8].copy_from_slice(&0x0000_7FFFu32.to_ne_bytes());
+            b[4..8].copy_from_slice(&(info_mask & 0x7FFF).to_ne_bytes());
             let st = unsafe {
                 NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), b.as_mut_ptr() as *mut _)
             };
@@ -227,10 +262,10 @@ fn e3_power_channels() {
         let real_defs: Vec<(u32, u32, u32)> = channels
             .iter()
             .copied()
-            .filter(|&(_, _, _mn, df, mx)| {
+            .filter(|&(_, _, _, _mn, df, mx)| {
                 !(df == mx && (df == 5_001_000 || df == 1_001_000 || df == 0))
             })
-            .map(|(_, _, mn, df, mx)| (df, mn, mx))
+            .map(|(_, _, _, mn, df, mx)| (df, mn, mx))
             .collect();
         for &(def, mn, mx) in &real_defs {
             let mut hits = Vec::new();

@@ -1190,22 +1190,36 @@ pub mod undocumented {
     }
 
     impl NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 {
+        /// The exact struct-version stamp xOCD drives (`ReferenceOcp.Layout
+        /// Small.Header` = 68172 = 0x0001_0A4C = v1|2636). NOTE: 68172 is
+        /// NOT 0x0010_0A4C — the version nibble is 1, not 0x10. Every call
+        /// site stamped 0x0010_0A4C through the pre-fix era and got -9
+        /// (INCOMPATIBLE_STRUCT_VERSION) on every generation, 50-series
+        /// included; that was a literal typo, not a generation gate.
+        pub const STAMP: u32 = 0x0001_0A4C;
+
         pub const ENTRY_STRIDE: usize = 136;
         pub const ENTRY_BASE: usize = 1756;
         pub const ENTRY_MW_OFF: usize = 72;
         const ENTRIES: usize = 6;
 
-        /// xOCD geometry (`BlackwellPowerPolicy` / `ParsePowerChannelPolicies`
-        /// NvApiSource.cs:1956-1970): per-channel entries at BUFFER byte
-        /// 28+40*i with the raw value at entry+32 (⇒ buffer 60+40i,
-        /// payload 52+40i). Raw unit = **mA for the OCP channels**
-        /// (policyId 19 family; UI shows A ×1000), TGP-mW on the Dlevel
-        /// channels per the ref-tool reading — units are per-channel, see
+        /// xOCD compact geometry (`ParsePowerChannelPolicies`
+        /// NvApiSource.cs:2007/2036 `index*40+32`; `ReferenceOcp.Layout
+        /// Small` = EntryBase 28, Stride 40, ValueDelta 4): the raw value
+        /// sits at BUFFER byte 32+40*i (= entry+4; payload 24+40*i), with
+        /// the entry's rail-type dword at entry+0 (28+40*i). Raw unit =
+        /// **mA for the OCP channels** (policyId 19 family; UI shows
+        /// A ×1000), TGP-mW on the Dlevel channels per the ref-tool
+        /// reading — units are per-channel, see
         /// [`NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4`].
         pub const COMPACT_STRIDE: usize = 40;
-        pub const COMPACT_VALUE_OFF: usize = 32;
+        /// Value-field offset within an entry (entry+4 ⇒ buffer 32+40*i).
+        pub const COMPACT_VALUE_OFF: usize = 4;
         pub const COMPACT_ENTRY_BASE: usize = 28;
-        pub const COMPACT_ENTRIES: usize = 6;
+        /// The compact table is bounded by its mask contract (0x7FFF,
+        /// xOCD `WriteMask`/`VerifyValues` iterate bits 0..=14) — 15
+        /// entries, not the 6 the R465 136B-stride region can hold.
+        pub const COMPACT_ENTRIES: usize = 15;
 
         /// Power-mW of entry `index` (None = sentinel 0xFFFFFFFF / OOB).
         pub fn power_mw(&self, index: usize) -> Option<u32> {
@@ -1249,19 +1263,21 @@ pub mod undocumented {
         }
 
         /// Detect which geometry the live GET filled: compare both candidate
-        /// value lists against the info-side (min, default, max) triplets —
-        /// a geometry "fits" when every entry value lands inside its
-        /// [min, max] window. Returns true for the compact (xOCD) geometry,
-        /// false for the R465 136B-stride one, None when ambiguous.
-        pub fn detect_compact_geometry(&self, triplets: &[(u32, u32, u32)]) -> Option<bool> {
-            if triplets.is_empty() {
+        /// value lists against the info-side rows — a geometry "fits" when
+        /// every **indexed** entry value lands inside its [min, max]
+        /// window. The row index is the info-mask bit position, i.e. the
+        /// control entry index (xOCD drives control entry i for info entry
+        /// i; the populated set can have gaps). Returns true for the
+        /// compact (xOCD) geometry, false for the R465 136B-stride one,
+        /// None when ambiguous.
+        pub fn detect_compact_geometry(&self, rows: &[(usize, u32, u32, u32)]) -> Option<bool> {
+            if rows.is_empty() {
                 return None;
             }
             let fits = |get: &dyn Fn(usize) -> Option<u32>| {
-                triplets
-                    .iter()
-                    .enumerate()
-                    .all(|(i, &(lo, _def, hi))| get(i).map(|v| v >= lo && v <= hi).unwrap_or(false))
+                rows.iter().all(|&(idx, lo, _def, hi)| {
+                    get(idx).map(|v| v >= lo && v <= hi).unwrap_or(false)
+                })
             };
             let compact_fits = fits(&|i| self.channel_value_compact(i));
             let r465_fits = fits(&|i| self.power_mw(i));
@@ -2311,30 +2327,50 @@ pub mod undocumented {
         }
 
         /// The 0x10A4C control carries TWO candidate geometries (xOCD
-        /// compact 40B@28 vs R465 136B@1756) — both must address distinct,
+        /// compact 40B@28 — type @entry+0, value @entry+4 ⇒ buffer
+        /// 32+40*i — vs R465 136B@1756) — both must address distinct,
         /// in-range dwords, and the detector must separate them.
         #[test]
         fn tgp_10a4c_dual_geometry() {
             let mut c = NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::zeroed();
-            // compact entry 2 → buffer 28+80+32 = 140 → payload 132
-            c.payload[132..136].copy_from_slice(&42424u32.to_le_bytes());
+            // compact entry 2: type @28+80=108 (payload 100), value
+            // @32+80=112 (payload 104)
+            c.payload[100..104].copy_from_slice(&19u32.to_le_bytes());
+            c.payload[104..108].copy_from_slice(&42424u32.to_le_bytes());
             assert_eq!(c.channel_value_compact(2), Some(42424));
+            // the type dword is NOT the value: nothing read at 100
+            assert_ne!(c.channel_value_compact(2), Some(19));
             // r465 entry 1 → buffer 1756+136+72 = 1964 → payload 1956
             c.payload[1956..1960].copy_from_slice(&777u32.to_le_bytes());
             assert_eq!(c.power_mw(1), Some(777));
+            // 15-entry bound = the 0x7FFF mask contract (xOCD writes it)
+            assert_eq!(c.channel_value_compact(14), Some(0));
 
             // detector: compact inside the window, r465 outside ⇒ compact
             let mut d = NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::zeroed();
-            d.payload[52..56].copy_from_slice(&5_000u32.to_le_bytes()); // compact ch0
+            d.payload[24..28].copy_from_slice(&5_000u32.to_le_bytes()); // compact ch0 (buffer 32)
             d.payload[1820..1824].copy_from_slice(&999_999u32.to_le_bytes()); // r465 e0
-            assert_eq!(d.detect_compact_geometry(&[(1000, 5000, 9000)]), Some(true));
+            assert_eq!(
+                d.detect_compact_geometry(&[(0, 1000, 5000, 9000)]),
+                Some(true)
+            );
             // and the mirror image
             let mut e = NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::zeroed();
-            e.payload[52..56].copy_from_slice(&999_999u32.to_le_bytes());
+            e.payload[24..28].copy_from_slice(&999_999u32.to_le_bytes());
             e.payload[1820..1824].copy_from_slice(&5_000u32.to_le_bytes());
             assert_eq!(
-                e.detect_compact_geometry(&[(1000, 5000, 9000)]),
+                e.detect_compact_geometry(&[(0, 1000, 5000, 9000)]),
                 Some(false)
+            );
+            // a gapped info mask keys rows by INDEX: bit 2's window must be
+            // compared against compact entry 2 (value buffer 32+80=112 ⇒
+            // payload 104), not against positional entry 0.
+            let mut f = NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::zeroed();
+            f.payload[24..28].copy_from_slice(&999_999u32.to_le_bytes()); // entry 0
+            f.payload[104..108].copy_from_slice(&5_000u32.to_le_bytes()); // entry 2
+            assert_eq!(
+                f.detect_compact_geometry(&[(2, 1000, 5000, 9000)]),
+                Some(true)
             );
         }
     }

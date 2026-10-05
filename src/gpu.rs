@@ -2844,10 +2844,17 @@ impl PhysicalGpu {
     }
 
     /// Raw GET of the power-channel control block (0x8B3E7343, xOCD compact
-    /// stamp 0x10A4C = v1|2636). Values are returned per populated info
-    /// entry; `compact_geometry` says which offset map the driver filled
-    /// (true = xOCD 40B stride, false = R465 136B stride, None = ambiguous
-    /// — see `NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::detect_compact_geometry`).
+    /// stamp 0x0001_0A4C = v1|2636 — NOT 0x0010_0A4C, see
+    /// `NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::STAMP`). The driver fills
+    /// only the entries whose mask bits are set on the way in, and a seed
+    /// with bits the card does not populate draws a refusal (-1) — xOCD
+    /// seeds the info-returned mask before every control GET), so the GET
+    /// is seeded with the union of the policy indices. Values are returned
+    /// in `policies` order, each read from its own index's control entry;
+    /// `compact_geometry` says which offset map the
+    /// driver filled (true = xOCD 40B stride, false = R465 136B stride,
+    /// None = ambiguous — see
+    /// `NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::detect_compact_geometry`).
     pub fn power_channel_control(
         &self,
         policies: &[crate::power::PowerChannelPolicy],
@@ -2858,40 +2865,52 @@ impl PhysicalGpu {
 
         let mut buf: Vec<u8> =
             vec![0u8; std::mem::size_of::<NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>()];
-        buf[..4].copy_from_slice(&0x0010_0A4Cu32.to_ne_bytes());
+        buf[..4].copy_from_slice(&NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::STAMP.to_ne_bytes());
+        let seed = policies
+            .iter()
+            .fold(0u32, |m, p| m | (1u32 << (p.index & 31)));
+        buf[4..8].copy_from_slice(&seed.to_ne_bytes());
         unsafe {
             let status = NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
             crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)
                 .map_err(crate::Error::from)?;
         }
         let ctrl = unsafe { &*(buf.as_ptr() as *const NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1) };
-        let triplets: Vec<(u32, u32, u32)> = policies
+        // (entry index, min, default, max) — control entry i belongs to info
+        // entry i, and the populated set can have mask gaps, so rows are
+        // keyed by the policy index rather than positionally.
+        let rows: Vec<(usize, u32, u32, u32)> = policies
             .iter()
-            .map(|p| (p.min_raw, p.default_raw, p.max_raw))
+            .map(|p| (p.index as usize, p.min_raw, p.default_raw, p.max_raw))
             .collect();
-        let compact = ctrl.detect_compact_geometry(&triplets);
+        let compact = ctrl.detect_compact_geometry(&rows);
         let values = match compact {
-            Some(true) => (0..policies.len())
-                .map(|i| ctrl.channel_value_compact(i).unwrap_or(0xFFFF_FFFF))
+            Some(false) => policies
+                .iter()
+                .map(|p| ctrl.power_mw(p.index as usize).unwrap_or(0xFFFF_FFFF))
                 .collect(),
-            Some(false) => (0..policies.len())
-                .map(|i| ctrl.power_mw(i).unwrap_or(0xFFFF_FFFF))
-                .collect(),
-            // ambiguous — hand back the compact read so the caller can judge
-            None => (0..policies.len())
-                .map(|i| ctrl.channel_value_compact(i).unwrap_or(0xFFFF_FFFF))
+            // compact (Some(true)) and the ambiguous fallback both read the
+            // xOCD geometry
+            _ => policies
+                .iter()
+                .map(|p| {
+                    ctrl.channel_value_compact(p.index as usize)
+                        .unwrap_or(0xFFFF_FFFF)
+                })
                 .collect(),
         };
         Ok((values, compact))
     }
 
     /// Write one power-channel value (OCP current limit, raw mA) with the
-    /// full RMW recipe: info (channel lookup + [min,max] clamp) → GET
-    /// control (0x10A4C) → geometry-detect → patch → SET (0xAFFC2279) →
-    /// fresh GET readback → restore on mismatch. The xOCD hard clamp
-    /// 1000..=5001000 mA applies to policyId-19 channels. DANGEROUS
-    /// protection-limit write — raising an OCP ceiling disables a safety
-    /// net; the caller owns the risk.
+    /// full RMW recipe mirroring xOCD's non-50 `SetPowerChannelLimit`:
+    /// info (channel lookup + [min,max] clamp) → mask-seeded GET control
+    /// (stamp 0x0001_0A4C) → geometry-detect → patch value, write mask =
+    /// exactly `1<<index` → SET (0xAFFC2279) → mask-seeded GET readback →
+    /// SET-restore on mismatch. The xOCD hard clamp 1000..=5001000 mA
+    /// applies to policyId-19 channels. DANGEROUS protection-limit write —
+    /// raising an OCP ceiling disables a safety net; the caller owns the
+    /// risk.
     pub fn set_power_channel_value(
         &self,
         policy_id: u32,
@@ -2930,10 +2949,14 @@ impl PhysicalGpu {
         }
         let index = policy.index as usize;
 
-        // GET control snapshot
+        // GET control snapshot — mask-seeded with the union of the policy
+        // indices, mirroring xOCD (the driver fills only masked entries;
+        // an unseeded GET comes back an all-zero payload).
+        let seed = all.iter().fold(0u32, |m, p| m | (1u32 << (p.index & 31)));
         let mut buf: Vec<u8> =
             vec![0u8; std::mem::size_of::<NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>()];
-        buf[..4].copy_from_slice(&0x0010_0A4Cu32.to_ne_bytes());
+        buf[..4].copy_from_slice(&NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::STAMP.to_ne_bytes());
+        buf[4..8].copy_from_slice(&seed.to_ne_bytes());
         unsafe {
             let status = NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
             crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)
@@ -2941,19 +2964,23 @@ impl PhysicalGpu {
         }
         let snapshot: &NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 =
             unsafe { &*(buf.as_ptr() as *const _) };
-        let triplets: Vec<(u32, u32, u32)> = all
+        // index-keyed (entry index, min, default, max) rows — see
+        // `power_channel_control` for why position is not the key.
+        let rows: Vec<(usize, u32, u32, u32)> = all
             .iter()
-            .map(|p| (p.min_raw, p.default_raw, p.max_raw))
+            .map(|p| (p.index as usize, p.min_raw, p.default_raw, p.max_raw))
             .collect();
         let compact = snapshot
-            .detect_compact_geometry(&triplets)
+            .detect_compact_geometry(&rows)
             .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
 
-        // patch a copy at the detected geometry
+        // patch a copy at the detected geometry; the write mask goes to
+        // exactly the target entry's bit (xOCD `WriteMask` non-50 contract,
+        // 1<<index), replacing the GET seed.
         let mut modified_buf = buf.clone();
-        let modified: &mut NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 =
-            unsafe { &mut *(modified_buf.as_mut_ptr() as *mut _) };
         if compact {
+            let modified: &mut NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 =
+                unsafe { &mut *(modified_buf.as_mut_ptr() as *mut _) };
             modified.set_channel_value_compact(index, clamped);
         } else {
             let off = <NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>::ENTRY_BASE
@@ -2964,8 +2991,10 @@ impl PhysicalGpu {
                 .get_mut(off..off + 4)
                 .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
             slot.copy_from_slice(&clamped.to_le_bytes());
-            modified.mask |= 1u32 << index;
         }
+        let modified: &mut NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 =
+            unsafe { &mut *(modified_buf.as_mut_ptr() as *mut _) };
+        modified.mask = 1u32 << index;
         unsafe {
             let status =
                 NvAPI_GPU_ClientTgpWattSetStatus(self.0, modified_buf.as_ptr() as *const _);
@@ -2973,8 +3002,10 @@ impl PhysicalGpu {
                 .map_err(crate::Error::from)?;
         }
 
-        // readback
+        // readback — same single-entry seed contract as the write (xOCD
+        // re-reads with its channelMask)
         let mut verify_buf = buf.clone();
+        verify_buf[4..8].copy_from_slice(&(1u32 << index).to_ne_bytes());
         unsafe {
             let status =
                 NvAPI_GPU_ClientTgpWattGetStatus(self.0, verify_buf.as_mut_ptr() as *mut _);
@@ -2991,9 +3022,14 @@ impl PhysicalGpu {
         match retained {
             Some(v) if v == clamped => Ok(v),
             _ => {
-                // driver did not retain — restore the original snapshot (best effort).
+                // driver did not retain — restore the original snapshot
+                // (best effort) under the same single-entry mask xOCD's
+                // rollback uses.
+                let mut restore_buf = buf.clone();
+                restore_buf[4..8].copy_from_slice(&(1u32 << index).to_ne_bytes());
                 unsafe {
-                    let _ = NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
+                    let _ =
+                        NvAPI_GPU_ClientTgpWattSetStatus(self.0, restore_buf.as_ptr() as *const _);
                 }
                 Err(crate::Error::ArgumentRange(Default::default()))
             }
