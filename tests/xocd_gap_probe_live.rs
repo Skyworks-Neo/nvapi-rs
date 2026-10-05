@@ -767,6 +767,10 @@ fn e1c_vf_points_offset_sweep() {
 ///   B4  entry+0 field validation space — e1c proved 15000 here → -1;
 ///       probe {1, 2, 8, 9, 255} at a mid-table entry to map what the
 ///       driver accepts (flag vs enum vs range check).
+///   B5  clock_type gate — entry+0 is VfPointType (1 = Fixed, the tail
+///       127..130 entries); pick the first in-bitmap Fixed entry and
+///       raw-patch its delta — does a Fixed point consume a delta at all,
+///       or is the writable delta surface Prog-only?
 ///
 /// Run (read-only):
 ///   cargo test -p nvapi --test xocd_gap_probe_live e7 -- --ignored --nocapture --test-threads=1
@@ -1050,6 +1054,46 @@ fn e7_raw_delta_forensics() {
             assert!(back == base, "B4 restore mismatch");
         } else {
             say!("B4 all SETs rejected — table unchanged; skipping restore");
+        }
+
+        // B5 — does a FIXED-type point consume a delta? entry+0 is the
+        // clock_type (VfPointType: Prog=0/Fixed=1/Dyn=2, sys clock.rs); the
+        // driver declares the tail 127..130 Fixed. B3b proved out-of-
+        // inventory deltas are dropped, B2 proved Prog in-bitmap deltas
+        // stick — but every delta written so far landed on a Prog point.
+        // Pick the first in-bitmap entry with clock_type != 0 and delta 0
+        // (a driver-declared Fixed point), raw-patch its delta, SET, read
+        // retention.
+        let in_bit = |i: usize| base[4 + i / 8] & (1u8 << (i % 8)) != 0;
+        let fixed_pick = (0..255usize).find(|&i| {
+            in_bit(i) && rd(&base, 68 + 36 * i) != 0 && rd(&base, delta_base + 36 * i) == 0
+        });
+        match fixed_pick {
+            Some(i) => {
+                let e0 = 68 + 36 * i;
+                let d5 = delta_base + 36 * i;
+                say!(
+                    "B5 fixed candidate: p{i} in-bitmap, clock_type={}, delta 0 → slot abs {d5}",
+                    rd(&base, e0)
+                );
+                let mut m5 = base.clone();
+                m5[d5..d5 + 4].copy_from_slice(&33_333u32.to_le_bytes());
+                let st = set_raw(&gpu, &m5);
+                say!("B5 raw patch {d5}=33333 → SET {st:?}");
+                if st == 0 {
+                    let (_, after) = get_raw(&gpu);
+                    say!("B5 retention at {d5}: {}", rd(&after, d5));
+                    let d = diff4(&base, &after);
+                    say!("B5 raw GET diff ({} dwords): {}", d.len(), fmt_diff(&d));
+                    assert_eq!(set_raw(&gpu, &base), 0, "B5 restore SET failed");
+                    let (_, back) = get_raw(&gpu);
+                    assert!(back == base, "B5 restore mismatch");
+                    say!("B5 restore verify: OK (byte-identical)");
+                } else {
+                    say!("B5 SET rejected ({st}) — fixed-point delta refused outright");
+                }
+            }
+            None => say!("B5 no in-bitmap fixed entry with zero delta found — skipped"),
         }
 
         // B3a — the same out-of-inventory point through the API path; this
