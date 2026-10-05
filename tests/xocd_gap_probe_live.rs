@@ -1,14 +1,11 @@
-// Read-only probes for the xOCD gap-audit E-matrix
+// Probes for the xOCD gap-audit E-matrix
 // (docs/reverse-engineering/nvapi/xocd-oc-tool-audit.md §12).
-// ZERO writes — every test below is GET-only. Run on the adjudication
-// machine (4060L preferred; E1 also meaningful on P100):
+// GET-only except e7 phase B (self-restoring, double-gated write arms).
+// Run on the adjudication machine (4060L preferred):
 //
 //   cargo test -p nvapi --test xocd_gap_probe_live -- --nocapture --ignored
 //   (single experiment: ... -- --nocapture --ignored e3_power_channels)
 //
-// E1 vf_points_geometry — public 9248B boost table under BOTH candidate
-//                         geometries (nvapioc base-40/delta+20 vs xOCD
-//                         base-100/delta+24) → adjudicates audit ①/⑥
 // E2 (volt rails)       — SEE tests/volt_rails_raw_dump.rs (already dumps
 //                         the rail status; audit ② is adjudicated by
 //                         re-parsing that dump in both slot orders)
@@ -19,19 +16,19 @@
 // E5 top_rels           — info gate + ratio resolution → audit ③
 // E6 boost_locks        — PerfClientLimits 7-domain table → gap #6
 // E7 raw_delta_forensics — offset_of-proven delta geometry (88+36i), full
-//                         nonzero census, all-36-frame scan, optional
-//                         self-restoring write arms → closure for audit ①/⑥
+//                         nonzero census, all-36-frame scan, write arms
+//                         B1..B5 → closure for audit ①/⑥
+//
+// The original e1/e1b/e1c geometry probes were DELETED (2026-10-05): they
+// printed candidate columns assuming a 40-byte header (nvapioc 60+36i /
+// xOCD 124+36i); the real nvstruct is 4 (version) + 32 (ClockMask<8>) + 32
+// (unknown) → points@68, entry stride 36, freqDeltaKHz@entry+20 ⇒
+// delta(i) = 88+36i — i.e. their "retained" offsets [88,124,160,196] were
+// already the true slots and both "families" were the same offsets. e7
+// proves the layout at runtime with offset_of! and covers everything they
+// did, plus the live write/read closure.
 //
 // Results also land as JSON under ../reverse/xocd/ for machine diffing.
-//
-// GEOMETRY ERRATUM (2026-10-05): e1/e1b printed an "nvapioc" column at
-// 60+36i assuming a 40-byte header; the real nvstruct is 4 (version) + 32
-// (ClockMask<8>) + 32 (unknown) → points@68, entry stride 36,
-// freqDeltaKHz@entry+20 ⇒ delta(i) = 88+36i. That is exactly the family
-// e1c saw retained ([88,124,160,196]) and identical to xOCD's
-// 124+36*(i-1) for i>=1 — the two "competing" geometries were the same
-// offsets. e7 proves the layout at runtime with offset_of! and re-parses
-// every candidate family in one pass.
 
 #![allow(unused_must_use)]
 
@@ -90,68 +87,6 @@ fn first_gpu() -> PhysicalGpu {
     let gpu = gpus.remove(0);
     eprintln!("gpu: {:?}", gpu.full_name());
     gpu
-}
-
-/// E1 — public V/F boost-table geometry adjudication (audit ①/⑥). Prints
-/// the first N entries under BOTH candidate geometries; the operator marks
-/// which column matches the live curve (cross-check `get-public-vftable`).
-#[test]
-#[ignore]
-fn e1_vf_points_geometry() {
-    let gpu = first_gpu();
-    let info = gpu.vfp_info().expect("vfp_info");
-    let mut raw = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
-        mask: info.mask.mask,
-        ..Default::default()
-    };
-    let st = unsafe {
-        NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut raw).cast())
-    };
-    eprintln!(
-        "vf points control: status={st:?} magic={:#x}",
-        raw.version.data
-    );
-    assert_eq!(st, 0, "GetControl rejected");
-    let bytes = unsafe {
-        core::slice::from_raw_parts(
-            ptr::from_ref(&raw).cast::<u8>(),
-            std::mem::size_of_val(&raw),
-        )
-    };
-    let d =
-        |abs: usize| -> i32 { u32::from_le_bytes(bytes[abs..abs + 4].try_into().unwrap()) as i32 };
-    eprintln!("payload head[128]: {}", hex_head(bytes, 128));
-    eprintln!();
-    eprintln!(
-        "{:>3} {:>16} {:>16} {:>12} {:>12}",
-        "pt", "nvapioc:a60+36i", "xocd:a124+36i", "nvapioc/2", "xocd/2"
-    );
-    for i in 0..16usize {
-        // nvapioc: points base 40, delta at entry+20 → abs 40+36i+20
-        let nv = d(40 + 36 * i + 20);
-        // xOCD: entries base 100 stride 36 delta@+24, point i≥1 → abs
-        // 100+36*(i-1)+24; point 0 anchor printed at its own slot.
-        let xo = if i == 0 {
-            d(124)
-        } else {
-            d(100 + 36 * (i - 1) + 24)
-        };
-        eprintln!("{i:>3} {nv:>16} {xo:>16} {:>12} {:>12}", nv / 2, xo / 2);
-    }
-    let json = format!(
-        "{{\"e\":\"e1\",\"magic\":{},\"nvapioc_deltas\":[{}],\"xocd_deltas\":[{}],\"head128\":\"{}\"}}",
-        raw.version.data,
-        (0..32)
-            .map(|i| d(40 + 36 * i + 20).to_string())
-            .collect::<Vec<_>>()
-            .join(","),
-        (0..32)
-            .map(|i| d(100 + 36 * i + 24).to_string())
-            .collect::<Vec<_>>()
-            .join(","),
-        hex_head(bytes, 128)
-    );
-    write_json("e1-vf-points-geometry.json", &json);
 }
 
 /// E3 — PowerChannels info v4 + control geometry detection (audit ⑤ and
@@ -477,267 +412,6 @@ fn e6_boost_locks() {
     }
 }
 
-/// E1b — DECISIVE V/F boost-table geometry adjudication (audit ①/⑥).
-/// MUTATING, opt-in TWICE: `#[ignore]` AND the `NVOC_ALLOW_VF_WRITE_PROBE=1`
-/// environment variable. Without the variable this test prints and exits.
-///
-/// Protocol (house RMW recipe, single dword):
-///   1. GET the 9248B table (snapshot)
-///   2. pick the victim point (last table-count point, else point 4)
-///   3. patch +15000 kHz at the NVAPIOC offset (60+36*i) only
-///   4. SET → fresh GET → print BOTH geometry columns
-///   5. restore the original snapshot → SET → full byte-compare verify
-///
-/// Verdict: the column showing 15000 after the SET is the driver's real
-/// delta field. Run:
-///   NVOC_ALLOW_VF_WRITE_PROBE=1 cargo test -p nvapi --test xocd_gap_probe_live -- --nocapture --ignored e1b
-#[test]
-#[ignore]
-fn e1b_vf_points_write_read() {
-    if std::env::var("NVOC_ALLOW_VF_WRITE_PROBE").as_deref() != Ok("1") {
-        eprintln!("e1b skipped: mutating probe — set NVOC_ALLOW_VF_WRITE_PROBE=1 to run");
-        return;
-    }
-    let gpu = first_gpu();
-    let info = gpu.vfp_info().expect("vfp_info");
-
-    let mut orig = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
-        mask: info.mask.mask,
-        ..Default::default()
-    };
-    let st = unsafe {
-        NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut orig).cast())
-    };
-    assert_eq!(st, 0, "snapshot GET rejected");
-    let as_bytes = |r: &NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL| unsafe {
-        core::slice::from_raw_parts(ptr::from_ref(r).cast::<u8>(), std::mem::size_of_val(r))
-    };
-    let orig_bytes = as_bytes(&orig).to_vec();
-    let rd = |b: &[u8], abs: usize| -> i32 {
-        u32::from_le_bytes(b[abs..abs + 4].try_into().unwrap()) as i32
-    };
-
-    // victim point: last table-count point (count dword @+20), else point 4
-    let count = rd(&orig_bytes, 20) as usize;
-    let victim = if count > 1 { count - 1 } else { 4 };
-    let nv_off = 60 + 36 * victim; // nvapioc delta slot for point i
-    let xo_off = 124 + 36 * (victim - 1); // xOCD delta slot for point i (i>=1)
-    eprintln!(
-        "victim point {victim} (count={count}): nvapioc abs {nv_off} = {}, xocd abs {xo_off} = {}",
-        rd(&orig_bytes, nv_off),
-        rd(&orig_bytes, xo_off)
-    );
-
-    // patch a copy at the NVAPIOC offset only
-    let mut modified = orig_bytes.clone();
-    modified[nv_off..nv_off + 4].copy_from_slice(&15_000u32.to_le_bytes());
-    let mut m = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-    unsafe {
-        ptr::copy_nonoverlapping(
-            modified.as_ptr(),
-            ptr::from_mut(&mut m).cast::<u8>(),
-            modified.len(),
-        )
-    };
-    let st = unsafe {
-        nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsSetControl(
-            *gpu.handle(),
-            ptr::from_ref(&m).cast(),
-        )
-    };
-    eprintln!("SET (nvapioc-offset patch): status={st:?}");
-    if st != 0 {
-        eprintln!("SET rejected — nothing to restore (driver refused the write)");
-        return;
-    }
-
-    // readback
-    let mut verify = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
-        mask: info.mask.mask,
-        ..Default::default()
-    };
-    let st = unsafe {
-        NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut verify).cast())
-    };
-    assert_eq!(st, 0, "readback GET rejected");
-    let vb = as_bytes(&verify);
-    eprintln!(
-        "after SET: nvapioc abs {nv_off} = {}, xocd abs {xo_off} = {}",
-        rd(vb, nv_off),
-        rd(vb, xo_off)
-    );
-    for i in 0..8usize {
-        eprintln!(
-            "  pt{i:>2}: nvapioc {} / xocd {}",
-            rd(vb, 60 + 36 * i),
-            rd(vb, 124 + 36 * i)
-        );
-    }
-    let verdict = if rd(vb, nv_off) == 15_000 {
-        "NVAPIOC geometry (delta @ entry+20, base 40) holds"
-    } else if rd(vb, xo_off) == 15_000 {
-        "xOCD geometry (delta @ entry+24, base 100) holds"
-    } else {
-        "NEITHER column retained 15000 — geometry still unresolved (check dump above)"
-    };
-    eprintln!("VERDICT: {verdict}");
-    let json = format!(
-        "{{\"e\":\"e1b\",\"victim\":{victim},\"nv_off\":{nv_off},\"xo_off\":{xo_off},\"verdict\":\"{}\",\"after_nv\":{},\"after_xo\":{}}}",
-        verdict,
-        rd(vb, nv_off),
-        rd(vb, xo_off)
-    );
-    write_json("e1b-vf-write-read.json", &json);
-
-    // restore + verify (full byte compare)
-    let mut r = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-    unsafe {
-        ptr::copy_nonoverlapping(
-            orig_bytes.as_ptr(),
-            ptr::from_mut(&mut r).cast::<u8>(),
-            orig_bytes.len(),
-        )
-    };
-    let st = unsafe {
-        nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsSetControl(
-            *gpu.handle(),
-            ptr::from_ref(&r).cast(),
-        )
-    };
-    eprintln!("restore SET: status={st:?}");
-    let mut back = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
-        mask: info.mask.mask,
-        ..Default::default()
-    };
-    let st = unsafe {
-        NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut back).cast())
-    };
-    assert_eq!(st, 0, "restore-verify GET rejected");
-    let same = as_bytes(&back) == orig_bytes.as_slice();
-    eprintln!(
-        "restore verify: {}",
-        if same {
-            "OK (byte-identical)"
-        } else {
-            "MISMATCH — inspect diff before continuing!"
-        }
-    );
-    assert!(
-        same,
-        "restore did not return the table to its original bytes"
-    );
-}
-
-/// E1c — V/F delta-field DISCOVERY sweep (audit ①/⑥). MUTATING, opt-in
-/// TWICE: `#[ignore]` AND `NVOC_ALLOW_VF_WRITE_PROBE=1`.
-///
-/// E1b falsified BOTH candidate geometries on current drivers (the SET was
-/// accepted but +15000 was not retained at nvapioc 60+36i nor xOCD
-/// 124+36(i-1); restore verified byte-identical). This probe stops
-/// guessing: sweep every 4-aligned offset in the entry region
-/// [40..=204] whose ORIGINAL dword is 0 — patch 15000 there, SET, fresh
-/// GET, record (a) whether the offset itself retained the value, (b) ANY
-/// dword that changed anywhere in the table (the driver may marshal the
-/// write into a different slot — the diff exposes the real field).
-/// Restore after every step; abort the sweep on the first restore
-/// mismatch.
-#[test]
-#[ignore]
-fn e1c_vf_points_offset_sweep() {
-    if std::env::var("NVOC_ALLOW_VF_WRITE_PROBE").as_deref() != Ok("1") {
-        eprintln!("e1c skipped: mutating probe — set NVOC_ALLOW_VF_WRITE_PROBE=1 to run");
-        return;
-    }
-    let gpu = first_gpu();
-    let info = gpu.vfp_info().expect("vfp_info");
-
-    let mask = info.mask.mask;
-    let get = |gpu: &PhysicalGpu| -> Vec<u8> {
-        let mut t = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
-            mask,
-            ..Default::default()
-        };
-        let st = unsafe {
-            NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut t).cast())
-        };
-        assert_eq!(st, 0, "GET rejected");
-        unsafe {
-            core::slice::from_raw_parts(ptr::from_ref(&t).cast::<u8>(), std::mem::size_of_val(&t))
-                .to_vec()
-        }
-    };
-    let set = |gpu: &PhysicalGpu, b: &[u8]| -> i32 {
-        let mut t = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-        unsafe {
-            ptr::copy_nonoverlapping(b.as_ptr(), ptr::from_mut(&mut t).cast::<u8>(), b.len());
-        }
-        unsafe {
-            nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsSetControl(
-                *gpu.handle(),
-                ptr::from_ref(&t).cast(),
-            )
-        }
-    };
-
-    let orig = get(&gpu);
-    eprintln!(
-        "snapshot taken ({} bytes), sweeping offsets 40..=204",
-        orig.len()
-    );
-
-    let mut retained = Vec::new();
-    let mut remapped: Vec<(usize, usize)> = Vec::new(); // (patched_off, seen_off)
-    for off in (40..=204).step_by(4) {
-        if orig[off..off + 4] != [0; 4] {
-            eprintln!("off {off:>3}: skip (original nonzero)");
-            continue;
-        }
-        let mut modified = orig.clone();
-        modified[off..off + 4].copy_from_slice(&15_000u32.to_le_bytes());
-        let st = set(&gpu, &modified);
-        if st != 0 {
-            eprintln!("off {off:>3}: SET rejected ({st})");
-            continue;
-        }
-        let after = get(&gpu);
-        // restore FIRST (before any reporting) so every step ends clean
-        let st = set(&gpu, &orig);
-        assert_eq!(st, 0, "restore SET failed at off {off}");
-        let back = get(&gpu);
-        assert_eq!(
-            back, orig,
-            "restore mismatch after off {off} — aborting sweep"
-        );
-
-        if after[off..off + 4] == 15_000u32.to_le_bytes() {
-            retained.push(off);
-            eprintln!("off {off:>3}: RETAINED 15000 at the patched offset");
-        }
-        for (i, w) in after.chunks_exact(4).enumerate() {
-            if w != &orig[i * 4..i * 4 + 4] {
-                let seen = u32::from_le_bytes(w.try_into().unwrap());
-                eprintln!(
-                    "off {off:>3}: table CHANGED at abs {} → {seen} ({})",
-                    i * 4,
-                    seen as i32
-                );
-                if seen == 15_000 {
-                    remapped.push((off, i * 4));
-                }
-            }
-        }
-    }
-
-    eprintln!();
-    eprintln!("VERDICT: retained at {retained:?}, remapped {remapped:?}");
-    eprintln!(
-        "  (empty = the driver marshals NO delta dword in [40,204] for this mask/shape — \
-         the field lives outside the swept window or needs per-point mask bits)"
-    );
-    let json = format!("{{\"e\":\"e1c\",\"retained\":{retained:?},\"remapped\":{remapped:?}}}");
-    write_json("e1c-vf-offset-sweep.json", &json);
-}
-
 /// E7 — raw delta forensics on the PROVEN struct geometry. Read-only
 /// phase always available; the write arms need `#[ignore]` + the env gate.
 ///
@@ -769,8 +443,8 @@ fn e1c_vf_points_offset_sweep() {
 ///       driver accepts (flag vs enum vs range check).
 ///   B5  clock_type gate — entry+0 is VfPointType (1 = Fixed, the tail
 ///       127..130 entries); pick the first in-bitmap Fixed entry and
-///       raw-patch its delta — does a Fixed point consume a delta at all,
-///       or is the writable delta surface Prog-only?
+///       raw-patch its delta. Verdict (4060L): dropped → the consumable
+///       delta surface is Prog-typed points only.
 ///
 /// Run (read-only):
 ///   cargo test -p nvapi --test xocd_gap_probe_live e7 -- --ignored --nocapture --test-threads=1
