@@ -1087,11 +1087,20 @@ pub mod undocumented {
     pub const NV_GPU_CLIENT_TGP_WATT_ENTRIES_MAX: usize = 32;
 
     nvstruct! {
-        /// TGP-watts control read-modify-write buffer (RE'd from the ref tool; NDA).
-        /// dword0 = version (0x12720), dword1 = mask = (1 << policy_index);
-        /// per-entry power-mW at dword (553 + 10*index). The bulk of the buffer
+        /// TGP-watts control **V2 (wide) view** — the 0x12720 (v1|10016, R538+)
+        /// read-modify-write buffer (RE'd from the ref tool; NDA). dword0 =
+        /// version (0x12720), dword1 = mask = (1 << policy_index); per-entry
+        /// power-mW at entry base 0x8A0 + 40*index + 4. The bulk of the buffer
         /// is opaque — GET fills it, the caller patches one entry, SET applies.
-        pub struct NV_GPU_CLIENT_TGP_WATT_STATUS_V1 {
+        ///
+        /// The "V2" label denotes this **newer wide layout** (538+), NOT the
+        /// struct-version nibble (which is 1). It is the SECOND view of the
+        /// control table whose FIRST view is the compact
+        /// [`NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1`] (R465+, `ENTRY_BASE 28`).
+        /// The two share stride 40 and value offset entry+4 and differ only in
+        /// the table base (see [`Self::ENTRY_BASE`]); the compact view is the
+        /// shared write core because it is the more widely accepted stamp.
+        pub struct NV_GPU_CLIENT_TGP_WATT_STATUS_V2 {
             pub version: NvVersion,
             pub mask: u32,
             /// Opaque header/descriptor + entry table (raw; GET-filled).
@@ -1099,7 +1108,7 @@ pub mod undocumented {
         }
     }
 
-    impl NV_GPU_CLIENT_TGP_WATT_STATUS_V1 {
+    impl NV_GPU_CLIENT_TGP_WATT_STATUS_V2 {
         /// Byte offset WITHIN `payload` of entry 0's base — i.e. of the
         /// buffer byte 0x8A0. The ref-tool CLI writes `v14[553 + 10*idx]`,
         /// and payload starts at buffer byte 8, so entry 0's value field
@@ -1152,7 +1161,7 @@ pub mod undocumented {
         }
     }
 
-    nvversion! { @=NV_GPU_CLIENT_TGP_WATT_STATUS NV_GPU_CLIENT_TGP_WATT_STATUS_V1(1) = 10016 }
+    nvversion! { @=NV_GPU_CLIENT_TGP_WATT_STATUS NV_GPU_CLIENT_TGP_WATT_STATUS_V2(1) = 10016 }
 
     // Pre-R538 TGP-watts GET variants (ID 0x8B3E7343). RE'd from
     // nvapi64_46296.dll (R465, handler 0x180266850): the version switch
@@ -1236,10 +1245,13 @@ pub mod undocumented {
         /// Value-field offset within an entry (entry+4 ⇒ buffer 32+40*i).
         pub const COMPACT_VALUE_OFF: usize = 4;
         pub const COMPACT_ENTRY_BASE: usize = 28;
-        /// The compact table is bounded by its mask contract (0x7FFF,
-        /// xOCD `WriteMask`/`VerifyValues` iterate bits 0..=14) — 15
-        /// entries, not the 6 the R465 136B-stride region can hold.
-        pub const COMPACT_ENTRIES: usize = 15;
+        /// The compact table holds up to 32 entries (the mask is a `u32`).
+        /// xOCD's `WriteMask`/`VerifyValues` only iterate bits 0..=14
+        /// (0x7FFF), but live masks can set higher bits — the P100 info mask
+        /// `0xc49f` sets bit 15 — so do NOT cap at 15. Bounded here by the
+        /// entry table's own extent (entry 31 value lands at buffer byte
+        /// 1272, well inside the 2636-byte struct).
+        pub const COMPACT_ENTRIES: usize = 32;
 
         /// Power-mW of entry `index` (None = sentinel 0xFFFFFFFF / OOB).
         pub fn power_mw(&self, index: usize) -> Option<u32> {
@@ -1331,7 +1343,9 @@ pub mod undocumented {
         /// stamp (4<<16)+2672. Opaque except the decoded accessors below.
         pub struct NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4 {
             pub version: NvVersion,
-            /// channel-populated mask (xOCD requests 0x7FFF)
+            /// channel-populated mask. xOCD seeds GETs with 0x7FFF (bits
+            /// 0..=14), but live masks set higher bits — the P100 returns
+            /// 0xc49f (bit 15) — so callers must scan all 32 bits.
             pub mask: u32,
             /// Opaque body; per-channel entries decoded by accessors.
             pub payload: Array<[u8; 2672 - 8]>,
@@ -1429,7 +1443,7 @@ pub mod undocumented {
                 } else {
                     legacy.unwrap()
                 };
-                for bit in 0..15u32 {
+                for bit in 0..32u32 {
                     if mask_bits & (1 << bit) == 0 {
                         continue;
                     }
@@ -2657,7 +2671,7 @@ pub mod undocumented {
         #[test]
         fn tgp_full_and_compact_views_align() {
             use NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 as Compact;
-            use NV_GPU_CLIENT_TGP_WATT_STATUS_V1 as Full;
+            use NV_GPU_CLIENT_TGP_WATT_STATUS_V2 as Full;
 
             // Shared per-entry geometry.
             assert_eq!(Full::ENTRY_STRIDE, Compact::COMPACT_STRIDE);

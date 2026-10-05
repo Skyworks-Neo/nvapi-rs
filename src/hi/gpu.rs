@@ -639,12 +639,12 @@ impl Gpu {
         self.gpu.tgp_watt_range().map_err(Into::into)
     }
 
-    /// Set GPU TGP in watts (the watts-form TGP slider; read-modify-write over
-    /// NDA 0x8B3E7343 GET + 0xBFF09E59 SET). Returns the mW actually written.
+    /// Set GPU TGP in watts (the watts-form TGP slider). Writes the control
+    /// table through the shared compact core (stamp 0x0001_0A4C, NDA
+    /// 0x8B3E7343 GET + 0xAFFC2279 SET): mask-scoped RMW + readback + rollback,
+    /// clamped to the driver window. Returns the mW the driver retained.
     pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> crate::Result<u32> {
-        self.gpu
-            .set_tgp_watt(watts, policy_index)
-            .map_err(Into::into)
+        self.gpu.set_tgp_watt(watts, policy_index)
     }
 
     /// Currently-requested TGP watts (the GET half of the set_tgp_watt RMW,
@@ -656,7 +656,7 @@ impl Gpu {
 
     /// Reset GPU TGP to rated/default (NDA triplet). Returns the default mW, if known.
     pub fn reset_tgp_watt(&self, policy_index: usize) -> crate::Result<Option<u32>> {
-        self.gpu.reset_tgp_watt(policy_index).map_err(Into::into)
+        self.gpu.reset_tgp_watt(policy_index)
     }
 
     /// D-Notifier current state + the D1..D5 power-cap table (NDA 0x67F31384,

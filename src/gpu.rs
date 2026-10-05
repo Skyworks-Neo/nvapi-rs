@@ -2790,7 +2790,10 @@ impl PhysicalGpu {
         }
         let info = unsafe { &*(buf.as_ptr() as *const NV_GPU_CLIENT_POWER_CHANNELS_INFO) };
         let mut out = Vec::new();
-        for bit in 0..15u32 {
+        // The mask is a u32 and the table holds 32 entries — scan all 32 bits.
+        // The old `0..15` bound silently dropped bit 15+ (the P100 info mask
+        // 0xc49f has bit 15 set, so its entry was invisible).
+        for bit in 0..32u32 {
             if info.mask & (1 << bit) == 0 {
                 continue;
             }
@@ -2919,8 +2922,7 @@ impl PhysicalGpu {
         value_raw: u32,
     ) -> crate::Result<u32> {
         trace!("gpu.set_power_channel_value(({policy_id},{subtype}), {value_raw} raw)");
-        use crate::sys::api::{NvAPI_GPU_ClientTgpWattGetStatus, NvAPI_GPU_ClientTgpWattSetStatus};
-        use power::undocumented::{NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1, power_channels_info_v4};
+        use power::undocumented::power_channels_info_v4;
 
         if matches!(
             (policy_id, subtype),
@@ -2935,20 +2937,54 @@ impl PhysicalGpu {
             return Err(crate::Error::ArgumentRange(Default::default()));
         }
 
-        // info: primed state + channel lookup + clamp window
+        // resolve the row, then hand off to the shared compact write core.
         let all = self.power_channel_policies()?;
-        let policy = all
+        let index = all
             .iter()
             .find(|p| (p.policy_id, p.subtype) == (policy_id, subtype))
+            .map(|p| p.index as usize)
             .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
-        let clamped = value_raw.max(policy.min_raw).min(policy.max_raw);
+        self.set_channel_raw_core(&all, index, value_raw)
+    }
+
+    /// Shared compact-table write core for the 0x8B3E7343/0xAFFC2279 power
+    /// channel table — the xOCD non-50 `SetPowerChannelLimit` recipe:
+    /// mask-seeded compact GET (stamp `0x0001_0A4C`) → geometry-detect →
+    /// patch `value_raw` at entry `index`, write mask = exactly `1<<index` →
+    /// SET → mask-seeded GET readback → SET-restore on mismatch. This is the
+    /// single write path for BOTH the OCP/board rows
+    /// ([`Self::set_power_channel_value`]) and the TGP slider
+    /// ([`Self::set_tgp_watt`]) — the compact view is the more widely
+    /// accepted stamp (R465+), where the wide 0x12720 view is 538+ only.
+    ///
+    /// `value_raw` is clamped to the row's driver `[min,max]` window unless it
+    /// is the `u32::MAX` "no limit" sentinel. `all` must be the current
+    /// [`Self::power_channel_policies`] snapshot.
+    fn set_channel_raw_core(
+        &self,
+        all: &[crate::power::PowerChannelPolicy],
+        index: usize,
+        value_raw: u32,
+    ) -> crate::Result<u32> {
+        use crate::sys::api::{NvAPI_GPU_ClientTgpWattGetStatus, NvAPI_GPU_ClientTgpWattSetStatus};
+        use power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1;
+        let arg = || crate::Error::ArgumentRange(Default::default());
+
+        let policy = all
+            .iter()
+            .find(|p| p.index as usize == index)
+            .ok_or_else(arg)?;
+        let clamped = if value_raw == u32::MAX {
+            value_raw
+        } else {
+            value_raw.max(policy.min_raw).min(policy.max_raw)
+        };
         if clamped != value_raw {
             warn!(
-                "set_power_channel_value: {value_raw} clamped to {clamped} (driver [{},{}])",
+                "set_channel_raw_core: {value_raw} clamped to {clamped} (driver [{},{}])",
                 policy.min_raw, policy.max_raw
             );
         }
-        let index = policy.index as usize;
 
         // GET control snapshot — mask-seeded with the union of the policy
         // indices, mirroring xOCD (the driver fills only masked entries;
@@ -2971,9 +3007,7 @@ impl PhysicalGpu {
             .iter()
             .map(|p| (p.index as usize, p.min_raw, p.default_raw, p.max_raw))
             .collect();
-        let compact = snapshot
-            .detect_compact_geometry(&rows)
-            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        let compact = snapshot.detect_compact_geometry(&rows).ok_or_else(arg)?;
 
         // patch a copy at the detected geometry; the write mask goes to
         // exactly the target entry's bit (xOCD `WriteMask` non-50 contract,
@@ -2988,9 +3022,7 @@ impl PhysicalGpu {
                 + <NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>::ENTRY_STRIDE * index
                 + <NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>::ENTRY_MW_OFF
                 - 8;
-            let slot = modified_buf
-                .get_mut(off..off + 4)
-                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            let slot = modified_buf.get_mut(off..off + 4).ok_or_else(arg)?;
             slot.copy_from_slice(&clamped.to_le_bytes());
         }
         let modified: &mut NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 =
@@ -3022,6 +3054,9 @@ impl PhysicalGpu {
         };
         match retained {
             Some(v) if v == clamped => Ok(v),
+            // the "no limit" sentinel reads back filtered (readers drop
+            // 0xFFFFFFFF) — accept the driver's silence as retention.
+            None if clamped == u32::MAX => Ok(clamped),
             _ => {
                 // driver did not retain — restore the original snapshot
                 // (best effort) under the same single-entry mask xOCD's
@@ -6537,88 +6572,55 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_ForceGC6Exit(self.0)) }
     }
 
-    /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
-    /// read-modify-write the the ref tool `setTgpWatt` does: GET the 10016-byte
-    /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
-    /// field to `watts × 1000` mW, SET it back (NDA 0xBFF09E59). `policy_index`
-    /// selects the entry (the mask bit); use the index from [`tgp_watt_range`].
-    /// Returns the resolved milliwatts actually written.
-    /// Set the GPU TGP in **watts** (the watts-form TGP slider). Performs the
-    /// read-modify-write the the ref tool `setTgpWatt` does: GET the 10016-byte
-    /// control buffer (NDA 0x8B3E7343), patch the active policy entry's power
-    /// field to `watts × 1000` mW, SET it back (NDA 0xBFF09E59). `policy_index`
-    /// selects the entry (the mask bit); use the index from [`tgp_watt_range`].
-    /// Returns the resolved milliwatts actually written.
-    ///
-    /// **Driver-gate caveat (RTX 4060 Laptop, driver r576):** the SET entry
-    /// point 0xBFF09E59 is NOT resolvable from nvoc's process —
-    /// `nvapi_QueryInterface(0xBFF09E59)` returns NULL (QI for the paired GET
-    /// 0x8B3E7343 succeeds). the ref tool's process resolves it, so the ref tool's
-    /// `-gpupwr:<watts>` works; something in the ref tool's full driver-invoker setup
-    /// (NvPCF/QBoost-controller init, or even WinRing0) registers the entry
-    /// point. The call here therefore returns `NoImplementation` on this driver
-    /// until that registration path is reproduced. The buffer layout, magic,
-    /// mask, and power-field offset are all byte-verified against the ref tool via
-    /// WinDbg (handle 0x100, magic 0x12720, mask 1<<idx, mW @ buf+0x8A0+40*idx).
-    pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> crate::NvapiResult<u32> {
+    /// Set the GPU TGP in **watts** (the watts-form TGP slider). Writes through
+    /// the shared compact power-channel core ([`Self::set_channel_raw_core`]):
+    /// the R465+ compact stamp `0x0001_0A4C` is the more widely accepted view
+    /// of the control table (the wide 0x12720 / V2 view is 538+ only), and the
+    /// core applies the same mask-scoped RMW + readback + rollback the OCP path
+    /// uses (`mask = 1<<policy_index` never touches the OCP rows). The value is
+    /// clamped to the row's driver window, so the write cannot exceed the
+    /// driver's rated TGP. `policy_index` selects the control entry (==
+    /// info-mask bit; use the index from [`tgp_watt_range`]). Returns the
+    /// milliwatts the driver retained.
+    pub fn set_tgp_watt(&self, watts: u32, policy_index: usize) -> crate::Result<u32> {
         trace!("gpu.set_tgp_watt({} W, idx {})", watts, policy_index);
-        // the ref tool's init stub calls the private lifecycle init 0xAD298D3F(1) at
-        // process startup before ANY power-control NVAPI call. Mirror that — but
-        // best-effort: on desktop Linux `libnvidia-api` does not implement the
-        // private lifecycle init (it resolves to no implementation), yet the TGP
-        // Get/Set endpoints are live. Swallow `NoImplementation` (done in
-        // [`private_lifecycle_init`]) and, for any other init error, log + continue
-        // so the SET — not the init — reports whether it can proceed.
+        // the ref tool's init stub calls the private lifecycle init 0xAD298D3F(1)
+        // at process startup before ANY power-control NVAPI call. Mirror that —
+        // but best-effort: on desktop Linux `libnvidia-api` does not implement
+        // it (resolves to no implementation) yet the endpoints are live. Any
+        // other init error is logged and the SET reports its own status.
         if let Err(e) = self.private_lifecycle_init() {
             warn!(
                 "set_tgp_watt: private_lifecycle_init failed ({:?}); attempting set anyway",
                 e.status
             );
         }
-        // the ref tool's setTgpWatt runs AFTER queryPowerPolicy (GetInfoPrivate) has
-        // populated the GPUHandle's policy state. Mirror that: call the private
-        // GetInfo first so the driver's power-policy state is primed.
+        // the ref tool's setTgpWatt runs AFTER queryPowerPolicy (GetInfoPrivate)
+        // has populated the GPUHandle's policy state. Mirror that priming, then
+        // fetch the channel rows the shared core keys on (same private GetInfo
+        // 0x67F31384 the range read uses).
         let _ = self.tgp_watt_range()?;
-        // 10KB — heap-backed to be stack-safe.
-        let mut buf: Vec<u8> =
-            vec![0u8; std::mem::size_of::<power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
-        let ver = <power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
-        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
-        unsafe {
-            let status =
-                sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
-            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)?;
+        let all = self.power_channel_policies()?;
+        if !all.iter().any(|p| p.index as usize == policy_index) {
+            return Err(crate::Error::ArgumentRange(Default::default()));
         }
-        let milliwatts = if watts == 0xFFFFFFFF {
-            0xFFFFFFFF
+        let milliwatts = if watts == u32::MAX {
+            u32::MAX
         } else {
             watts.saturating_mul(1000)
         };
-        let data: &mut power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS =
-            unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
-        data.set_power_mw(policy_index, milliwatts);
-        unsafe {
-            let status =
-                sys::api::NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
-            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattSetStatus, status)?;
-        }
-        Ok(milliwatts)
+        self.set_channel_raw_core(&all, policy_index, milliwatts)
     }
 
     /// Reset the GPU TGP to its rated/default value (the TGP slider's "Reset").
-    /// Same read-modify-write as [`set_tgp_watt`], but writes the default mW
-    /// reported by [`tgp_watt_range`] (or 0 if unavailable) into the entry.
+    /// Same shared compact core as [`set_tgp_watt`], writing the default mW
+    /// reported by [`tgp_watt_range`]. Returns that default mW, or `None` when
+    /// the driver reports no default / the row is absent (nothing to write).
     ///
-    /// Calls the private lifecycle init first, mirroring [`set_tgp_watt`], but
-    /// treats it as best-effort: any failure is logged and the read-modify-write
-    /// proceeds regardless. On desktop Linux `libnvidia-api` does not implement
-    /// the private lifecycle init (the ID resolves to no implementation), yet the
-    /// TGP Get/Set endpoints are live — so the init is not necessary there and
-    /// must not abort the reset. The real TGP SET surfaces its own status if it
-    /// genuinely cannot proceed. (`set_tgp_watt`'s `private_lifecycle_init` already
-    /// swallows `NoImplementation` for the same reason; reset goes further and
-    /// tolerates any init error, since it is a recovery path.)
-    pub fn reset_tgp_watt(&self, policy_index: usize) -> crate::NvapiResult<Option<u32>> {
+    /// The private lifecycle init is best-effort (logged, never fatal) — same
+    /// rationale as [`set_tgp_watt`]; reset is a recovery path and must not
+    /// abort on it.
+    pub fn reset_tgp_watt(&self, policy_index: usize) -> crate::Result<Option<u32>> {
         trace!("gpu.reset_tgp_watt(idx {})", policy_index);
         if let Err(e) = self.private_lifecycle_init() {
             warn!(
@@ -6626,27 +6628,15 @@ impl PhysicalGpu {
                 e.status
             );
         }
-        let default_mw = self.tgp_watt_range()?.and_then(|r| r.default_mw);
-        let mut buf: Vec<u8> =
-            vec![0u8; std::mem::size_of::<power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS>()];
-        let ver = <power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS as sys::nvapi::StructVersion>::NVAPI_VERSION;
-        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
-        unsafe {
-            let status =
-                sys::api::NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
-            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)?;
+        let Some(mw) = self.tgp_watt_range()?.and_then(|r| r.default_mw) else {
+            return Ok(None);
+        };
+        let all = self.power_channel_policies()?;
+        if !all.iter().any(|p| p.index as usize == policy_index) {
+            return Ok(None);
         }
-        if let Some(mw) = default_mw {
-            let data: &mut power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS =
-                unsafe { &mut *(buf.as_mut_ptr() as *mut _) };
-            data.set_power_mw(policy_index, mw);
-        }
-        unsafe {
-            let status =
-                sys::api::NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
-            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattSetStatus, status)?;
-        }
-        Ok(default_mw)
+        self.set_channel_raw_core(&all, policy_index, mw)?;
+        Ok(Some(mw))
     }
 
     pub fn thermal_settings(

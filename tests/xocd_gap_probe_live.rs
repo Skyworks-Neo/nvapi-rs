@@ -119,7 +119,7 @@ fn e3_power_channels() {
         let info = unsafe { &*(ibuf.as_ptr() as *const NV_GPU_CLIENT_POWER_CHANNELS_INFO) };
         info_mask = info.mask;
         eprintln!("info mask: {:#010x}", info.mask);
-        for bit in 0..15u32 {
+        for bit in 0..32u32 {
             if info.mask & (1 << bit) == 0 {
                 continue;
             }
@@ -138,17 +138,15 @@ fn e3_power_channels() {
     }
 
     // Production/xOCD control GET: corrected v1|2636 stamp + info-mask seed
-    // (the driver fills only masked entries).
+    // (the driver fills only masked entries). Seed the FULL returned mask —
+    // xOCD's 0x7FFF would drop bit 15+.
     let mut cbuf: Vec<u8> =
         vec![0u8; std::mem::size_of::<NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>()];
     cbuf[..4].copy_from_slice(&NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::STAMP.to_ne_bytes());
-    cbuf[4..8].copy_from_slice(&(info_mask & 0x7FFF).to_ne_bytes());
+    cbuf[4..8].copy_from_slice(&info_mask.to_ne_bytes());
     let st =
         unsafe { NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), cbuf.as_mut_ptr() as *mut _) };
-    eprintln!(
-        "control 0x10A4C v1|2636 (seed {:#06x}): status={st:?}",
-        info_mask & 0x7FFF
-    );
+    eprintln!("control 0x10A4C v1|2636 (seed {info_mask:#010x}): status={st:?}");
     if st == 0 {
         let ctrl = unsafe { &*(cbuf.as_ptr() as *const NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1) };
         eprintln!("mask: {:#010x}", ctrl.mask);
@@ -164,8 +162,8 @@ fn e3_power_channels() {
                 .collect::<Vec<_>>()
         );
         eprintln!(
-            "compact values (dense 0..15): {:?}",
-            (0..15)
+            "compact values (dense 0..31): {:?}",
+            (0..32)
                 .map(|i| ctrl.channel_value_compact(i).unwrap_or(0xFFFF_FFFF))
                 .collect::<Vec<_>>()
         );
@@ -190,7 +188,7 @@ fn e3_power_channels() {
         let json = format!(
             "{{\"e\":\"e3\",\"info_mask\":{},\"compact\":[{}],\"r465\":[{}],\"geometry\":\"{:?}\",\"head96\":\"{}\"}}",
             info_mask,
-            (0..15)
+            (0..32)
                 .map(|i| ctrl
                     .channel_value_compact(i)
                     .unwrap_or(0xFFFF_FFFF)
@@ -230,7 +228,7 @@ fn e3_power_channels() {
             let size = (stamp & 0xFFFF) as usize;
             let mut b: Vec<u8> = vec![0u8; size];
             b[..4].copy_from_slice(&stamp.to_ne_bytes());
-            b[4..8].copy_from_slice(&(info_mask & 0x7FFF).to_ne_bytes());
+            b[4..8].copy_from_slice(&info_mask.to_ne_bytes());
             let st = unsafe {
                 NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), b.as_mut_ptr() as *mut _)
             };
@@ -252,7 +250,7 @@ fn e3_power_channels() {
     let _ = gpu.tgp_watt_range();
     let mut tbuf: Vec<u8> = vec![0u8; 10016];
     tbuf[..4].copy_from_slice(&0x0001_2720u32.to_ne_bytes());
-    tbuf[4..8].copy_from_slice(&0x0000_7FFFu32.to_ne_bytes());
+    tbuf[4..8].copy_from_slice(&info_mask.to_ne_bytes());
     let st =
         unsafe { NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), tbuf.as_mut_ptr() as *mut _) };
     eprintln!("control 0x12720 (10016B): status={st:?}");
@@ -302,7 +300,7 @@ fn e3_power_channels() {
 #[test]
 #[ignore]
 fn e8_tgp_full_compact_alignment() {
-    use nvapi::sys::gpu::power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS_V1 as Full;
+    use nvapi::sys::gpu::power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS_V2 as Full;
 
     let gpu = first_gpu();
 
@@ -319,12 +317,12 @@ fn e8_tgp_full_compact_alignment() {
     }
     let info = unsafe { &*(ibuf.as_ptr() as *const NV_GPU_CLIENT_POWER_CHANNELS_INFO) };
     let info_mask = info.mask;
-    let seed = info_mask & 0x7FFF;
-    eprintln!("e8 info mask: {:#010x} (seed {:#06x})", info_mask, seed);
+    let seed = info_mask;
+    eprintln!("e8 info mask: {:#010x} (seed {:#010x})", info_mask, seed);
 
     // (bit, pid, subtype, min, default, max)
     let mut channels: Vec<(u32, u32, u32, u32, u32, u32)> = Vec::new();
-    for bit in 0..15u32 {
+    for bit in 0..32u32 {
         if info_mask & (1 << bit) == 0 {
             continue;
         }
@@ -1033,4 +1031,94 @@ fn fmt_diff(d: &[(usize, i32, i32)]) -> String {
         s.push(format!("…+{} more", d.len() - 40));
     }
     s.join(", ")
+}
+
+/// E9 — xOCD 2.0 ExtendedLimits surface live read (audit
+/// docs/reverse-engineering/nvapi/xocd-2.0.0-capability-delta.md §4). The
+/// audit's §4 wrappers (`power_graph_roles` / `power_command` /
+/// `power_control_input`) so far have only offline byte-replay unit tests —
+/// this exercises them against the real driver. **GET-only**: the graph /
+/// command reads use no SET, and `power_control_input` is a GET. Read-only
+/// and safe; `set_power_command` (the only ExtendedLimits SET) is NOT called
+/// here (add an env-gated arm if you want a write).
+#[test]
+#[ignore]
+fn e9_extended_limits_surface() {
+    let gpu = first_gpu();
+
+    // --- power_graph_roles: 0x2BA030 with -9 fallback to the 347124-byte
+    // layout synthesized the xOCD way. ---
+    let roles = gpu.power_graph_roles();
+    match &roles {
+        Ok(r) => eprintln!(
+            "e9 power_graph_roles: family={:?} board={} shared={:?} root={} core={} memory={:?}",
+            r.family, r.board, r.shared, r.root, r.core, r.memory
+        ),
+        Err(e) => eprintln!("e9 power_graph_roles: Err({e:?})"),
+    }
+
+    // --- power_command: GET-only observed (0xF8) read across the channel
+    // range; a rejected channel/command pair is the packet contract working. ---
+    let mut cmd_json: Vec<String> = Vec::new();
+    for ch in 0..32u8 {
+        match gpu.power_command(ch, 0xF8) {
+            Ok(v) => {
+                eprintln!("e9 power_command ch[{ch:2}] cmd=0xF8 (observed) value={v}");
+                cmd_json.push(format!("{{\"ch\":{ch},\"cmd\":248,\"value\":{v}}}"));
+            }
+            Err(e) => eprintln!("e9 power_command ch[{ch:2}] cmd=0xF8: Err({e:?})"),
+        }
+    }
+
+    // --- power_control_input: board/shared/root role values off the graph
+    // roles. Skipped when the graph read failed or lacks a shared role. ---
+    let mut input_json = "null".to_string();
+    let shared_role = match &roles {
+        Ok(r) => r.shared,
+        Err(_) => None,
+    };
+    if let (Ok(r), Some(shared)) = (&roles, shared_role) {
+        match gpu.power_control_input(r.board, shared, r.root) {
+            Ok(Some(inp)) => {
+                eprintln!(
+                    "e9 power_control_input: stamp={:#x} mask={:#x} board={} shared={} root={}",
+                    inp.stamp, inp.mask, inp.board, inp.shared, inp.root
+                );
+                input_json = format!(
+                    "{{\"stamp\":{},\"mask\":{},\"board\":{},\"shared\":{},\"root\":{}}}",
+                    inp.stamp, inp.mask, inp.board, inp.shared, inp.root
+                );
+            }
+            Ok(None) => eprintln!("e9 power_control_input: no geometry accepted (both -9)"),
+            Err(e) => eprintln!("e9 power_control_input: Err({e:?})"),
+        }
+    } else {
+        eprintln!("e9 power_control_input: skipped (no graph/shared role)");
+    }
+
+    let roles_json = match &roles {
+        Ok(r) => format!(
+            "{{\"family\":\"{:?}\",\"board\":{},\"shared\":{},\"root\":{},\"core\":{},\"memory\":{}}}",
+            r.family,
+            r.board,
+            match r.shared {
+                Some(s) => s.to_string(),
+                None => "null".into(),
+            },
+            r.root,
+            r.core,
+            match r.memory {
+                Some(m) => m.to_string(),
+                None => "null".into(),
+            }
+        ),
+        Err(e) => format!("\"Err({e:?})\""),
+    };
+    write_json(
+        "e9-extended-limits.json",
+        &format!(
+            "{{\"e\":\"e9\",\"roles\":{roles_json},\"command\":[{}],\"control_input\":{input_json}}}",
+            cmd_json.join(",")
+        ),
+    );
 }
