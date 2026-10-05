@@ -226,25 +226,37 @@ fn e3_power_channels() {
 
     // Round 2: 10016B 0x12720 control — default-value dword scan against
     // the info channels (skip sentinels def==max==5001000/1001000).
+    // Round-2 live fix (both machines returned an all-zero payload): the
+    // ref-tool flow PRIMES the driver with the private GetInfo before the
+    // control GET and seeds the entry mask at +4 — mirror both, skip the
+    // version/mask header in the scan, and demand EXACT default hits only
+    // (the loose range match false-positived on the version dword 0x12720).
+    let _ = gpu.tgp_watt_range();
     let mut tbuf: Vec<u8> = vec![0u8; 10016];
     tbuf[..4].copy_from_slice(&0x0001_2720u32.to_ne_bytes());
+    tbuf[4..8].copy_from_slice(&0x0000_7FFFu32.to_ne_bytes());
     let st =
         unsafe { NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), tbuf.as_mut_ptr() as *mut _) };
     eprintln!("control 0x12720 (10016B): status={st:?}");
     if st == 0 {
+        let nonzero = tbuf[8..].chunks_exact(4).filter(|c| *c != [0; 4]).count();
+        eprintln!("nonzero dwords in payload: {nonzero}");
         let real_defs: Vec<(u32, u32, u32)> = channels
             .iter()
             .copied()
-            .filter(|&(_, _, mn, df, mx)| {
+            .filter(|&(_, _, _mn, df, mx)| {
                 !(df == mx && (df == 5_001_000 || df == 1_001_000 || df == 0))
             })
             .map(|(_, _, mn, df, mx)| (df, mn, mx))
             .collect();
         for &(def, mn, mx) in &real_defs {
             let mut hits = Vec::new();
-            for off in (0..10016 - 4).step_by(4) {
+            for off in (8..10016 - 4).step_by(4) {
                 let v = u32::from_le_bytes(tbuf[off..off + 4].try_into().unwrap());
-                if v == def || (v >= mn && v <= mx && v != 0 && v != 0xFFFF_FFFF) {
+                // exact default hit, or a live value strictly inside the
+                // window while AWAY from the window edges (cuts the
+                // version-dword false positives)
+                if v == def || (v > mn && v < mx) {
                     hits.push(off);
                     if hits.len() >= 8 {
                         break;
@@ -256,7 +268,7 @@ fn e3_power_channels() {
         write_json(
             "e3-10016-scan.json",
             &format!(
-                "{{\"e\":\"e3b\",\"defs\":{real_defs:?},\"head128\":\"{}\"}}",
+                "{{\"e\":\"e3b\",\"defs\":{real_defs:?},\"nonzero_dwords\":{nonzero},\"head128\":\"{}\"}}",
                 hex_head(&tbuf, 128)
             ),
         );
@@ -560,4 +572,112 @@ fn e1b_vf_points_write_read() {
         same,
         "restore did not return the table to its original bytes"
     );
+}
+
+/// E1c — V/F delta-field DISCOVERY sweep (audit ①/⑥). MUTATING, opt-in
+/// TWICE: `#[ignore]` AND `NVOC_ALLOW_VF_WRITE_PROBE=1`.
+///
+/// E1b falsified BOTH candidate geometries on current drivers (the SET was
+/// accepted but +15000 was not retained at nvapioc 60+36i nor xOCD
+/// 124+36(i-1); restore verified byte-identical). This probe stops
+/// guessing: sweep every 4-aligned offset in the entry region
+/// [40..=204] whose ORIGINAL dword is 0 — patch 15000 there, SET, fresh
+/// GET, record (a) whether the offset itself retained the value, (b) ANY
+/// dword that changed anywhere in the table (the driver may marshal the
+/// write into a different slot — the diff exposes the real field).
+/// Restore after every step; abort the sweep on the first restore
+/// mismatch.
+#[test]
+#[ignore]
+fn e1c_vf_points_offset_sweep() {
+    if std::env::var("NVOC_ALLOW_VF_WRITE_PROBE").as_deref() != Ok("1") {
+        eprintln!("e1c skipped: mutating probe — set NVOC_ALLOW_VF_WRITE_PROBE=1 to run");
+        return;
+    }
+    let gpu = first_gpu();
+    let info = gpu.vfp_info().expect("vfp_info");
+
+    let mask = info.mask.mask;
+    let get = |gpu: &PhysicalGpu| -> Vec<u8> {
+        let mut t = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
+        t.mask = mask;
+        let st = unsafe {
+            NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut t).cast())
+        };
+        assert_eq!(st, 0, "GET rejected");
+        unsafe {
+            core::slice::from_raw_parts(ptr::from_ref(&t).cast::<u8>(), std::mem::size_of_val(&t))
+                .to_vec()
+        }
+    };
+    let set = |gpu: &PhysicalGpu, b: &[u8]| -> i32 {
+        let mut t = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
+        unsafe {
+            ptr::copy_nonoverlapping(b.as_ptr(), ptr::from_mut(&mut t).cast::<u8>(), b.len());
+        }
+        unsafe {
+            nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsSetControl(
+                *gpu.handle(),
+                ptr::from_ref(&t).cast(),
+            )
+        }
+    };
+
+    let orig = get(&gpu);
+    eprintln!(
+        "snapshot taken ({} bytes), sweeping offsets 40..=204",
+        orig.len()
+    );
+
+    let mut retained = Vec::new();
+    let mut remapped: Vec<(usize, usize)> = Vec::new(); // (patched_off, seen_off)
+    for off in (40..=204).step_by(4) {
+        if orig[off..off + 4] != [0; 4] {
+            eprintln!("off {off:>3}: skip (original nonzero)");
+            continue;
+        }
+        let mut modified = orig.clone();
+        modified[off..off + 4].copy_from_slice(&15_000u32.to_le_bytes());
+        let st = set(&gpu, &modified);
+        if st != 0 {
+            eprintln!("off {off:>3}: SET rejected ({st})");
+            continue;
+        }
+        let after = get(&gpu);
+        // restore FIRST (before any reporting) so every step ends clean
+        let st = set(&gpu, &orig);
+        assert_eq!(st, 0, "restore SET failed at off {off}");
+        let back = get(&gpu);
+        assert_eq!(
+            back, orig,
+            "restore mismatch after off {off} — aborting sweep"
+        );
+
+        if after[off..off + 4] == 15_000u32.to_le_bytes() {
+            retained.push(off);
+            eprintln!("off {off:>3}: RETAINED 15000 at the patched offset");
+        }
+        for (i, w) in after.chunks_exact(4).enumerate() {
+            if w != &orig[i * 4..i * 4 + 4] {
+                let seen = u32::from_le_bytes(w.try_into().unwrap());
+                eprintln!(
+                    "off {off:>3}: table CHANGED at abs {} → {seen} ({})",
+                    i * 4,
+                    seen as i32
+                );
+                if seen == 15_000 {
+                    remapped.push((off, i * 4));
+                }
+            }
+        }
+    }
+
+    eprintln!();
+    eprintln!("VERDICT: retained at {retained:?}, remapped {remapped:?}");
+    eprintln!(
+        "  (empty = the driver marshals NO delta dword in [40,204] for this mask/shape — \
+         the field lives outside the swept window or needs per-point mask bits)"
+    );
+    let json = format!("{{\"e\":\"e1c\",\"retained\":{retained:?},\"remapped\":{remapped:?}}}");
+    write_json("e1c-vf-offset-sweep.json", &json);
 }
