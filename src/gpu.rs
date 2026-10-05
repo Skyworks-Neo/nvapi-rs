@@ -2902,15 +2902,16 @@ impl PhysicalGpu {
         Ok((values, compact))
     }
 
-    /// Write one power-channel value (OCP current limit, raw mA) with the
-    /// full RMW recipe mirroring xOCD's non-50 `SetPowerChannelLimit`:
-    /// info (channel lookup + [min,max] clamp) → mask-seeded GET control
-    /// (stamp 0x0001_0A4C) → geometry-detect → patch value, write mask =
-    /// exactly `1<<index` → SET (0xAFFC2279) → mask-seeded GET readback →
-    /// SET-restore on mismatch. The xOCD hard clamp 1000..=5001000 mA
-    /// applies to policyId-19 channels. DANGEROUS protection-limit write —
-    /// raising an OCP ceiling disables a safety net; the caller owns the
-    /// risk.
+    /// Write one power-channel control value (raw driver unit: mA on OCP
+    /// current channels, mW on the board-power row; any identity the info
+    /// table populates) with the full RMW recipe mirroring xOCD's non-50
+    /// `SetPowerChannelLimit`: info (channel lookup + [min,max] clamp) →
+    /// mask-seeded GET control (stamp 0x0001_0A4C) → geometry-detect →
+    /// patch value, write mask = exactly `1<<index` → SET (0xAFFC2279) →
+    /// mask-seeded GET readback → SET-restore on mismatch. The xOCD hard
+    /// clamp 1000..=5001000 mA applies to the OCP current identities.
+    /// DANGEROUS protection-limit write — raising an OCP ceiling disables
+    /// a safety net; the caller owns the risk.
     pub fn set_power_channel_value(
         &self,
         policy_id: u32,

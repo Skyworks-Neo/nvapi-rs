@@ -1843,8 +1843,10 @@ impl Gpu {
         }
     }
 
-    /// OCP / power-channel limit write (raw mA; generation-resolved,
-    /// full RMW recipe inside). HIGH RISK — raises a protection ceiling.
+    /// PowerChannels control write (raw driver-unit value: mA on OCP
+    /// current channels, mW on the board-power row; any populated channel
+    /// identity, full RMW recipe inside). HIGH RISK — raising an OCP
+    /// ceiling disables a safety net.
     pub fn set_power_channel_value(
         &self,
         policy_id: u32,
