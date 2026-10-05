@@ -4906,8 +4906,9 @@ pub mod undocumented {
             // i32 @0x38: the driver writes a 16-bit -18750 (0xB6C2) there
             // and sign-extends on read; the accessor must reconstruct
             // -18750 from exactly those 2 bytes.
-            let abs =
-                clk_volt_info_entry::BASE + clk_volt_info_entry::STRIDE + clk_volt_info_entry::I32_38;
+            let abs = clk_volt_info_entry::BASE
+                + clk_volt_info_entry::STRIDE
+                + clk_volt_info_entry::I32_38;
             info.rest[abs - 4..abs - 2].copy_from_slice(&0xB6C2u16.to_le_bytes());
             assert_eq!(info.rec_i32_38(1), Some(-18750));
             assert!(info.rec_u32(1, 0x64).is_none());

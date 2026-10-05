@@ -18,12 +18,25 @@
 // E4 clk_domains        — V2 control records under the xOCD semantic map
 // E5 top_rels           — info gate + ratio resolution → audit ③
 // E6 boost_locks        — PerfClientLimits 7-domain table → gap #6
+// E7 raw_delta_forensics — offset_of-proven delta geometry (88+36i), full
+//                         nonzero census, all-36-frame scan, optional
+//                         self-restoring write arms → closure for audit ①/⑥
 //
 // Results also land as JSON under ../reverse/xocd/ for machine diffing.
+//
+// GEOMETRY ERRATUM (2026-10-05): e1/e1b printed an "nvapioc" column at
+// 60+36i assuming a 40-byte header; the real nvstruct is 4 (version) + 32
+// (ClockMask<8>) + 32 (unknown) → points@68, entry stride 36,
+// freqDeltaKHz@entry+20 ⇒ delta(i) = 88+36i. That is exactly the family
+// e1c saw retained ([88,124,160,196]) and identical to xOCD's
+// 124+36*(i-1) for i>=1 — the two "competing" geometries were the same
+// offsets. e7 proves the layout at runtime with offset_of! and re-parses
+// every candidate family in one pass.
 
 #![allow(unused_must_use)]
 
 use core::ptr;
+use nvapi::Kilohertz2Delta;
 use nvapi::PhysicalGpu;
 use nvapi::sys::api::{
     NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate, NvAPI_GPU_ClientTgpWattGetStatus,
@@ -32,8 +45,8 @@ use nvapi::sys::api::{
 };
 use nvapi::sys::gpu::clock::undocumented::{
     NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2, NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL,
-    NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO, NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL,
-    clk_top_rels_control, clk_top_rels_info,
+    NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO, NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_V1,
+    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL, clk_top_rels_control, clk_top_rels_info,
 };
 use nvapi::sys::gpu::power::undocumented::{
     NV_GPU_CLIENT_POWER_CHANNELS_INFO, NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1,
@@ -723,4 +736,328 @@ fn e1c_vf_points_offset_sweep() {
     );
     let json = format!("{{\"e\":\"e1c\",\"retained\":{retained:?},\"remapped\":{remapped:?}}}");
     write_json("e1c-vf-offset-sweep.json", &json);
+}
+
+/// E7 — raw delta forensics on the PROVEN struct geometry. Read-only
+/// phase always available; the write arms need `#[ignore]` + the env gate.
+///
+/// PHASE A (GET-only):
+///   A0  runtime offset proof from the real nvstruct (`offset_of!`) —
+///       takes every manual offset arithmetic out of the loop;
+///   A1  full 9248B raw table hex + head;
+///   A2  nonzero census: every value present in the table with the full
+///       list of absolute offsets that carry it (36-stride RLE) — this
+///       catches EVERY slot any previous experiment poked, whatever the
+///       family (60+36i, 68+36i, 88+36i, 124+36i, …);
+///   A3  all-36-frames scan (f=0..35): nonzero runs per frame, so no
+///       candidate family can hide behind a wrong label;
+///   A4  named-family column table for points 0..7.
+///
+/// PHASE B (`NVOC_ALLOW_VF_WRITE_PROBE=1`, both arms self-restoring with a
+/// byte-identical verify before continuing):
+///   B1  API arm — `set_vfp_table(point 5, +80 MHz)`, the exact path the
+///       CLI's set-public-vftable writes use; raw GET diff afterwards
+///       prints every changed absolute offset;
+///   B2  raw arm — patch the proven delta slot (88+36*5) to 55555 directly,
+///       raw SET, retention check, restore.
+///
+/// Run (read-only):
+///   cargo test -p nvapi --test xocd_gap_probe_live e7 -- --ignored --nocapture --test-threads=1
+/// Run (with the write arms):
+///   NVOC_ALLOW_VF_WRITE_PROBE=1 cargo test -p nvapi --test xocd_gap_probe_live e7 -- --ignored --nocapture --test-threads=1
+/// Artifacts: reverse/xocd/e7-report.txt, e7-raw-table.hex, e7-report.json
+#[test]
+#[ignore]
+fn e7_raw_delta_forensics() {
+    use core::mem::{offset_of, size_of};
+    use std::collections::BTreeMap;
+
+    let mut report = String::new();
+    macro_rules! say {
+        ($($t:tt)*) => {{
+            let s = format!($($t)*);
+            eprintln!("{s}");
+            report.push_str(&s);
+            report.push('\n');
+        }};
+    }
+
+    // ---- A0: runtime struct proof --------------------------------------
+    let ctl_size = size_of::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL>();
+    let pts_off = offset_of!(NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL, points);
+    let entry_stride = size_of::<NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_V1>();
+    let delta_off = offset_of!(NV_GPU_CLOCK_CLIENT_CLK_VF_POINT_CONTROL_V1, freqDeltaKHz);
+    let delta_base = pts_off + delta_off;
+    say!("===== E7 raw delta forensics =====");
+    say!(
+        "A0 struct proof: size={ctl_size} points@{pts_off} entry_stride={entry_stride} \
+         freqDeltaKHz@entry+{delta_off} → delta(i) = {delta_base}+{entry_stride}*i"
+    );
+    assert_eq!(
+        (ctl_size, pts_off, entry_stride, delta_off),
+        (9248, 68, 36, 20),
+        "struct geometry drifted from 4+32+32+255*36 — audit the nvstruct before trusting offsets"
+    );
+
+    let gpu = first_gpu();
+    let info = gpu.vfp_info().expect("vfp_info");
+    say!("vfp info mask[0]: {:#010x}", info.mask.mask.mask[0]);
+
+    let get_raw = |gpu: &PhysicalGpu| -> (i32, Vec<u8>) {
+        let mut t = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
+            mask: info.mask.mask,
+            ..Default::default()
+        };
+        let st = unsafe {
+            NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut t).cast())
+        };
+        let b =
+            unsafe { core::slice::from_raw_parts(ptr::from_ref(&t).cast::<u8>(), size_of_val(&t)) }
+                .to_vec();
+        (st, b)
+    };
+    let set_raw = |gpu: &PhysicalGpu, b: &[u8]| -> i32 {
+        let mut t = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
+        unsafe {
+            ptr::copy_nonoverlapping(b.as_ptr(), ptr::from_mut(&mut t).cast::<u8>(), b.len());
+        }
+        unsafe {
+            nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsSetControl(
+                *gpu.handle(),
+                ptr::from_ref(&t).cast(),
+            )
+        }
+    };
+    let rd = |b: &[u8], abs: usize| -> i32 {
+        u32::from_le_bytes(b[abs..abs + 4].try_into().unwrap()) as i32
+    };
+
+    let (st, base) = get_raw(&gpu);
+    say!("A1 raw GET: status={st:?} bytes={}", base.len());
+    assert_eq!(st, 0, "GET rejected");
+    say!("A1 head[160]: {}", hex_head(&base, 160));
+
+    // ---- A2: nonzero census (value → all absolute offsets) -------------
+    let mut census: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for o in (0..base.len().saturating_sub(3)).step_by(4) {
+        let v = rd(&base, o);
+        if v != 0 {
+            census.entry(v).or_default().push(o);
+        }
+    }
+    say!("A2 nonzero census ({} distinct values):", census.len());
+    for (v, offs) in &census {
+        say!("  {v}: n={} {}", offs.len(), rle36(offs));
+    }
+
+    // ---- A3: all-36-frames scan ----------------------------------------
+    say!("A3 all frames f=0..35 (abs f+36k) — nonzero RLE, zeros elided:");
+    for f in 0..36usize {
+        let mut vals: Vec<i32> = Vec::new();
+        let mut o = f;
+        while o + 4 <= base.len() {
+            vals.push(rd(&base, o));
+            o += 36;
+        }
+        let mut desc: Vec<String> = Vec::new();
+        let mut k = 0usize;
+        while k < vals.len() {
+            let v = vals[k];
+            let s = k;
+            let mut e = k;
+            while e + 1 < vals.len() && vals[e + 1] == v {
+                e += 1;
+            }
+            if v != 0 {
+                desc.push(if s == e {
+                    format!("k{s}={v}")
+                } else {
+                    format!("k{s}..{e}={v}")
+                });
+            }
+            k = e + 1;
+        }
+        if desc.is_empty() {
+            say!("  f={f:>2}: all zero ({} dwords)", vals.len());
+        } else {
+            say!("  f={f:>2} (abs {f}+36k): {}", desc.join(", "));
+        }
+    }
+
+    // ---- A4: named-family columns --------------------------------------
+    say!("A4 named families for points 0..7:");
+    say!("   pt  ours(delta@88+36i)  old60(60+36i)  type(68+36i)  xocd(124+36i)");
+    for i in 0..8usize {
+        say!(
+            "  {i:>3} {:>18} {:>14} {:>13} {:>15}",
+            rd(&base, delta_base + 36 * i),
+            rd(&base, 60 + 36 * i),
+            rd(&base, 68 + 36 * i),
+            rd(&base, 124 + 36 * i)
+        );
+    }
+
+    // ---- PHASE B (mutating, opt-in) ------------------------------------
+    let di = delta_base + 36 * 5; // delta slot of point 5
+    let mut json = String::new();
+    if std::env::var("NVOC_ALLOW_VF_WRITE_PROBE").as_deref() == Ok("1") {
+        say!(
+            "B0 target point 5: delta abs {di} currently {}",
+            rd(&base, di)
+        );
+
+        // B1 — API arm (the exact CLI write path)
+        let st = gpu.set_vfp_table(
+            &info,
+            core::iter::once((5usize, Kilohertz2Delta(160_000))),
+            core::iter::empty::<(usize, Kilohertz2Delta)>(),
+        );
+        say!("B1 set_vfp_table(p5, Kilohertz2Delta(160000)) → {st:?}");
+        match &st {
+            Ok(()) => {
+                let (st2, after) = get_raw(&gpu);
+                assert_eq!(st2, 0, "B1 readback GET rejected");
+                let d = diff4(&base, &after);
+                say!("B1 raw GET diff ({} dwords): {}", d.len(), fmt_diff(&d));
+                say!(
+                    "B1 delta slot {di}: {} (before {})",
+                    rd(&after, di),
+                    rd(&base, di)
+                );
+                json = format!(
+                    ",\"b1_changed\":[{}],\"b1_slot_after\":{}",
+                    d.iter()
+                        .map(|(o, _, b)| format!("[{o},{b}]"))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    rd(&after, di)
+                );
+            }
+            Err(e) => {
+                say!("B1 SET rejected ({e:?}) — table unchanged; skipping restore");
+                say!("   (-137 InvalidUserPrivilege just means: run elevated)");
+            }
+        }
+        if st.is_ok() {
+            assert_eq!(set_raw(&gpu, &base), 0, "B1 restore SET failed");
+            let (_, back) = get_raw(&gpu);
+            let same = back == base;
+            say!(
+                "B1 restore verify: {}",
+                if same {
+                    "OK (byte-identical)"
+                } else {
+                    "MISMATCH — inspect diff before continuing!"
+                }
+            );
+            assert!(same, "B1 restore mismatch");
+        }
+
+        // B2 — raw arm at the proven delta slot
+        let mut m = base.clone();
+        m[di..di + 4].copy_from_slice(&55_555u32.to_le_bytes());
+        let st = set_raw(&gpu, &m);
+        say!("B2 raw patch {di}=55555 → SET {st:?}");
+        if st == 0 {
+            let (_, after) = get_raw(&gpu);
+            say!("B2 retention at {di}: {}", rd(&after, di));
+            let d = diff4(&base, &after);
+            say!("B2 raw GET diff ({} dwords): {}", d.len(), fmt_diff(&d));
+
+            assert_eq!(set_raw(&gpu, &base), 0, "B2 restore SET failed");
+            let (_, back) = get_raw(&gpu);
+            let same = back == base;
+            say!(
+                "B2 restore verify: {}",
+                if same {
+                    "OK (byte-identical)"
+                } else {
+                    "MISMATCH!"
+                }
+            );
+            assert!(same, "B2 restore mismatch");
+        } else {
+            say!("B2 SET rejected ({st}) — table unchanged; skipping restore");
+        }
+    } else {
+        say!("phase B skipped: mutating probe — set NVOC_ALLOW_VF_WRITE_PROBE=1 to run");
+    }
+
+    // ---- artifacts ------------------------------------------------------
+    let hex: String = base.iter().map(|b| format!("{b:02x}")).collect();
+    write_json("e7-raw-table.hex", &hex);
+    write_json("e7-report.txt", &report);
+    let j = format!(
+        "{{\"e\":\"e7\",\"size\":{ctl_size},\"points_off\":{pts_off},\"stride\":{entry_stride},\
+         \"delta_off\":{delta_off},\"delta_base\":{delta_base},\"census\":{{{}}}{}}}",
+        census
+            .iter()
+            .map(|(v, o)| format!(
+                "{v}:[{}]",
+                o.iter().map(usize::to_string).collect::<Vec<_>>().join(",")
+            ))
+            .collect::<Vec<_>>()
+            .join(","),
+        json
+    );
+    write_json("e7-report.json", &j);
+}
+
+/// RLE a sorted offset list along a 36-byte stride: runs of >=3 become
+/// `start+36k k=0..n`, shorter groups are listed literally. Capped.
+fn rle36(offs: &[usize]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < offs.len() {
+        let start = offs[i];
+        let mut n = 1;
+        while i + n < offs.len() && offs[i + n] == start + 36 * n {
+            n += 1;
+        }
+        if n >= 3 {
+            out.push(format!("{start}+36k k=0..{}", n - 1));
+        } else {
+            for o in &offs[i..i + n] {
+                out.push(o.to_string());
+            }
+        }
+        i += n;
+    }
+    if out.len() > 24 {
+        let extra = out.len() - 24;
+        out.truncate(24);
+        out.push(format!("…+{extra} more"));
+    }
+    format!("[{}]", out.join(", "))
+}
+
+/// Changed dwords between two byte images (absolute offset, before, after).
+fn diff4(before: &[u8], after: &[u8]) -> Vec<(usize, i32, i32)> {
+    let mut v = Vec::new();
+    let n = before.len().min(after.len());
+    let mut o = 0;
+    while o + 4 <= n {
+        let a = u32::from_le_bytes(before[o..o + 4].try_into().unwrap()) as i32;
+        let b = u32::from_le_bytes(after[o..o + 4].try_into().unwrap()) as i32;
+        if a != b {
+            v.push((o, a, b));
+        }
+        o += 4;
+    }
+    v
+}
+
+fn fmt_diff(d: &[(usize, i32, i32)]) -> String {
+    if d.is_empty() {
+        return "(none — the write did not change the returned table)".to_string();
+    }
+    let mut s: Vec<String> = d
+        .iter()
+        .take(40)
+        .map(|(o, a, b)| format!("abs {o}: {a}→{b}"))
+        .collect();
+    if d.len() > 40 {
+        s.push(format!("…+{} more", d.len() - 40));
+    }
+    s.join(", ")
 }
