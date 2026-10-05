@@ -1295,27 +1295,35 @@ pub mod undocumented {
         }
 
         /// Detect which geometry the live GET filled: compare both candidate
-        /// value lists against the info-side rows — a geometry "fits" when
-        /// every **indexed** entry value lands inside its [min, max]
-        /// window. The row index is the info-mask bit position, i.e. the
-        /// control entry index (xOCD drives control entry i for info entry
-        /// i; the populated set can have gaps). Returns true for the
-        /// compact (xOCD) geometry, false for the R465 136B-stride one,
-        /// None when ambiguous.
+        /// value lists against the info-side rows — score how many
+        /// **indexed** entry values land inside their [min, max] window and
+        /// pick the strict winner. The row index is the info-mask bit
+        /// position, i.e. the control entry index (xOCD drives control
+        /// entry i for info entry i; the populated set can have gaps).
+        /// Returns true for the compact (xOCD) geometry, false for the R465
+        /// 136B-stride one, None when ambiguous (tie).
+        ///
+        /// The original rule required *every* row to fit — but live current
+        /// values can legitimately sit outside the info window after a
+        /// power-command lease write (the P100 board row reads 300000 mW
+        /// against a 250000 max), which blinded the whole write path. This
+        /// is a layout fingerprint, not a safety gate: majority vote
+        /// tolerates out-of-window rows while still refusing to patch a
+        /// buffer whose geometry it cannot tell apart.
         pub fn detect_compact_geometry(&self, rows: &[(usize, u32, u32, u32)]) -> Option<bool> {
             if rows.is_empty() {
                 return None;
             }
-            let fits = |get: &dyn Fn(usize) -> Option<u32>| {
-                rows.iter().all(|&(idx, lo, _def, hi)| {
-                    get(idx).map(|v| v >= lo && v <= hi).unwrap_or(false)
-                })
+            let score = |get: &dyn Fn(usize) -> Option<u32>| {
+                rows.iter()
+                    .filter(|&&(idx, lo, _def, hi)| get(idx).is_some_and(|v| v >= lo && v <= hi))
+                    .count()
             };
-            let compact_fits = fits(&|i| self.channel_value_compact(i));
-            let r465_fits = fits(&|i| self.power_mw(i));
-            match (compact_fits, r465_fits) {
-                (true, false) => Some(true),
-                (false, true) => Some(false),
+            let compact_score = score(&|i| self.channel_value_compact(i));
+            let r465_score = score(&|i| self.power_mw(i));
+            match (compact_score > r465_score, r465_score > compact_score) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
                 _ => None,
             }
         }
@@ -2919,6 +2927,41 @@ pub mod undocumented {
             assert_eq!(
                 f.detect_compact_geometry(&[(2, 1000, 5000, 9000)]),
                 Some(true)
+            );
+        }
+
+        /// A live current value outside its info window is a legal state
+        /// (the power-command lease write left the P100 board row at
+        /// 300000 mW against a 250000 max), not a geometry change — the
+        /// detector must majority-vote instead of demanding every row fit,
+        /// or the whole write path goes blind after any lease write.
+        #[test]
+        fn tgp_10a4c_detection_tolerates_out_of_window_rows() {
+            // Two in-window compact rows + one over-max row (the P100
+            // 300000>250000 state): the old all-must-fit rule returned None
+            // here; majority vote must still say compact.
+            let mut g = NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::zeroed();
+            // compact entry 2 (payload 104) = 300000, over the (2, .., 250000) window
+            g.payload[104..108].copy_from_slice(&300_000u32.to_le_bytes());
+            // compact entries 3/4 in-window (payload 144/184)
+            g.payload[144..148].copy_from_slice(&66_000u32.to_le_bytes());
+            g.payload[184..188].copy_from_slice(&240_000u32.to_le_bytes());
+            assert_eq!(
+                g.detect_compact_geometry(&[
+                    (2, 125_000, 250_000, 250_000),
+                    (3, 1, 66_000, 5_001_000),
+                    (4, 1, 240_000, 5_001_000),
+                ]),
+                Some(true)
+            );
+            // every row out-of-window under both accessors stays ambiguous
+            // (None) — the gate must still refuse to patch a buffer whose
+            // geometry it cannot tell apart.
+            let mut h = NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::zeroed();
+            h.payload[104..108].copy_from_slice(&300_000u32.to_le_bytes());
+            assert_eq!(
+                h.detect_compact_geometry(&[(2, 125_000, 250_000, 250_000)]),
+                None
             );
         }
     }
