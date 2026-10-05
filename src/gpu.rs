@@ -99,6 +99,11 @@ pub struct VoltRailEntry {
     /// effective 1.005 V, min-hold 0.625 V).
     /// For **control** type 3 (RTX 5090 MSVDD): index 0 = the µV offset.
     pub values: [i32; 6],
+    /// STATUS-only: payload dwords 6..8 (the V2 nine-slot extras; see
+    /// `docs/reverse-engineering/nvapi/voltrails-family-full-layout-r610.md`
+    /// — semantics open, live 4060L 0/625000/0). `None` on control entries
+    /// (their +100.. lands in the next slot's head).
+    pub extra_values: Option<[i32; 3]>,
 }
 
 impl VoltRailEntry {
@@ -107,6 +112,18 @@ impl VoltRailEntry {
             rail_bit,
             entry_type,
             values,
+            extra_values: None,
+        }
+    }
+
+    fn from_status_raw(
+        (rail_bit, entry_type, values, extra): (u32, u32, [i32; 6], [i32; 3]),
+    ) -> Self {
+        Self {
+            rail_bit,
+            entry_type,
+            values,
+            extra_values: Some(extra),
         }
     }
 }
@@ -1755,7 +1772,10 @@ impl PhysicalGpu {
             unsafe { NvAPI_GPU_VoltVoltRailsGetStatus(self.0, ptr::from_mut(&mut status).cast()) };
         let status_entries =
             match crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetStatus, st) {
-                Ok(()) => status.entries().map(VoltRailEntry::from_raw).collect(),
+                Ok(()) => status
+                    .entries_with_extra()
+                    .map(VoltRailEntry::from_status_raw)
+                    .collect(),
                 Err(e) => {
                     warn!("VoltVoltRailsGetStatus failed ({e:?}); returning control-only snapshot");
                     Vec::new()

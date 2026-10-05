@@ -14,6 +14,7 @@ fn entry(rail_bit: u32, entry_type: u32, values: [i32; 6]) -> VoltRailEntry {
         rail_bit,
         entry_type,
         values,
+        extra_values: None,
     }
 }
 

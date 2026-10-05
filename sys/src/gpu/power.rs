@@ -394,6 +394,43 @@ pub mod undocumented {
                     }
                 }
 
+                /// Iterate the dense entries as
+                /// (rail_bit, type, values[0..5], values[6..8]).
+                ///
+                /// values[6..8] live past the 84 B stride (+100/+104/+108 in
+                /// struct terms) — the R610.74 V1-status back-copy maps them
+                /// from the V2 nine-slot form (`docs/reverse-engineering/
+                /// nvapi/voltrails-family-full-layout-r610.md`). Only the
+                /// STATUS side populates them; for CONTROL entries they land
+                /// in the next slot's head and MUST be ignored.
+                pub fn entries_with_extra(
+                    &self,
+                ) -> impl Iterator<Item = (u32, u32, [i32; 6], [i32; 3])> + '_ {
+                    let mask = self.rail_mask;
+                    let rest = &self.rest;
+                    (0..32u32)
+                        .filter(move |bit| mask & (1 << bit) != 0)
+                        .enumerate()
+                        .filter_map(move |(dense, bit)| {
+                            let base = ctrl_entry::STRIDE * dense + ctrl_entry::TYPE;
+                            let value_off = |i: usize| -> Option<[u8; 4]> {
+                                rest.get(base + 4 + 4 * i - 8..base + 4 + 4 * i - 4)?
+                                    .try_into()
+                                    .ok()
+                            };
+                            let typ = u32::from_le_bytes(rest[base - 8..base - 4].try_into().ok()?);
+                            let mut values = [0i32; ctrl_entry::VALUES_LEN];
+                            for (i, v) in values.iter_mut().enumerate() {
+                                *v = i32::from_le_bytes(value_off(i)?);
+                            }
+                            let mut extra = [0i32; 3];
+                            for (k, v) in extra.iter_mut().enumerate() {
+                                *v = i32::from_le_bytes(value_off(6 + k)?);
+                            }
+                            Some((bit, typ, values, extra))
+                        })
+                }
+
                 /// Iterate the dense entries as (rail_bit, type, six payload u32).
                 pub fn entries(&self) -> impl Iterator<Item = (u32, u32, [i32; 6])> + '_ {
                     let mask = self.rail_mask;
