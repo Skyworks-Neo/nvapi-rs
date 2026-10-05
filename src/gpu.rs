@@ -333,6 +333,10 @@ pub struct PstateClientLimit {
     pub max_level: u32,
 }
 
+/// One decoded V2 STATUS entry plus its rail bit: (rail_bit, type,
+/// values[0..8], enum byte, type-0 tail (byte +44, dwords +48/+52/+56)).
+pub type VoltRailsStatusV2Reading = (u32, u32, [u32; 9], u8, (u8, u32, u32, u32));
+
 impl PhysicalGpu {
     pub fn handle(&self) -> &sys::handles::NvPhysicalGpuHandle {
         &self.0
@@ -1776,6 +1780,44 @@ impl PhysicalGpu {
         })
     }
 
+    /// Read the V2 STATUS form (stamp 0x21620, 5664 B) — the nine-slot
+    /// full-fidelity view the V1 struct lossily projects. Read-only.
+    /// Returns `None` when the driver rejects the V2 stamp (pre-R391-era
+    /// or differently-wired builds). Layout/RE:
+    /// `docs/reverse-engineering/nvapi/voltrails-family-full-layout-r610.md`.
+    ///
+    /// values[0..5] mirror the V1 six (current / target wall / vbios wall /
+    /// vrm max wall / effective wall / min hold); **values[6..8] are extra
+    /// telemetry with open semantics** (RM dwords +120/+124/+128; live
+    /// 4060L: 0/625000/0). Status-only: the SET path carries six dwords, so
+    /// slots 6..8 are not writable through this family.
+    pub fn volt_rails_status_v2(&self) -> crate::Result<Vec<VoltRailsStatusV2Reading>> {
+        trace!("gpu.volt_rails_status_v2()");
+        use crate::sys::nvapi::StructVersion;
+        use power::undocumented::NV_GPU_VOLT_RAILS_STATUS_V2;
+        let (info, _) = self.volt_rails_info()?;
+        let mut status = NV_GPU_VOLT_RAILS_STATUS_V2 {
+            version: <NV_GPU_VOLT_RAILS_STATUS_V2 as StructVersion>::NVAPI_VERSION,
+            rail_mask: info.rail_mask,
+            ..Default::default()
+        };
+        let st = unsafe {
+            sys::api::NvAPI_GPU_VoltVoltRailsGetStatus(self.0, ptr::from_mut(&mut status).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetStatus, st)?;
+        let mut out = Vec::new();
+        for bit in 0..32u32 {
+            if info.rail_mask & (1 << bit) == 0 {
+                continue;
+            }
+            if let Some((typ, values, enum_byte, tail)) = status.entry(bit) {
+                out.push((bit, typ, values, enum_byte, tail));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Write a value into one rail's control-entry payload (index 0, @+76) and
     /// Write a value into one rail's control-entry payload (index 0, @+76) and
     /// verify the driver retained it — the mechanism half of melonVolt's
     /// protocol (snapshot → locate → patch → SET → readback). Policy (type

@@ -89,6 +89,21 @@ fn volt_rails_slot_mapping_probe() {
             }
         }
     }
+    // V2 STATUS (0x21620): the nine-slot full-fidelity form. values[6..8]
+    // are RM dwords +120/+124/+128 (live 4060L: 0/625000/0, semantics open).
+    println!("--- V2 status (values[0..8] + enum + type0 tail) ---");
+    match gpu.volt_rails_status_v2() {
+        Ok(entries) => {
+            for (bit, typ, values, enum_byte, tail) in &entries {
+                println!(
+                    "  v2 rail{bit} type{typ}: {:?} enum={enum_byte} tail={tail:?}",
+                    values
+                );
+            }
+        }
+        Err(err) => println!("  V2 rejected: {err:?}"),
+    }
+
     println!("DONE — 槽位→语义以「status 哪个位跟随扰动」判定");
     println!(
         "已钉:slot1=VBIOS max wall 偏移(values[2],用户 A/B)、slot2=VRM max wall 偏移(status[3] 跟随)、slot3=VMIN 偏移(status[5] 跟随);⚠️slot4/5 在 4060L/610 上写入即爆驱动(-300 实测),默认跳过,强制需 NVOC_VOLT_SLOT_PROBE_UNSAFE=1"

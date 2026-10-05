@@ -299,6 +299,79 @@ pub mod undocumented {
 
     nvversion! { @=NV_GPU_VOLT_RAILS_STATUS NV_GPU_VOLT_RAILS_STATUS_V1(1) = 2760 }
 
+    nvstruct! {
+        /// V2 STATUS (stamp 0x21620, 5664 B) — the full nine-slot form the V1
+        /// struct is a lossy projection of. Layout per R610.74 nvapi64_impl RE
+        /// (`docs/reverse-engineering/nvapi/voltrails-family-full-layout-r610.md`):
+        /// per-RAIL-BIT 172 B entries at struct+160, type dword @+0, nine payload
+        /// dwords @+4..+40 (values[0..5] = the V1 six, values[6..8] = extra
+        /// telemetry, RM dwords +120/+124/+128), enum byte @+40, and for
+        /// exported-type-0 entries a tail: byte +44, dwords +48/+52/+56.
+        ///
+        /// ⚠️ the dword ORDER is build-dependent: live 582.41 (P100,
+        /// 2026-10-06) accepts the V2 stamp but returns a DIFFERENT
+        /// permutation — [0, vrm 1125000, target 1068750, current 706250,
+        /// vbios 0, min-hold 706250, 0, 0, 0] with the type dword position
+        /// reading a voltage. The map below is R610.74-only; re-RE per
+        /// build before consuming values beyond the min/max/set family.
+        pub struct NV_GPU_VOLT_RAILS_STATUS_V2 {
+            pub version: NvVersion,
+            /// in: bitmask of rails to read
+            pub rail_mask: u32,
+            pub rest: [u8; 5656],
+        }
+    }
+
+    nvversion! { @ NV_GPU_VOLT_RAILS_STATUS_V2(2) = 5664 }
+
+    /// Decoded V2 status entry: (type, values[0..8], enum byte, type-0 tail
+    /// (byte +44, dwords +48/+52/+56)).
+    pub type VoltRailsStatusV2Entry = (u32, [u32; 9], u8, (u8, u32, u32, u32));
+
+    impl NV_GPU_VOLT_RAILS_STATUS_V2 {
+        /// Byte offset of rail `bit`'s 172 B entry (per-rail-bit indexing,
+        /// NOT dense).
+        pub fn entry_offset(bit: u32) -> Option<usize> {
+            if bit >= 32 {
+                return None;
+            }
+            Some(160 + 172 * bit as usize)
+        }
+
+        /// Per-rail decode: (type, values[0..8], enum byte, type0-tail
+        /// (byte +44, dwords +48/+52/+56)). Returns `None` when the entry
+        /// runs past the buffer.
+        pub fn entry(&self, bit: u32) -> Option<VoltRailsStatusV2Entry> {
+            let base = Self::entry_offset(bit)?;
+            if base + 172 > self.rest.len() + 8 {
+                return None;
+            }
+            let dword = |off: usize| -> Option<u32> {
+                Some(u32::from_le_bytes(
+                    self.rest.get(off..off + 4)?.try_into().ok()?,
+                ))
+            };
+            let typ = dword(base)?;
+            let mut values = [0u32; 9];
+            for (k, v) in values.iter_mut().enumerate() {
+                *v = dword(base + 4 + k * 4)?;
+            }
+            let enum_byte = *self.rest.get(base + 40)?;
+            let tail_byte = *self.rest.get(base + 44).unwrap_or(&0);
+            Some((
+                typ,
+                values,
+                enum_byte,
+                (
+                    tail_byte,
+                    dword(base + 48).unwrap_or(0),
+                    dword(base + 52).unwrap_or(0),
+                    dword(base + 56).unwrap_or(0),
+                ),
+            ))
+        }
+    }
+
     /// Seed/parse helpers shared by the control and status structs.
     macro_rules! volt_rails_entries {
         ($t:ty) => {
