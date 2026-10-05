@@ -1058,6 +1058,58 @@ fn e9_extended_limits_surface() {
         Err(e) => eprintln!("e9 power_graph_roles: Err({e:?})"),
     }
 
+    // --- Diagnostic: why the graph read failed (informs the encapsulation
+    // decision). Report the raw status of both private-info stamps: the
+    // Modern 0x2BA030 graph and the 347124-byte fallback. A -9 on the Modern
+    // stamp means the driver wants the fallback and our synthesis/role
+    // expectations then failed; a 0 on the Modern stamp means the driver
+    // returned a graph whose roles don't match our decode on this card. ---
+    {
+        use nvapi::sys::gpu::power::undocumented::NV_GPU_CLIENT_POWER_POLICIES_INFO_PRIVATE_BLACKWELL_V1 as Graph;
+        let mut modern = vec![0u8; std::mem::size_of::<Graph>()];
+        modern[..4].copy_from_slice(&Graph::STAMP.to_ne_bytes());
+        let s_modern = unsafe {
+            NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(
+                *gpu.handle(),
+                modern.as_mut_ptr() as *mut _,
+            )
+        };
+        let mut small = vec![0u8; 347_124];
+        small[..4].copy_from_slice(&0xF4BF4u32.to_ne_bytes());
+        let s_small = unsafe {
+            NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(*gpu.handle(), small.as_mut_ptr() as *mut _)
+        };
+        eprintln!(
+            "e9 graph diagnostic: modern(0x2BA030, {}B) raw_status={s_modern} ({}), fallback(0xF4BF4, 347124B) raw_status={s_small} ({})",
+            std::mem::size_of::<Graph>(),
+            if s_modern == 0 { "OK" } else { "rejected" },
+            if s_small == 0 { "OK" } else { "rejected" },
+        );
+        if s_modern == 0 {
+            let g = unsafe { &*(modern.as_ptr() as *const Graph) };
+            match g
+                .root_index()
+                .and_then(|i| g.policy_entry(i).map(|e| (i, e)))
+            {
+                Some((i, e)) => eprintln!(
+                    "e9   modern root: idx={i} type={} unit={} channel={}",
+                    e.role_type, e.unit, e.channel
+                ),
+                None => eprintln!("e9   modern root: none (root_index/policy_entry returned None)"),
+            }
+            let mut entries = String::new();
+            for i in 0..32usize {
+                if let Some(e) = g.policy_entry(i) {
+                    entries.push_str(&format!(
+                        " [{i}:t{} u{} ch{}]",
+                        e.role_type, e.unit, e.channel
+                    ));
+                }
+            }
+            eprintln!("e9   modern entries 0..31:{entries}");
+        }
+    }
+
     // --- power_command: GET-only read of both xOCD packet command ids
     // (0xF8 observed, 0xFE request) across the channel range; a rejected
     // channel/command pair is the packet contract working. ---
@@ -1101,53 +1153,68 @@ fn e9_extended_limits_surface() {
     }
 
     // --- set_power_command: the only ExtendedLimits SET. Double-gated and
-    // self-restoring. Writes the 0xF8 (observed) channel only — 0xFE drives the
-    // kernel-side power-cap request and is left for the caller to arm
-    // explicitly. A channel whose baseline is a 0 / 0xFFFFFFFF sentinel is
-    // skipped (nothing safe to perturb). ---
+    // self-restoring. Tries the 0xF8 (observed) channel first, then falls back
+    // to 0xFE (the kernel power-cap request) — on Pascal/Ada the only live
+    // channel is ch0/0xFE (= the board power in mW), so without the fallback
+    // there would be nothing to write. Each step (identity → perturb → restore)
+    // is read back; a failed restore is loud. A channel whose baseline is a
+    // 0 / 0xFFFFFFFF sentinel is skipped (nothing safe to perturb). ---
     let mut write_arm_json = "null".to_string();
     if std::env::var("NVOC_ALLOW_PWR_CMD_WRITE").as_deref() == Ok("1") {
         let mut done = false;
-        for ch in 0..32u8 {
-            let Ok(baseline) = gpu.power_command(ch, 0xF8) else {
-                continue;
-            };
-            if baseline == 0 || baseline == u32::MAX {
-                continue;
-            }
-            eprintln!("e9 set_power_command ch[{ch}] baseline={baseline}");
-            match gpu.set_power_command(ch, 0xF8, baseline) {
-                Ok(()) => eprintln!("e9   identity SET(0xF8) accepted + read back"),
-                Err(e) => {
-                    eprintln!("e9   identity SET(0xF8): Err({e:?}) — aborting this arm");
+        let mut found = false;
+        for command in [0xF8u32, 0xFEu32] {
+            for ch in 0..32u8 {
+                let Ok(baseline) = gpu.power_command(ch, command) else {
+                    continue;
+                };
+                if baseline == 0 || baseline == u32::MAX {
                     continue;
                 }
-            }
-            let perturbed = if baseline == u32::MAX - 1 {
-                baseline - 1
-            } else {
-                baseline + 1
-            };
-            match gpu.set_power_command(ch, 0xF8, perturbed) {
-                Ok(()) => eprintln!("e9   perturb SET({perturbed}) accepted + read back"),
-                Err(e) => {
-                    eprintln!("e9   perturb SET({perturbed}): Err({e:?}) (driver may clamp/reject)")
+                found = true;
+                eprintln!("e9 set_power_command ch[{ch}] cmd=0x{command:X} baseline={baseline}");
+                match gpu.set_power_command(ch, command, baseline) {
+                    Ok(()) => eprintln!("e9   identity SET accepted + read back"),
+                    Err(e) => {
+                        eprintln!("e9   identity SET: Err({e:?}) — channel found but SET rejected");
+                        continue;
+                    }
                 }
+                let perturbed = if baseline == u32::MAX - 1 {
+                    baseline - 1
+                } else {
+                    baseline + 1
+                };
+                match gpu.set_power_command(ch, command, perturbed) {
+                    Ok(()) => eprintln!("e9   perturb SET({perturbed}) accepted + read back"),
+                    Err(e) => {
+                        eprintln!("e9   perturb SET({perturbed}): Err({e:?}) (driver may clamp)")
+                    }
+                }
+                match gpu.set_power_command(ch, command, baseline) {
+                    Ok(()) => eprintln!("e9   restored baseline={baseline}"),
+                    Err(e) => eprintln!("e9   !! RESTORE FAILED: {e:?} (baseline={baseline})"),
+                }
+                write_arm_json = format!(
+                    "{{\"ch\":{ch},\"cmd\":{command},\"baseline\":{baseline},\"perturbed\":{perturbed}}}"
+                );
+                done = true;
+                break;
             }
-            match gpu.set_power_command(ch, 0xF8, baseline) {
-                Ok(()) => eprintln!("e9   restored baseline={baseline}"),
-                Err(e) => eprintln!("e9   !! RESTORE FAILED: {e:?} (baseline={baseline})"),
+            if done {
+                break;
             }
-            write_arm_json = format!(
-                "{{\"ch\":{ch},\"cmd\":248,\"baseline\":{baseline},\"perturbed\":{perturbed}}}"
-            );
-            done = true;
-            break;
         }
         if !done {
-            eprintln!(
-                "e9 set_power_command: no writable 0xF8 channel (all sentinel/absent) — skipped"
-            );
+            if found {
+                eprintln!(
+                    "e9 set_power_command: live channel found but every SET was rejected (privilege? run elevated)"
+                );
+            } else {
+                eprintln!(
+                    "e9 set_power_command: no live channel on 0xF8/0xFE (all sentinel/absent) — skipped"
+                );
+            }
         }
     } else {
         eprintln!("e9 set_power_command: skipped (set NVOC_ALLOW_PWR_CMD_WRITE=1 to write)");
