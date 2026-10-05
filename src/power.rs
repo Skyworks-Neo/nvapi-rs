@@ -631,7 +631,8 @@ pub fn gpu_z_rail_name(rail: u32) -> Option<&'static str> {
 /// Human channel names for the PowerMonitor rail space, cross-referenced
 /// from AmpereOC's "Power Statistics" panel (sub_140068074): it renders 12
 /// fixed slots — Total Board Power Draw, Framebuffer VDD, NVIDIA GPU VDD,
-/// 12v PCIE 8-pin #1/#2/#3, 12v PEX Rail, PWR PP SRC, SRAM, MISC #0..#3 —
+/// 12v PCIE 8-pin #1/#2/#3, 12v PEX Rail, PWR_SRC (AmpereOC's "PWR PP SRC",
+/// renamed to GPU-Z's label per the 2.71 audit adjudication), SRAM, MISC #0..#3 —
 /// each fed by one PowerMonitor channel (its GPU-object slots sit at a
 /// uniform 168-byte pitch, matching the GetInfo descriptor size). AmpereOC
 /// confirms these rails are reported in **milliwatts**. Use alongside
@@ -643,16 +644,16 @@ pub fn ampereoc_rail_name(rail: u32) -> Option<&'static str> {
         245 | 223 => Some("Total Board Power Draw"), // TBPD  = InputTotalBoard(2)
         246 | 226 => Some("NVIDIA GPU VDD"),         // NVVDD = InputNvvdd(1)
         247 => Some("Framebuffer VDD"),              // FBVDD = InputFbvdd
-        241 => Some("PWR PP SRC"),                   // PWRPPCSRC = InputPwrSrcPp
-        222 | 255 => Some("12v PEX Rail"),           // PEX   = InputPex12v1 / InputPex12v
-        228 => Some("12v PCIE 8-pin #1"),            // InputExt12v8pin2
-        229 => Some("12v PCIE 8-pin #2"),            // InputExt12v8pin3
-        230 => Some("12v PCIE 8-pin #3"),            // InputExt12v8pin4
-        11 => Some("SRAM"),                          // OutputSram
-        232 => Some("MISC #0"),                      // InputMisc0
-        233 => Some("MISC #1"),                      // InputMisc1
-        234 => Some("MISC #2"),                      // InputMisc2
-        235 => Some("MISC #3"),                      // InputMisc3
+        241 => Some("PWR_SRC"), // PWRPPCSRC = InputPwrSrcPp (GPU-Z name per audit §10 ⑤)
+        222 | 255 => Some("12v PEX Rail"), // PEX   = InputPex12v1 / InputPex12v
+        228 => Some("12v PCIE 8-pin #1"), // InputExt12v8pin2
+        229 => Some("12v PCIE 8-pin #2"), // InputExt12v8pin3
+        230 => Some("12v PCIE 8-pin #3"), // InputExt12v8pin4
+        11 => Some("SRAM"),     // OutputSram
+        232 => Some("MISC #0"), // InputMisc0
+        233 => Some("MISC #1"), // InputMisc1
+        234 => Some("MISC #2"), // InputMisc2
+        235 => Some("MISC #3"), // InputMisc3
         _ => None,
     }
 }

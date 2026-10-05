@@ -1152,3 +1152,48 @@ nvapi! {
     /// class as [`NvAPI_GPU_SetCurrentPCIEWidth`].
     pub unsafe fn NvAPI_GPU_SetCurrentPCIESpeed(hPhysicalGPU: NvPhysicalGpuHandle, speed: u32) -> NvAPI_Status;
 }
+
+// ---------------------------------------------------------------------------
+// GPU-Z 2.71 audit gap-fill (gpuz-sensor-audit.md §9): count/identity family.
+// (handle, *mut u32) reads; GPU-Z 2.71 resolves every one for its
+// compute-capability panel. Already present elsewhere in this file and NOT
+// redeclared here: GetShaderPipeCount, GetShaderSubPipeCount,
+// GetPartitionCount, GetGpuCoreCount, GetSerialNumber, GetRamMaker,
+// GetPerGpuTopologyStatus.
+// ---------------------------------------------------------------------------
+
+nvapi! {
+    /// Number of video processing engines (VPE).
+    pub unsafe fn NvAPI_GPU_GetVPECount(hPhysicalGPU: NvPhysicalGpuHandle, pCount: *mut u32) -> NvAPI_Status;
+}
+
+nvapi! {
+    /// Number of raster backends (ROP clusters).
+    pub unsafe fn NvAPI_GPU_GetRasterBackendCount(hPhysicalGPU: NvPhysicalGpuHandle, pCount: *mut u32) -> NvAPI_Status;
+}
+
+nvapi! {
+    /// Total TPC count.
+    pub unsafe fn NvAPI_GPU_GetTotalTPCCount(hPhysicalGPU: NvPhysicalGpuHandle, pCount: *mut u32) -> NvAPI_Status;
+}
+
+nvapi! {
+    /// Total SM count.
+    pub unsafe fn NvAPI_GPU_GetTotalSMCount(hPhysicalGPU: NvPhysicalGpuHandle, pCount: *mut u32) -> NvAPI_Status;
+}
+
+nvapi! {
+    /// Total SP count (shader processor / CUDA core count).
+    pub unsafe fn NvAPI_GPU_GetTotalSPCount(hPhysicalGPU: NvPhysicalGpuHandle, pCount: *mut u32) -> NvAPI_Status;
+}
+
+nvapi! {
+    /// Currently driven outputs bitmask (GPU-Z ctx +0x54).
+    pub unsafe fn NvAPI_GPU_GetActiveOutputs(hPhysicalGPU: NvPhysicalGpuHandle, pOutputs: *mut u32) -> NvAPI_Status;
+}
+
+nvapi! {
+    /// Valid GPU topologies as a bitmask (GPU-Z ctx +0x17c; pairs with
+    /// `GetPerGpuTopologyStatus`).
+    pub unsafe fn NvAPI_GetValidGpuTopologies(pTopologyMask: *mut u32) -> NvAPI_Status;
+}

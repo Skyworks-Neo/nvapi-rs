@@ -1356,6 +1356,43 @@ impl Gpu {
         }
     }
 
+    /// Compute/topology capability counters (GPU-Z 2.71 audit gap-fill,
+    /// gpuz-sensor-audit.md §9): VPE, raster backends, TPC/SM/SP totals,
+    /// plus the pre-existing core/shader-pipe/sub-pipe/partition counters.
+    /// Each entry is the raw u32, `None` where this board/driver refuses
+    /// that counter (-100/-104 class).
+    pub fn compute_caps(&self) -> crate::Result<BTreeMap<&'static str, Option<u32>>> {
+        let ok = |r: crate::NvapiResult<u32>| -> Option<u32> {
+            match r {
+                Ok(v) => Some(v),
+                Err(e)
+                    if matches!(
+                        e.status,
+                        crate::Status::NotSupported | crate::Status::NoImplementation
+                    ) =>
+                {
+                    None
+                }
+                Err(_) => None,
+            }
+        };
+        let mut m: BTreeMap<&'static str, Option<u32>> = BTreeMap::new();
+        m.insert("vpe_count", ok(self.gpu.vpe_count()));
+        m.insert("raster_backend_count", ok(self.gpu.raster_backend_count()));
+        m.insert("total_tpc_count", ok(self.gpu.total_tpc_count()));
+        m.insert("total_sm_count", ok(self.gpu.total_sm_count()));
+        m.insert("total_sp_count", ok(self.gpu.total_sp_count()));
+        m.insert("core_count", ok(self.gpu.core_count()));
+        m.insert("shader_pipe_count", ok(self.gpu.shader_pipe_count()));
+        m.insert(
+            "shader_sub_pipe_count",
+            ok(self.gpu.shader_sub_pipe_count()),
+        );
+        m.insert("partition_count", ok(self.gpu.partition_count()));
+        m.insert("active_outputs", ok(self.gpu.active_outputs()));
+        Ok(m)
+    }
+
     /// Write a signed kHz offset into one clock-domain's control record via
     /// the private ClockClient SET_CONTROL (RM 0x2080d01c, ID 0xD14B69CF).
     /// DANGEROUS GPU clock write: snapshots the full GetControl block,
@@ -1711,6 +1748,117 @@ impl Gpu {
 
     pub fn reset_cooler_levels(&self) -> crate::Result<()> {
         self.gpu.restore_cooler_settings(&[]).map_err(Into::into)
+    }
+
+    /// PowerChannels policy table (0x67F31384 v4): board power (mW) +
+    /// per-rail OCP current channels (mA, generation-skewed identities).
+    /// `Ok(None)` where the driver doesn't expose the table — same refusal
+    /// mapping as [`Self::volt_rails`].
+    pub fn power_channel_policies(&self) -> crate::Result<Option<Vec<crate::PowerChannelPolicy>>> {
+        match self.gpu.power_channel_policies() {
+            Ok(v) => Ok(Some(v)),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Resolved NVVDD/MSVDD OCP channels (generation fallback chain). See
+    /// [`Self::power_channel_policies`].
+    pub fn ocp_channels(
+        &self,
+    ) -> crate::Result<(
+        Option<crate::PowerChannelPolicy>,
+        Option<crate::PowerChannelPolicy>,
+    )> {
+        self.gpu.ocp_channels()
+    }
+
+    /// Live power-channel control values + geometry detection. See
+    /// [`Self::power_channel_policies`].
+    pub fn power_channel_control(
+        &self,
+        policies: &[crate::PowerChannelPolicy],
+    ) -> crate::Result<Option<(Vec<u32>, Option<bool>)>> {
+        match self.gpu.power_channel_control(policies) {
+            Ok(v) => Ok(Some(v)),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// PerfClientLimits 7-domain lock snapshot. See
+    /// [`Self::power_channel_policies`] for the refusal mapping.
+    pub fn boost_lock_snapshot(&self) -> crate::Result<Option<Vec<crate::BoostLockEntry>>> {
+        match self.gpu.boost_lock_snapshot() {
+            Ok(v) => Ok(Some(v)),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// TopRels relation ratio (raw U16.16 at the resolved offset); the
+    /// control GET answers on 50-series only. See
+    /// [`Self::power_channel_policies`] for the refusal mapping.
+    pub fn top_rels_ratio(&self) -> crate::Result<Option<(usize, u32)>> {
+        match self.gpu.top_rels_ratio() {
+            Ok(v) => Ok(Some(v)),
+            Err(crate::Error::Nvapi(e))
+                if matches!(
+                    e.status,
+                    crate::Status::NotSupported
+                        | crate::Status::NoImplementation
+                        | crate::Status::ArgumentExceedMaxSize
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// OCP / power-channel limit write (raw mA; generation-resolved,
+    /// full RMW recipe inside). HIGH RISK — raises a protection ceiling.
+    pub fn set_power_channel_value(
+        &self,
+        policy_id: u32,
+        subtype: u32,
+        value_raw: u32,
+    ) -> crate::Result<u32> {
+        self.gpu
+            .set_power_channel_value(policy_id, subtype, value_raw)
+    }
+
+    /// TopRels relation-ratio write (0.7–1.2; 0.9 = the 0xE660 literal).
+    /// DANGEROUS driver-wide clock-tree write; 50-series only.
+    pub fn set_top_rels_ratio(&self, ratio: f64) -> crate::Result<f64> {
+        self.gpu.set_top_rels_ratio(ratio)
     }
 
     pub fn set_vfp<

@@ -632,6 +632,60 @@ impl PhysicalGpu {
         unsafe { nvcall!(NvAPI_GPU_GetIRQ@get(self.0)) }
     }
 
+    // GPU-Z 2.71 audit gap-fill (gpuz-sensor-audit.md §9): the rest of the
+    // count/identity family. Return semantics on refusal boards are the
+    // usual -100/-104 class; callers treat them like the sibling counters.
+
+    pub fn vpe_count(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.vpe_count()");
+        unsafe { nvcall!(NvAPI_GPU_GetVPECount@get(self.0)) }
+    }
+
+    pub fn raster_backend_count(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.raster_backend_count()");
+        unsafe { nvcall!(NvAPI_GPU_GetRasterBackendCount@get(self.0)) }
+    }
+
+    pub fn total_tpc_count(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.total_tpc_count()");
+        unsafe { nvcall!(NvAPI_GPU_GetTotalTPCCount@get(self.0)) }
+    }
+
+    pub fn total_sm_count(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.total_sm_count()");
+        unsafe { nvcall!(NvAPI_GPU_GetTotalSMCount@get(self.0)) }
+    }
+
+    pub fn total_sp_count(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.total_sp_count()");
+        unsafe { nvcall!(NvAPI_GPU_GetTotalSPCount@get(self.0)) }
+    }
+
+    /// `(framebuffer width in bytes, location)` — GPU-Z ctx +0x44 pair read.
+    pub fn fb_width_and_location(&self) -> crate::NvapiResult<(u32, u32)> {
+        trace!("gpu.fb_width_and_location()");
+        unsafe { nvcall!(NvAPI_GPU_GetFBWidthAndLocation@get2(self.0)) }
+    }
+
+    /// Currently driven outputs bitmask.
+    pub fn active_outputs(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.active_outputs()");
+        unsafe { nvcall!(NvAPI_GPU_GetActiveOutputs@get(self.0)) }
+    }
+
+    /// Valid topologies bitmask (system-wide, no handle argument).
+    pub fn valid_gpu_topologies() -> crate::NvapiResult<u32> {
+        trace!("gpu::valid_gpu_topologies()");
+        let mut out = 0u32;
+        unsafe {
+            crate::status_result(
+                sys::Api::NvAPI_GetValidGpuTopologies,
+                sys::api::NvAPI_GetValidGpuTopologies(&mut out),
+            )
+            .map(|()| out)
+        }
+    }
+
     pub fn pcie_lanes(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.pcie_lanes()");
         unsafe { nvcall!(NvAPI_GPU_GetCurrentPCIEDownstreamWidth@get(self.0)) }
@@ -660,6 +714,11 @@ impl PhysicalGpu {
     pub fn shader_sub_pipe_count(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.shader_sub_pipe_count()");
         unsafe { nvcall!(NvAPI_GPU_GetShaderSubPipeCount@get(self.0)) }
+    }
+
+    pub fn partition_count(&self) -> crate::NvapiResult<u32> {
+        trace!("gpu.partition_count()");
+        unsafe { nvcall!(NvAPI_GPU_GetPartitionCount@get(self.0)) }
     }
 
     pub fn ram_type(&self) -> crate::Result<RamType> {

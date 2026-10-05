@@ -296,7 +296,13 @@ pub mod undocumented {
     }
 
     nvenum_display! {
-        ClockDomainId => _
+        ClockDomainId => {
+            // GPU-Z 2.71 audit adjudication (gpuz-sensor-audit.md §10 ②③):
+            // dual-label aliases — RTSS enum name first, cross-tool name second.
+            Hub = "Hub/L2C",
+            Msd = "Msd/Vid",
+            _ = _,
+        }
     }
 
     nvstruct! {
