@@ -756,6 +756,22 @@ impl Gpu {
         }
     }
 
+    /// Generalized payload-slot write (0..6) — see the low-level
+    /// [`crate::Gpu::set_volt_rail_slot`] for the empirically pinned slot
+    /// semantics (slot 2 = VRM max wall offset, slot 3 = VMIN/min-hold
+    /// offset on P100/582.41).
+    #[allow(non_snake_case)] // uV suffix matches the sys-layer field naming
+    pub fn set_volt_rail_slot(
+        &self,
+        rail_bit: u32,
+        slot: usize,
+        value_uV: i32,
+    ) -> crate::Result<Option<i32>> {
+        self.gpu
+            .set_volt_rail_slot(rail_bit, slot, value_uV)
+            .map(Some)
+    }
+
     // --- Blackwell XBar ClockClient clock-domain family ---------------------
     // (reverse/melonvolt/xbar.txt — Loong0x00 LACT #1147). The 4 NV2080 RM
     // commands wrapped via private NVAPI IDs (escape 0x07000049).
