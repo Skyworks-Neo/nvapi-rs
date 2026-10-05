@@ -1240,6 +1240,12 @@ pub mod undocumented {
         /// struct (magic 0x210A8): per-cooler current speed (dword 19,
         /// driver scale) + current PWM (dword 24, Q16). RE'd from ref tool 2
         /// pollFanSpeed.
+        ///
+        /// Cross-tool stamp note (GPU-Z 2.71 audit, E-⑫): GPU-Z calls this
+        /// same ID with magic **0x20AB0** (ver 2 | size 0xAB0 = 2736B) —
+        /// same version, smaller size than our 0x210A8 (ver 2 | 0x10A8 =
+        /// 4264B). Which size the driver accepts (or whether both parse)
+        /// is live-unconfirmed — see gpuz-sensor-audit.md §12 E-⑫.
         pub unsafe fn NvAPI_GPU_FanCoolerGetStatus;
     }
 

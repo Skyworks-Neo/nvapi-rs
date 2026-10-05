@@ -4906,9 +4906,8 @@ pub mod undocumented {
             // i32 @0x38: the driver writes a 16-bit -18750 (0xB6C2) there
             // and sign-extends on read; the accessor must reconstruct
             // -18750 from exactly those 2 bytes.
-            let abs = clk_volt_info_entry::BASE
-                + 1 * clk_volt_info_entry::STRIDE
-                + clk_volt_info_entry::I32_38;
+            let abs =
+                clk_volt_info_entry::BASE + clk_volt_info_entry::STRIDE + clk_volt_info_entry::I32_38;
             info.rest[abs - 4..abs - 2].copy_from_slice(&0xB6C2u16.to_le_bytes());
             assert_eq!(info.rec_i32_38(1), Some(-18750));
             assert!(info.rec_u32(1, 0x64).is_none());
@@ -5861,7 +5860,7 @@ pub mod undocumented {
             // Regimes info record decode
             let mut info = NV_GPU_CLOCK_CLK_PROP_REGIMES_INFO::default();
             put_u32(&mut info.rest, clk_prop_regimes_info_entry::MASK, 0x3);
-            let base = clk_prop_regimes_info_entry::BASE + 1 * clk_prop_regimes_info_entry::STRIDE;
+            let base = clk_prop_regimes_info_entry::BASE + clk_prop_regimes_info_entry::STRIDE;
             put_u32(
                 &mut info.rest,
                 base + clk_prop_regimes_info_entry::REC_STATUS,
@@ -5924,8 +5923,10 @@ pub mod undocumented {
             assert_eq!(pc.u32_at(public_clock_info_slots::TYPE4 + 4), Some(4));
 
             // Locked clock mode: plain field struct
-            let mut lm = NV_GPU_LOCKED_CLOCK_MODE_STATUS::default();
-            lm.mode_mask = 0b1010;
+            let lm = NV_GPU_LOCKED_CLOCK_MODE_STATUS {
+                mode_mask: 0b1010,
+                ..Default::default()
+            };
             assert_eq!(lm.mode_mask, 0b1010);
         }
     }

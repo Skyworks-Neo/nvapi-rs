@@ -87,8 +87,10 @@ fn first_gpu() -> PhysicalGpu {
 fn e1_vf_points_geometry() {
     let gpu = first_gpu();
     let info = gpu.vfp_info().expect("vfp_info");
-    let mut raw = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-    raw.mask = info.mask.mask;
+    let mut raw = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
+        mask: info.mask.mask,
+        ..Default::default()
+    };
     let st = unsafe {
         NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut raw).cast())
     };
@@ -321,7 +323,7 @@ fn e4_clk_domains_semantics() {
         };
         eprintln!(
             "{bit:>3} {ty:#>6} {:>16} {:>14} {:>14}",
-            format_args!("({},{})", f, v),
+            format!("({f},{v})"),
             freq.map(|x| x.to_string()).unwrap_or_else(|| "-".into()),
             volt.map(|x| x.to_string()).unwrap_or_else(|| "-".into()),
         );
@@ -453,8 +455,10 @@ fn e1b_vf_points_write_read() {
     let gpu = first_gpu();
     let info = gpu.vfp_info().expect("vfp_info");
 
-    let mut orig = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-    orig.mask = info.mask.mask;
+    let mut orig = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
+        mask: info.mask.mask,
+        ..Default::default()
+    };
     let st = unsafe {
         NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut orig).cast())
     };
@@ -502,8 +506,10 @@ fn e1b_vf_points_write_read() {
     }
 
     // readback
-    let mut verify = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-    verify.mask = info.mask.mask;
+    let mut verify = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
+        mask: info.mask.mask,
+        ..Default::default()
+    };
     let st = unsafe {
         NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut verify).cast())
     };
@@ -553,8 +559,10 @@ fn e1b_vf_points_write_read() {
         )
     };
     eprintln!("restore SET: status={st:?}");
-    let mut back = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-    back.mask = info.mask.mask;
+    let mut back = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
+        mask: info.mask.mask,
+        ..Default::default()
+    };
     let st = unsafe {
         NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut back).cast())
     };
@@ -599,8 +607,10 @@ fn e1c_vf_points_offset_sweep() {
 
     let mask = info.mask.mask;
     let get = |gpu: &PhysicalGpu| -> Vec<u8> {
-        let mut t = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL::default();
-        t.mask = mask;
+        let mut t = NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL {
+            mask,
+            ..Default::default()
+        };
         let st = unsafe {
             NvAPI_GPU_ClockClientClkVfPointsGetControl(*gpu.handle(), ptr::from_mut(&mut t).cast())
         };

@@ -1645,9 +1645,11 @@ impl PhysicalGpu {
     pub fn volt_devices(&self) -> crate::NvapiResult<Vec<VoltDevice>> {
         trace!("gpu.volt_devices()");
         use crate::sys::nvapi::StructVersion;
-        let mut info = power::undocumented::NV_GPU_VOLT_DEVICES_INFO::default();
-        info.version =
-            <power::undocumented::NV_GPU_VOLT_DEVICES_INFO as StructVersion>::NVAPI_VERSION;
+        let mut info = power::undocumented::NV_GPU_VOLT_DEVICES_INFO {
+            version:
+                <power::undocumented::NV_GPU_VOLT_DEVICES_INFO as StructVersion>::NVAPI_VERSION,
+            ..Default::default()
+        };
         let st = unsafe { sys::api::NvAPI_GPU_VoltVoltDevicesGetInfo(self.0, &mut info) };
         crate::status_result(sys::Api::NvAPI_GPU_VoltVoltDevicesGetInfo, st)?;
         let mut out = Vec::new();
@@ -8514,8 +8516,10 @@ impl PhysicalGpu {
         trace!("gpu.hwfs_control_get(selector={selector})");
         use clock::undocumented::NV_GPU_THERMAL_HWFS_CONTROL;
 
-        let mut raw = NV_GPU_THERMAL_HWFS_CONTROL::default();
-        raw.version = <NV_GPU_THERMAL_HWFS_CONTROL as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let mut raw = NV_GPU_THERMAL_HWFS_CONTROL {
+            version: <NV_GPU_THERMAL_HWFS_CONTROL as sys::nvapi::StructVersion>::NVAPI_VERSION,
+            ..Default::default()
+        };
         raw.b04_in = selector as u8;
         raw.selector = selector;
         let st = unsafe {
@@ -8568,8 +8572,10 @@ impl PhysicalGpu {
             Err(e) => return Err(e),
         }
         use clock::undocumented::{NV_GPU_CLOCK_ADC_DEVICES_INFO2, adc_devices_info_entry};
-        let mut raw = NV_GPU_CLOCK_ADC_DEVICES_INFO2::default();
-        raw.version = <NV_GPU_CLOCK_ADC_DEVICES_INFO2 as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        let mut raw = NV_GPU_CLOCK_ADC_DEVICES_INFO2 {
+            version: <NV_GPU_CLOCK_ADC_DEVICES_INFO2 as sys::nvapi::StructVersion>::NVAPI_VERSION,
+            ..Default::default()
+        };
         let st = unsafe {
             sys::api::NvAPI_GPU_ClockAdcDevicesGetInfoV2(self.0, ptr::from_mut(&mut raw).cast())
         };
@@ -8643,6 +8649,7 @@ impl PhysicalGpu {
         };
         // V1 (10 slots) first; >10-device parts reject it with -174 —
         // retry with the 32-slot V2 stamp 0x109C8 (same QI id).
+        #[allow(clippy::large_enum_variant)] // caller-local handshake buffer, never stored
         enum Raw {
             V1(NV_GPU_CLOCK_ADC_DEVICES_STATUS),
             V2(clock::undocumented::NV_GPU_CLOCK_ADC_DEVICES_STATUS_V2),
@@ -8655,7 +8662,7 @@ impl PhysicalGpu {
             } {
                 0 => Raw::V1(v1),
                 st_v1 => {
-                    if st_v1 as i32 == -174 {
+                    if st_v1 == -174 {
                         let mut v2 =
                             clock::undocumented::NV_GPU_CLOCK_ADC_DEVICES_STATUS_V2::default();
                         v2.set_mask(info.mask);

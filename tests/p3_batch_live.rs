@@ -13,7 +13,7 @@ fn census(label: &str, st: i32, buf: &[u8]) {
     if st != 0 {
         println!(
             "{label}: status {} ({:?})",
-            st as i32,
+            st,
             nvapi::sys::status::Status::from_raw(st)
         );
         return;

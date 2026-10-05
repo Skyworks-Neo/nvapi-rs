@@ -20,9 +20,8 @@ use nvapi::sys::nvapi::NvVersion;
 fn dump_dwords(tag: &str, version: u32, rest: &[u8]) {
     eprintln!("== {tag} (total {} bytes) ==", 8 + rest.len());
     // full non-zero dword sweep, whole buffer
-    let mut d0 = version.to_le_bytes();
     let mut all = Vec::with_capacity(8 + rest.len());
-    all.extend_from_slice(&d0);
+    all.extend_from_slice(&version.to_le_bytes());
     all.extend_from_slice(rest);
     for off in (0..all.len() / 4 * 4).step_by(4) {
         let d = u32::from_le_bytes(all[off..off + 4].try_into().unwrap());
