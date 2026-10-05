@@ -760,6 +760,13 @@ fn e1c_vf_points_offset_sweep() {
 ///       prints every changed absolute offset;
 ///   B2  raw arm — patch the proven delta slot (88+36*5) to 55555 directly,
 ///       raw SET, retention check, restore.
+///   B3  inventory gating — point 140 sits BEYOND the driver's returned
+///       point bitmap (132/133 bits); raw arm (mask untouched) then API
+///       arm (mask bit 140 set by set_vfp_table) — does an out-of-
+///       inventory delta stick, and does the bitmap grow?
+///   B4  entry+0 field validation space — e1c proved 15000 here → -1;
+///       probe {1, 2, 8, 9, 255} at a mid-table entry to map what the
+///       driver accepts (flag vs enum vs range check).
 ///
 /// Run (read-only):
 ///   cargo test -p nvapi --test xocd_gap_probe_live e7 -- --ignored --nocapture --test-threads=1
@@ -979,6 +986,105 @@ fn e7_raw_delta_forensics() {
         } else {
             say!("B2 SET rejected ({st}) — table unchanged; skipping restore");
         }
+
+        // B3b — out-of-inventory delta, raw arm (mask untouched). The driver
+        // returned a point bitmap whose highest bit is < 140 on these cards.
+        let p2 = 140usize;
+        let d2 = delta_base + 36 * p2;
+        let mask_bits: u32 = base[4..36]
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()).count_ones())
+            .sum();
+        say!(
+            "B3 inventory: returned point bitmap = {mask_bits} bits; p{p2} slot abs {d2} currently {}",
+            rd(&base, d2)
+        );
+        let mut m2 = base.clone();
+        m2[d2..d2 + 4].copy_from_slice(&60_001u32.to_le_bytes());
+        let st = set_raw(&gpu, &m2);
+        say!("B3b raw patch {d2}=60001 (mask untouched) → SET {st:?}");
+        if st == 0 {
+            let (_, after) = get_raw(&gpu);
+            say!("B3b retention at {d2}: {}", rd(&after, d2));
+            let dd = diff4(&base, &after);
+            say!("B3b raw GET diff ({} dwords): {}", dd.len(), fmt_diff(&dd));
+            assert_eq!(set_raw(&gpu, &base), 0, "B3b restore SET failed");
+            let (_, back) = get_raw(&gpu);
+            assert!(back == base, "B3b restore mismatch");
+            say!("B3b restore verify: OK (byte-identical)");
+        } else {
+            say!("B3b SET rejected ({st}) — out-of-inventory delta refused outright");
+        }
+
+        // B4 — entry+0 field validation space (e1c proved 15000 is rejected
+        // here; which values ARE accepted?)
+        let e0x = 68 + 36 * 10;
+        say!(
+            "B4 entry+0 probe at abs {e0x} (currently {})",
+            rd(&base, e0x)
+        );
+        let mut b4_any = false;
+        for v in [1u32, 2, 8, 9, 255] {
+            let mut m3 = base.clone();
+            m3[e0x..e0x + 4].copy_from_slice(&v.to_le_bytes());
+            let st = set_raw(&gpu, &m3);
+            if st == 0 {
+                b4_any = true;
+                let (_, after) = get_raw(&gpu);
+                say!("B4 entry+0 = {v}: SET ok, readback {}", rd(&after, e0x));
+            } else {
+                say!("B4 entry+0 = {v}: SET rejected ({st})");
+            }
+        }
+        if b4_any {
+            assert_eq!(set_raw(&gpu, &base), 0, "B4 restore SET failed");
+            let (_, back) = get_raw(&gpu);
+            say!(
+                "B4 restore verify: {}",
+                if back == base {
+                    "OK (byte-identical)"
+                } else {
+                    "MISMATCH!"
+                }
+            );
+            assert!(back == base, "B4 restore mismatch");
+        } else {
+            say!("B4 all SETs rejected — table unchanged; skipping restore");
+        }
+
+        // B3a — the same out-of-inventory point through the API path; this
+        // one flips mask bit 140 too, so it runs LAST and report-only (a
+        // sticky mask bit would be a finding, not corruption).
+        match gpu.set_vfp_table(
+            &info,
+            core::iter::once((p2, Kilohertz2Delta(60_000))),
+            core::iter::empty::<(usize, Kilohertz2Delta)>(),
+        ) {
+            Ok(()) => {
+                let (_, after) = get_raw(&gpu);
+                let bits2: u32 = after[4..36]
+                    .chunks_exact(4)
+                    .map(|w| u32::from_le_bytes(w.try_into().unwrap()).count_ones())
+                    .sum();
+                say!(
+                    "B3a API p{p2}=+30MHz accepted: slot {} ; bitmap now {bits2} bits (was {mask_bits})",
+                    rd(&after, d2)
+                );
+                let dd = diff4(&base, &after);
+                say!("B3a raw GET diff ({} dwords): {}", dd.len(), fmt_diff(&dd));
+            }
+            Err(e) => say!("B3a API SET rejected ({e:?})"),
+        }
+        let st = set_raw(&gpu, &base);
+        let (_, back) = get_raw(&gpu);
+        say!(
+            "B3a restore: SET {st:?}, verify {}",
+            if back == base {
+                "OK (byte-identical)"
+            } else {
+                "not byte-identical — mask bit may be sticky (report-only)"
+            }
+        );
     } else {
         say!("phase B skipped: mutating probe — set NVOC_ALLOW_VF_WRITE_PROBE=1 to run");
     }
