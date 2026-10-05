@@ -1,0 +1,87 @@
+//! VoltRails control 槽位 A/B 探针(2026-10-06,mVolt+ 交叉确认后落)。
+//!
+//! 背景:mVolt+ 以 `--nvvdd/--msvdd-offsets VMIN,REL,ALT[,OV]` 编辑电压策略
+//! 偏移(VMIN=最低电压策略,REL=可靠性墙,ALT/OP=Vop,OV=过压顶),而我们只
+//! 接线了 control 条目 payload 槽 0(µV offset)。本探针对槽 1..6 逐槽做
+//! 「+step 扰动 → 读回 → 观测 status p0_min_hold/effective_wall 是否跟随 →
+//! 恢复」,把 槽位→语义 映射表钉死。
+//!
+//! 安全口径:电压策略偏移面(与 set-volt-rail-limit 同一控制面),步进取
+//! VoltDevices 报告的 step(典型 6.25 mV),每槽即改即还原;恢复失败响亮报错。
+//!
+//! Run: cargo test -p nvapi --test volt_rails_slot_probe_live -- --ignored --nocapture
+
+#![allow(unused_must_use)]
+
+use nvapi::PhysicalGpu;
+
+#[test]
+#[ignore]
+fn volt_rails_slot_mapping_probe() {
+    nvapi::initialize().expect("init");
+    let gpus = PhysicalGpu::enumerate().expect("enumerate");
+    let gpu = gpus.first().expect("no gpu");
+    println!("GPU: {:?}", gpu.full_name());
+
+    let before = gpu.volt_rails().expect("volt_rails");
+    println!(
+        "rail_mask=0x{:08X}, control entries={}, status entries={}",
+        before.rail_mask,
+        before.control.len(),
+        before.status.len()
+    );
+    for entry in &before.control {
+        println!(
+            "  ctrl rail{} type{}: {:?}",
+            entry.rail_bit, entry.entry_type, entry.values
+        );
+    }
+    for entry in &before.status {
+        println!(
+            "  stat rail{} type{}: {:?}",
+            entry.rail_bit, entry.entry_type, entry.values
+        );
+    }
+
+    // 电压域步长(volt_devices;失败用 6250 µV 兜底 = 常见 6.25 mV step)
+    let step = gpu
+        .volt_devices()
+        .ok()
+        .and_then(|devices| devices.first().map(|d| d.step_uV))
+        .filter(|step| *step > 0)
+        .unwrap_or(6250);
+    println!("step = {step} uV");
+
+    for entry in &before.control {
+        let rail = entry.rail_bit;
+        let original = entry.values;
+        for slot in 1..original.len() {
+            let perturbed = original[slot].wrapping_add(step as i32);
+            println!(
+                "--- rail{rail} slot{slot}: {} -> {} ---",
+                original[slot], perturbed
+            );
+            match gpu.set_volt_rail_slot(rail, slot, perturbed) {
+                Ok(retained) => {
+                    println!("    SET retained={retained}");
+                    let after = gpu.volt_rails().expect("volt_rails after");
+                    for se in &after.status {
+                        if se.rail_bit == rail {
+                            println!("    status after: {:?}", se.values);
+                        }
+                    }
+                    // restore
+                    match gpu.set_volt_rail_slot(rail, slot, original[slot]) {
+                        Ok(back) => println!("    restored={back}"),
+                        Err(err) => panic!(
+                            "rail{rail} slot{slot} 恢复失败({err:?})——手工写回 {}!",
+                            original[slot]
+                        ),
+                    }
+                }
+                Err(err) => println!("    SET refused: {err:?}"),
+            }
+        }
+    }
+    println!("DONE — 槽位→语义以「status 哪个位跟随扰动」判定");
+}

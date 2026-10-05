@@ -1785,7 +1785,29 @@ impl PhysicalGpu {
     /// Returns the value the driver actually retained.
     #[allow(non_snake_case)] // uV suffix matches the sys-layer field naming
     pub fn set_volt_rail_value(&self, rail_bit: u32, value_uV: i32) -> crate::Result<i32> {
-        trace!("gpu.set_volt_rail_value({rail_bit}, {value_uV})");
+        self.set_volt_rail_slot(rail_bit, 0, value_uV)
+    }
+
+    /// Generalized [`Self::set_volt_rail_value`]: write payload **slot**
+    /// `0..6` of one rail's control entry.
+    ///
+    /// Slot semantics (mVolt+ cross-reference, 2026-10-06): slot 0 = the µV
+    /// operating offset we already expose; the remaining slots are the
+    /// unwired policy offsets mVolt+ edits as `VMIN / REL / ALT(OP) / OV`
+    /// (min-voltage policy, reliability wall, max-operating Vop, overvoltage
+    /// ceiling). Which index is which is NOT yet pinned — map it with the
+    /// slot-probe live test before exposing anything beyond slot 0.
+    #[allow(non_snake_case)]
+    pub fn set_volt_rail_slot(
+        &self,
+        rail_bit: u32,
+        slot: usize,
+        value_uV: i32,
+    ) -> crate::Result<i32> {
+        if slot >= power::undocumented::ctrl_entry::VALUES_LEN {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        trace!("gpu.set_volt_rail_slot({rail_bit}, {slot}, {value_uV})");
         use crate::sys::api::{
             NvAPI_GPU_VoltVoltRailsGetControl, NvAPI_GPU_VoltVoltRailsSetControl,
         };
@@ -1806,8 +1828,8 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsGetControl, st)
             .map_err(crate::Error::from)?;
 
-        // patch payload index 0 (entry byte +76, dword units relative to `rest`)
-        let off = ctrl_entry::STRIDE * dense + ctrl_entry::VALUES - 8;
+        // patch payload slot k (entry byte +76 + 4k, dword units relative to `rest`)
+        let off = ctrl_entry::STRIDE * dense + ctrl_entry::VALUES - 8 + slot * 4;
         let dst = control
             .rest
             .get_mut(off..off + 4)
@@ -1819,7 +1841,7 @@ impl PhysicalGpu {
         crate::status_result(sys::Api::NvAPI_GPU_VoltVoltRailsSetControl, st)
             .map_err(crate::Error::from)?;
 
-        // readback: fresh seeded GET, compare payload index 0
+        // readback: fresh seeded GET, compare the same slot
         let mut verify = NV_GPU_VOLT_RAILS_CONTROL::default();
         verify.seed_from_info(&info);
         if legacy_v1 {
@@ -1832,7 +1854,7 @@ impl PhysicalGpu {
         let retained = verify
             .entries()
             .find(|(bit, _, _)| *bit == rail_bit)
-            .map(|(_, _, values)| values[0])
+            .map(|(_, _, values)| values[slot])
             .ok_or(crate::Error::ArgumentRange(Default::default()))?;
         if retained != value_uV {
             // "Driver did not retain requested value" (melonVolt's wording)
