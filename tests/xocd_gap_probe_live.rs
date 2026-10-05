@@ -226,6 +226,39 @@ fn e3_power_channels() {
         write_json("e3-power-channels.json", &json);
     }
 
+    // Round 4: LEGACY stamp matrix (kernel RE, 2026-10-05). Byte-scanning
+    // nvlddmkm 610 shows ZERO true references to any family stamp
+    // (0x10A4C/0x10298 hit .pdata unwind data; 0x11F10 was a modrm+disp
+    // misalignment of `mov rcx,[rax+rdx+0x11F]`; 0x12720 absent entirely)
+    // — the struct-version gate for this family is entirely USER-SIDE
+    // (nvapi64). nvapi64 R465's switch accepted {0x10298, 0x106DC, 0x10A4C,
+    // 0x11F10}; the R538+ 0x12720 was added later. Test which stamps the
+    // 610.47 nvapi64 still accepts on THIS generation (GET-only): a
+    // populated legacy buffer is the pre-50-series OCP write-path candidate.
+    {
+        let stamps: &[(u32, &str)] = &[
+            (0x0001_0298, "0x10298 v1|664B"),
+            (0x0001_06DC, "0x106DC v1|1756B (R465 136B-stride)"),
+            (0x0001_0A4C, "0x10A4C v1|2636B (compact, 50-series)"),
+            (0x0001_1F10, "0x11F10 v1|7952B"),
+            (0x0001_2720, "0x12720 v1|10016B (R538+)"),
+        ];
+        for &(stamp, label) in stamps {
+            let size = (stamp & 0xFFFF) as usize;
+            let mut b: Vec<u8> = vec![0u8; size];
+            b[..4].copy_from_slice(&stamp.to_ne_bytes());
+            b[4..8].copy_from_slice(&0x0000_7FFFu32.to_ne_bytes());
+            let st = unsafe {
+                NvAPI_GPU_ClientTgpWattGetStatus(*gpu.handle(), b.as_mut_ptr() as *mut _)
+            };
+            let nonzero = b[8..].chunks_exact(4).filter(|c| *c != [0; 4]).count();
+            eprintln!("legacy-stamp {label}: status={st:?} nonzero_dwords={nonzero}");
+            if st == 0 && nonzero > 0 {
+                eprintln!("  head[128]: {}", hex_head(&b, 128));
+            }
+        }
+    }
+
     // Round 2: 10016B 0x12720 control — default-value dword scan against
     // the info channels (skip sentinels def==max==5001000/1001000).
     // Round-2 live fix (both machines returned an all-zero payload): the
