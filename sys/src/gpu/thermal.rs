@@ -533,6 +533,13 @@ pub mod undocumented {
         /// Undocumented (NDA-private, ID 0x65fe3aad). Thermal-channel live
         /// readings (the STATUS half of the ThermChannel pair). Pass GetInfo's
         /// `channel_mask`; read `channel[priChIdx[type]]` for each type's temp.
+        ///
+        /// Index→semantics map from the xOCD RE (NvApiSource.cs:1078-1120):
+        /// values are i32 / 256 = °C (8.8 fixed point) at 40+4*i; idx 0 =
+        /// GPU (cross-check against the coarse sensor, ≤5 °C delta), idx 1
+        /// = hotspot (invalid on RTX 50), memory junction = idx 2 (RTX 50)
+        /// / 7 (RTX 40) / 9 (older). Discover populated indexes via the
+        /// mask before trusting any fixed index.
         pub unsafe fn NvAPI_GPU_ThermChannelGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pStatus: *mut NV_GPU_THERMAL_THERM_CHANNEL_STATUS) -> NvAPI_Status;
     }
 

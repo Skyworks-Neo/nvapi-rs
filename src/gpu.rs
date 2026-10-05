@@ -2362,6 +2362,618 @@ impl PhysicalGpu {
         })
     }
 
+    // ==================================================================
+    // xOCD gap-fill wrappers (2026-10-05 audit — see
+    // docs/reverse-engineering/nvapi/xocd-oc-tool-audit.md §4-§6 and
+    // reverse/xocd/agentA-control.md for the decomp evidence). Every write
+    // below follows the house recipe: GET snapshot → patch a copy → SET →
+    // fresh GET readback → restore the snapshot on any mismatch.
+    // ==================================================================
+
+    /// GET_CONTROL probe for the ClkDomains V2 block (mask-seeded, V2-magic
+    /// gated). Shared by the typed xOCD wrappers; mirrors the probe stage of
+    /// [`Self::set_clk_domain_offset`].
+    fn clk_domains_control_v2_probe(
+        &self,
+    ) -> crate::Result<clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2> {
+        use crate::sys::api::NvAPI_GPU_ClockClkDomainsGetControl;
+        use clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2;
+
+        let mut probe = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2::default();
+        for &m in &[0x3FFu32, 0xFFu32] {
+            probe.set_mask(m);
+            let st = unsafe {
+                NvAPI_GPU_ClockClkDomainsGetControl(self.0, ptr::from_mut(&mut probe).cast())
+            };
+            if crate::status_result(sys::Api::NvAPI_GPU_ClockClkDomainsGetControl, st).is_ok()
+                && probe.version.data == 0x261A4
+            {
+                return Ok(probe);
+            }
+        }
+        Err(crate::Error::Nvapi(crate::NvapiError::new(
+            sys::Api::NvAPI_GPU_ClockClkDomainsGetControl,
+            Status::NotSupported,
+        )))
+    }
+
+    /// Resolve the (freq_kHz, volt_µV) VALUES[] slot pair for a domain's
+    /// control record per the xOCD field map (record-type dispatched; see
+    /// sys `clk_ctrl_entry_v2_semantics`). Assumes the normal routed map
+    /// (privateId != 0); the GPC-class shifted variant needs the
+    /// 0x57B5A5DF routing table and is not auto-detected.
+    pub fn clk_domain_field_slots(&self, domain_bit: u32) -> crate::Result<(usize, usize)> {
+        let probe = self.clk_domains_control_v2_probe()?;
+        probe
+            .xocd_semantic_slots(domain_bit, false)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))
+    }
+
+    /// Typed per-domain frequency-offset write (kHz) — resolves the record's
+    /// freq slot by type (0x0F → VALUES[2], else VALUES[0]) and routes
+    /// through [`Self::set_clk_domain_offset`]'s full RMW + readback +
+    /// rollback recipe. DANGEROUS GPU clock write.
+    pub fn set_clk_domain_freq_offset(
+        &self,
+        domain_bit: u32,
+        offset_khz: i32,
+        temporary: bool,
+    ) -> crate::Result<crate::clock::ClkDomainControlEntry> {
+        trace!("gpu.set_clk_domain_freq_offset({domain_bit}, {offset_khz}, temporary={temporary})");
+        let slots = self.clk_domain_field_slots(domain_bit)?;
+        if slots.0 == usize::MAX {
+            // privateId==0 / non-0x0F records keep freq at rec+264, outside
+            // the VALUES[] window — not reachable through the slot API.
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        self.set_clk_domain_offset(domain_bit, offset_khz, slots.0 as u32, temporary)
+    }
+
+    /// Typed per-domain voltage-demand write (µV) — XBAR/SYS/VIDEO(50-series)
+    /// core-rail demand offsets, xOCD `SetVoltageDemand`. Clamped to the
+    /// interface-native ±500 000 µV (±500 mV) BEFORE the write; the slot is
+    /// resolved by record type (0x0F → VALUES[4], else VALUES[1]). The full
+    /// RMW + readback + rollback recipe applies. DANGEROUS voltage write.
+    pub fn set_clk_domain_voltage_demand(
+        &self,
+        domain_bit: u32,
+        demand_uv: i32,
+        temporary: bool,
+    ) -> crate::Result<crate::clock::ClkDomainControlEntry> {
+        trace!(
+            "gpu.set_clk_domain_voltage_demand({domain_bit}, {demand_uv} µV, temporary={temporary})"
+        );
+        let clamped = demand_uv.clamp(
+            -clock::undocumented::clk_ctrl_entry_v2_semantics::MAX_VOLT_DEMAND_UV,
+            clock::undocumented::clk_ctrl_entry_v2_semantics::MAX_VOLT_DEMAND_UV,
+        );
+        if clamped != demand_uv {
+            warn!(
+                "set_clk_domain_voltage_demand: {demand_uv} µV clamped to {clamped} µV (±500 mV)"
+            );
+        }
+        let slots = self.clk_domain_field_slots(domain_bit)?;
+        self.set_clk_domain_offset(domain_bit, clamped, slots.1 as u32, temporary)
+    }
+
+    /// TopRels GET_CONTROL snapshot with the seed mask + exactly-one-relation
+    /// semantic gate (fails closed when the GPC→XBAR record is not unique).
+    fn top_rels_control_seeded(
+        &self,
+    ) -> crate::Result<clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL> {
+        use crate::sys::api::{
+            NvAPI_GPU_ClockClkPropTopRelsGetControl, NvAPI_GPU_ClockClkPropTopRelsGetInfo,
+        };
+        use clock::undocumented::{
+            NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL,
+            NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO,
+        };
+
+        let mut info = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO::zeroed();
+        info.version = NvVersion::with_version(clock::undocumented::clk_top_rels_info::MAGIC);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetInfo(self.0, ptr::from_mut(&mut info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetInfo, st)
+            .map_err(crate::Error::from)?;
+        if info.find_gpc_xbar_records().len() != 1 {
+            return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl,
+                Status::NotSupported,
+            )));
+        }
+
+        let mut ctrl = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::zeroed();
+        ctrl.seed_mask();
+        ctrl.version = NvVersion::with_version(clock::undocumented::clk_top_rels_control::MAGIC);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut ctrl).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)
+            .map_err(crate::Error::from)?;
+        Ok(ctrl)
+    }
+
+    /// Current top-relation ratio: (resolved absolute offset, raw U16.16).
+    /// Semantics NOTE: our NvpwrControl RE reads this record as the GPC→XBAR
+    /// ratio (Blackwell default raw 0xE660 ≈ 0.9); xOCD names the same field
+    /// "MSVDD clock ratio" with a 0.7–1.2 envelope — the record-0 edge
+    /// identity is board/generation-dependent (audit contradiction ③) —
+    /// treat the value as "the clock-tree relation ratio" until E5 lands.
+    pub fn top_rels_ratio(&self) -> crate::Result<(usize, u32)> {
+        trace!("gpu.top_rels_ratio()");
+        let ctrl = self.top_rels_control_seeded()?;
+        ctrl.ratio_raw()
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))
+    }
+
+    /// Write the top-relation ratio (raw U16.16) with the mandated recipe:
+    /// snapshot → resolve offset → patch a COPY → SET → fresh GET →
+    /// exact-dword readback → restore the full snapshot on mismatch.
+    /// DANGEROUS driver-wide clock-tree write (no privilege gate).
+    pub fn set_top_rels_ratio_raw(&self, raw: u32) -> crate::Result<u32> {
+        trace!("gpu.set_top_rels_ratio_raw({raw:#x})");
+        use crate::sys::api::NvAPI_GPU_ClockClkPropTopRelsSetControl;
+        if raw > clock::undocumented::clk_top_rels_control::MAX_SANE_RAW {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let snapshot = self.top_rels_control_seeded()?;
+        let (off, current) = snapshot
+            .ratio_raw()
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        if current == raw {
+            return Ok(raw);
+        }
+        let mut modified = snapshot;
+        modified
+            .set_ratio_raw(off, raw)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsSetControl(self.0, ptr::from_ref(&modified).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsSetControl, st)
+            .map_err(crate::Error::from)?;
+
+        let verify = self.top_rels_control_seeded()?;
+        let readback = verify.u32_at(off);
+        if readback != Some(raw) {
+            // driver did not retain — restore the original snapshot (best effort).
+            let _ = unsafe {
+                NvAPI_GPU_ClockClkPropTopRelsSetControl(self.0, ptr::from_ref(&snapshot).cast())
+            };
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        Ok(raw)
+    }
+
+    /// Ratio convenience wrapper over [`Self::set_top_rels_ratio_raw`]:
+    /// clamps to xOCD's hard envelope 0.7..=1.2, encodes U16.16 (0.9 keeps
+    /// the exact hardware literal 0xE660), returns the readback as f64.
+    pub fn set_top_rels_ratio(&self, ratio: f64) -> crate::Result<f64> {
+        trace!("gpu.set_top_rels_ratio({ratio})");
+        if !(0.7..=1.2).contains(&ratio) {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let raw =
+            clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::encode_ratio(ratio)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        let readback = self.set_top_rels_ratio_raw(raw)?;
+        Ok(readback as f64 / 65536.0)
+    }
+
+    /// Public Pstates20 GET with the version cascade, returning the raw
+    /// struct + the version stamp the driver accepted (3 = 0x31CF8, 2 =
+    /// 0x21CF8). Mirrors [`Self::pstates`] stamping.
+    fn pstates20_raw_stamped(&self) -> crate::Result<(pstate::NV_GPU_PERF_PSTATES20_INFO, u16)> {
+        for ver in [3u16, 2u16] {
+            let mut raw = unsafe { std::mem::zeroed::<pstate::NV_GPU_PERF_PSTATES20_INFO>() };
+            raw.version = NvVersion::new(size_of::<pstate::NV_GPU_PERF_PSTATES20_INFO>(), ver);
+            let st =
+                unsafe { sys::api::NvAPI_GPU_GetPstates20(self.0, ptr::from_mut(&mut raw).cast()) };
+            if crate::status_result(sys::Api::NvAPI_GPU_GetPstates20, st).is_ok() {
+                return Ok((raw, ver));
+            }
+        }
+        Err(crate::Error::Nvapi(crate::NvapiError::new(
+            sys::Api::NvAPI_GPU_GetPstates20,
+            Status::NotSupported,
+        )))
+    }
+
+    /// Write one Pstate-20 clock delta via the public SetPstates20 RMW
+    /// (xOCD `ApplyClockOffset` NVAPI fallback; RTX 50 core path). `pstate_index`
+    /// is the 0-based record (P0 = 0), `domain` the public clock domain
+    /// (GPC=0 / MEM=4 / PROC=7 / VIDEO=8). GET (stamp cascade) → locate the
+    /// record's domain entry → clamp into its reported [min,max] → patch →
+    /// SET with the SAME stamp → fresh GET readback → restore on mismatch.
+    /// DANGEROUS clock write.
+    pub fn set_pstate_clock_offset(
+        &self,
+        pstate_index: usize,
+        domain: ClockDomain,
+        delta_khz: i32,
+    ) -> crate::Result<i32> {
+        trace!("gpu.set_pstate_clock_offset(pstate[{pstate_index}], {domain:?}, {delta_khz} kHz)");
+        use crate::sys::api::NvAPI_GPU_SetPstates20;
+
+        let (snapshot, ver) = self.pstates20_raw_stamped()?;
+        if pstate_index >= snapshot.numPstates as usize {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let rec = &snapshot.pstates[pstate_index];
+        let entry = rec
+            .clocks
+            .iter()
+            .take(snapshot.numClocks as usize)
+            .find(|c| c.domainId.repr() == domain.repr())
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        let lo = entry.freqDelta_kHz.min;
+        let hi = entry.freqDelta_kHz.max;
+        let clamped = if hi > lo {
+            delta_khz.clamp(lo, hi)
+        } else {
+            delta_khz
+        };
+
+        let mut modified = snapshot;
+        let entry = modified.pstates[pstate_index]
+            .clocks
+            .iter_mut()
+            .find(|c| c.domainId.repr() == domain.repr())
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        entry.freqDelta_kHz.value = clamped;
+
+        let st = unsafe { NvAPI_GPU_SetPstates20(self.0, ptr::from_ref(&modified).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_SetPstates20, st).map_err(crate::Error::from)?;
+
+        // Readback with the SAME stamp that GET/SET accepted.
+        let mut verify = unsafe { std::mem::zeroed::<pstate::NV_GPU_PERF_PSTATES20_INFO>() };
+        verify.version = NvVersion::new(size_of::<pstate::NV_GPU_PERF_PSTATES20_INFO>(), ver);
+        let st =
+            unsafe { sys::api::NvAPI_GPU_GetPstates20(self.0, ptr::from_mut(&mut verify).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_GetPstates20, st).map_err(crate::Error::from)?;
+        let retained = verify
+            .pstates
+            .get(pstate_index)
+            .and_then(|rec| {
+                rec.clocks
+                    .iter()
+                    .take(verify.numClocks as usize)
+                    .find(|c| c.domainId.repr() == domain.repr())
+            })
+            .map(|c| c.freqDelta_kHz.value);
+        match retained {
+            Some(v) if v == clamped => Ok(v),
+            _ => {
+                // driver did not retain — restore the original snapshot (best effort).
+                let _ = unsafe { NvAPI_GPU_SetPstates20(self.0, ptr::from_ref(&snapshot).cast()) };
+                Err(crate::Error::ArgumentRange(Default::default()))
+            }
+        }
+    }
+
+    /// xOCD `ReferenceClock` isolated-P0 template write (RTX 50 core-clock
+    /// path, `ReferenceClock.cs`): a MINIMAL Pstates20 v2 request —
+    /// numPstates=1, numClocks=1, numBaseVoltages=0, P0 record holding ONE
+    /// clock entry — that the driver applies to P0 without touching the
+    /// other pstates. No RMW (the template IS the request); verify with
+    /// [`Self::pstates`]/[`Self::set_pstate_clock_offset`] readback.
+    /// DANGEROUS clock write.
+    pub fn set_p0_reference_clock_isolated(
+        &self,
+        domain: ClockDomain,
+        clock_type_single: bool,
+        value_khz: i32,
+        min_khz: i32,
+        max_khz: i32,
+    ) -> crate::NvapiResult<()> {
+        trace!(
+            "gpu.set_p0_reference_clock_isolated({domain:?}, single={clock_type_single}, {value_khz} kHz [{min_khz},{max_khz}])"
+        );
+        use crate::sys::api::NvAPI_GPU_SetPstates20;
+        use pstate::{
+            NV_GPU_PERF_PSTATE20_CLOCK_TYPE_ID, NV_GPU_PERF_PSTATES20_PARAM_DELTA,
+            NV_GPU_PERF_PSTATES20_PSTATE, NV_GPU_PSTATE20_CLOCK_ENTRY_V1,
+        };
+
+        let mut req = unsafe { std::mem::zeroed::<pstate::NV_GPU_PERF_PSTATES20_INFO>() };
+        req.version = NvVersion::new(size_of::<pstate::NV_GPU_PERF_PSTATES20_INFO>(), 2);
+        req.numPstates = 1;
+        req.numClocks = 1;
+        req.numBaseVoltages = 0;
+        let mut rec: NV_GPU_PERF_PSTATES20_PSTATE = unsafe { std::mem::zeroed() };
+        rec.pstateId = pstate::NV_GPU_PERF_PSTATE_ID::P0;
+        rec.bIsEditable = true.into();
+        rec.clocks[0] = NV_GPU_PSTATE20_CLOCK_ENTRY_V1 {
+            domainId: domain.into(),
+            typeId: if clock_type_single {
+                NV_GPU_PERF_PSTATE20_CLOCK_TYPE_ID::Single
+            } else {
+                NV_GPU_PERF_PSTATE20_CLOCK_TYPE_ID::Range
+            },
+            bIsEditable: true.into(),
+            freqDelta_kHz: NV_GPU_PERF_PSTATES20_PARAM_DELTA {
+                value: value_khz,
+                min: min_khz,
+                max: max_khz,
+            },
+            data: unsafe { std::mem::zeroed() },
+        };
+        req.pstates[0] = rec;
+        let st = unsafe { NvAPI_GPU_SetPstates20(self.0, ptr::from_ref(&req).cast()) };
+        crate::status_result(sys::Api::NvAPI_GPU_SetPstates20, st)?;
+        Ok(())
+    }
+
+    /// OCP / power-channel policy descriptors (xOCD info v4, stamp
+    /// (4<<16)+2672 = 264816). Same ID family as [`Self::tgp_watt_range`]
+    /// (0x67F31384) but the xOCD layout: per-channel
+    /// (policyId, subtype, min, default, max) with raw mA on the
+    /// policyId-19 OCP channels. Empty on cards/drivers without the table.
+    pub fn power_channel_policies(&self) -> crate::Result<Vec<crate::power::PowerChannelPolicy>> {
+        trace!("gpu.power_channel_policies()");
+        use crate::sys::api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate;
+        use power::undocumented::NV_GPU_CLIENT_POWER_CHANNELS_INFO;
+
+        let mut buf: Vec<u8> = vec![0u8; std::mem::size_of::<NV_GPU_CLIENT_POWER_CHANNELS_INFO>()];
+        let ver = <NV_GPU_CLIENT_POWER_CHANNELS_INFO as sys::nvapi::StructVersion>::NVAPI_VERSION;
+        buf[..4].copy_from_slice(&ver.data.to_ne_bytes());
+        unsafe {
+            let status =
+                NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate(self.0, buf.as_mut_ptr() as *mut _);
+            crate::status_result(
+                sys::Api::NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate,
+                status,
+            )
+            .map_err(crate::Error::from)?;
+        }
+        let info = unsafe { &*(buf.as_ptr() as *const NV_GPU_CLIENT_POWER_CHANNELS_INFO) };
+        let mut out = Vec::new();
+        for bit in 0..15u32 {
+            if info.mask & (1 << bit) == 0 {
+                continue;
+            }
+            let (policy_id, subtype) = info
+                .channel_id(bit as usize)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            let (min_raw, default_raw, max_raw) = info
+                .channel_range(bit as usize)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            out.push(crate::power::PowerChannelPolicy {
+                index: bit,
+                policy_id,
+                subtype,
+                min_raw,
+                default_raw,
+                max_raw,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Locate the NVVDD / MSVDD OCP channels in
+    /// [`Self::power_channel_policies`] — exact (19,13)/(19,12) first,
+    /// legacy (13,19)/(14,19) fallback (xOCD `ParsePowerChannelPolicies`).
+    pub fn ocp_channels(
+        &self,
+    ) -> crate::Result<(
+        Option<crate::power::PowerChannelPolicy>,
+        Option<crate::power::PowerChannelPolicy>,
+    )> {
+        use power::undocumented::power_channels_info_v4;
+        let all = self.power_channel_policies()?;
+        let pick = |exact: (u32, u32), legacy: (u32, u32)| {
+            all.iter()
+                .find(|c| (c.policy_id, c.subtype) == exact)
+                .or_else(|| all.iter().find(|c| (c.policy_id, c.subtype) == legacy))
+                .copied()
+        };
+        Ok((
+            pick(
+                power_channels_info_v4::OCP_NVVDD,
+                power_channels_info_v4::OCP_NVVDD_LEGACY,
+            ),
+            pick(
+                power_channels_info_v4::OCP_MSVDD,
+                power_channels_info_v4::OCP_MSVDD_LEGACY,
+            ),
+        ))
+    }
+
+    /// Raw GET of the power-channel control block (0x8B3E7343, xOCD compact
+    /// stamp 0x10A4C = v1|2636). Values are returned per populated info
+    /// entry; `compact_geometry` says which offset map the driver filled
+    /// (true = xOCD 40B stride, false = R465 136B stride, None = ambiguous
+    /// — see `NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::detect_compact_geometry`).
+    pub fn power_channel_control(
+        &self,
+        policies: &[crate::power::PowerChannelPolicy],
+    ) -> crate::Result<(Vec<u32>, Option<bool>)> {
+        trace!("gpu.power_channel_control({} policies)", policies.len());
+        use crate::sys::api::NvAPI_GPU_ClientTgpWattGetStatus;
+        use power::undocumented::NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1;
+
+        let mut buf: Vec<u8> =
+            vec![0u8; std::mem::size_of::<NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>()];
+        buf[..4].copy_from_slice(&0x0010_0A4Cu32.to_ne_bytes());
+        unsafe {
+            let status = NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)
+                .map_err(crate::Error::from)?;
+        }
+        let ctrl = unsafe { &*(buf.as_ptr() as *const NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1) };
+        let triplets: Vec<(u32, u32, u32)> = policies
+            .iter()
+            .map(|p| (p.min_raw, p.default_raw, p.max_raw))
+            .collect();
+        let compact = ctrl.detect_compact_geometry(&triplets);
+        let values = match compact {
+            Some(true) => (0..policies.len())
+                .map(|i| ctrl.channel_value_compact(i).unwrap_or(0xFFFF_FFFF))
+                .collect(),
+            Some(false) => (0..policies.len())
+                .map(|i| ctrl.power_mw(i).unwrap_or(0xFFFF_FFFF))
+                .collect(),
+            // ambiguous — hand back the compact read so the caller can judge
+            None => (0..policies.len())
+                .map(|i| ctrl.channel_value_compact(i).unwrap_or(0xFFFF_FFFF))
+                .collect(),
+        };
+        Ok((values, compact))
+    }
+
+    /// Write one power-channel value (OCP current limit, raw mA) with the
+    /// full RMW recipe: info (channel lookup + [min,max] clamp) → GET
+    /// control (0x10A4C) → geometry-detect → patch → SET (0xAFFC2279) →
+    /// fresh GET readback → restore on mismatch. The xOCD hard clamp
+    /// 1000..=5001000 mA applies to policyId-19 channels. DANGEROUS
+    /// protection-limit write — raising an OCP ceiling disables a safety
+    /// net; the caller owns the risk.
+    pub fn set_power_channel_value(
+        &self,
+        policy_id: u32,
+        subtype: u32,
+        value_raw: u32,
+    ) -> crate::Result<u32> {
+        trace!("gpu.set_power_channel_value(({policy_id},{subtype}), {value_raw} raw)");
+        use crate::sys::api::{NvAPI_GPU_ClientTgpWattGetStatus, NvAPI_GPU_ClientTgpWattSetStatus};
+        use power::undocumented::{NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1, power_channels_info_v4};
+
+        if matches!(
+            (policy_id, subtype),
+            power_channels_info_v4::OCP_NVVDD
+                | power_channels_info_v4::OCP_MSVDD
+                | power_channels_info_v4::OCP_NVVDD_LEGACY
+                | power_channels_info_v4::OCP_MSVDD_LEGACY
+        ) && !(power_channels_info_v4::OCP_RAW_MIN..=power_channels_info_v4::OCP_RAW_MAX)
+            .contains(&value_raw)
+        {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+
+        // info: primed state + channel lookup + clamp window
+        let all = self.power_channel_policies()?;
+        let policy = all
+            .iter()
+            .find(|p| (p.policy_id, p.subtype) == (policy_id, subtype))
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+        let clamped = value_raw.max(policy.min_raw).min(policy.max_raw);
+        if clamped != value_raw {
+            warn!(
+                "set_power_channel_value: {value_raw} clamped to {clamped} (driver [{},{}])",
+                policy.min_raw, policy.max_raw
+            );
+        }
+        let index = policy.index as usize;
+
+        // GET control snapshot
+        let mut buf: Vec<u8> =
+            vec![0u8; std::mem::size_of::<NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>()];
+        buf[..4].copy_from_slice(&0x0010_0A4Cu32.to_ne_bytes());
+        unsafe {
+            let status = NvAPI_GPU_ClientTgpWattGetStatus(self.0, buf.as_mut_ptr() as *mut _);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)
+                .map_err(crate::Error::from)?;
+        }
+        let snapshot: &NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 =
+            unsafe { &*(buf.as_ptr() as *const _) };
+        let triplets: Vec<(u32, u32, u32)> = all
+            .iter()
+            .map(|p| (p.min_raw, p.default_raw, p.max_raw))
+            .collect();
+        let compact = snapshot
+            .detect_compact_geometry(&triplets)
+            .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+
+        // patch a copy at the detected geometry
+        let mut modified_buf = buf.clone();
+        let modified: &mut NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 =
+            unsafe { &mut *(modified_buf.as_mut_ptr() as *mut _) };
+        if compact {
+            modified.set_channel_value_compact(index, clamped);
+        } else {
+            let off = <NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>::ENTRY_BASE
+                + <NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>::ENTRY_STRIDE * index
+                + <NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1>::ENTRY_MW_OFF
+                - 8;
+            let slot = modified_buf
+                .get_mut(off..off + 4)
+                .ok_or_else(|| crate::Error::ArgumentRange(Default::default()))?;
+            slot.copy_from_slice(&clamped.to_le_bytes());
+            modified.mask |= 1u32 << index;
+        }
+        unsafe {
+            let status =
+                NvAPI_GPU_ClientTgpWattSetStatus(self.0, modified_buf.as_ptr() as *const _);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattSetStatus, status)
+                .map_err(crate::Error::from)?;
+        }
+
+        // readback
+        let mut verify_buf = buf.clone();
+        unsafe {
+            let status =
+                NvAPI_GPU_ClientTgpWattGetStatus(self.0, verify_buf.as_mut_ptr() as *mut _);
+            crate::status_result(sys::Api::NvAPI_GPU_ClientTgpWattGetStatus, status)
+                .map_err(crate::Error::from)?;
+        }
+        let verify: &NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 =
+            unsafe { &*(verify_buf.as_ptr() as *const _) };
+        let retained = if compact {
+            verify.channel_value_compact(index)
+        } else {
+            verify.power_mw(index)
+        };
+        match retained {
+            Some(v) if v == clamped => Ok(v),
+            _ => {
+                // driver did not retain — restore the original snapshot (best effort).
+                unsafe {
+                    let _ = NvAPI_GPU_ClientTgpWattSetStatus(self.0, buf.as_ptr() as *const _);
+                }
+                Err(crate::Error::ArgumentRange(Default::default()))
+            }
+        }
+    }
+
+    /// Full PerfClientLimits 7-domain lock snapshot (xOCD `DecodeBoostLock`):
+    /// seeds entries 0..=6 and decodes them; see
+    /// [`crate::clock::BoostLockEntry`] for the lock semantics.
+    pub fn boost_lock_snapshot(&self) -> crate::Result<Vec<crate::clock::BoostLockEntry>> {
+        trace!("gpu.boost_lock_snapshot()");
+        use crate::clock::PerfLimitId;
+        use clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS;
+
+        let mut status = NV_GPU_PERF_CLIENT_LIMITS::default();
+        let ids = [
+            PerfLimitId::Gpu,
+            PerfLimitId::GpuLowerbound,
+            PerfLimitId::Memory,
+            PerfLimitId::MemoryLowerbound,
+            PerfLimitId::Unknown_4,
+            PerfLimitId::Unknown_5,
+            PerfLimitId::Voltage,
+        ];
+        for (entry, id) in status.entries.iter_mut().zip(ids) {
+            entry.id = id.into();
+            status.count += 1;
+        }
+        let st = unsafe {
+            sys::api::NvAPI_GPU_PerfClientLimitsGetStatus(self.0, ptr::from_mut(&mut status).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_PerfClientLimitsGetStatus, st)
+            .map_err(crate::Error::from)?;
+        Ok(status
+            .entries()
+            .iter()
+            .map(|e| crate::clock::BoostLockEntry {
+                id: e.id.repr() as u32,
+                mode: e.mode.repr() as u32,
+                value: e.value,
+            })
+            .collect())
+    }
+
     /// V/F curve points from the private ClockClient V/F-POINTS read path
     /// (GetInfo 0x8895B510 → GetStatus 0x7FEE9032, RM 0x20809021/0x20809022
     /// — the article's 127-point XBAR V/F table family). GetStatus's +4..+132

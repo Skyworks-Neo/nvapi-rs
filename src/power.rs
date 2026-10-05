@@ -21,6 +21,35 @@ use crate::sys::gpu::power::undocumented::{
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+/// One (policyId, subtype)-keyed power-channel descriptor from the
+/// PowerChannels info table (0x67F31384, xOCD v4 2672B layout — see
+/// [`crate::Gpu::power_channel_policies`]). Raw units are **mA on the
+/// policyId-19 OCP channels** (NVVDD=(19,13), MSVDD=(19,12), legacy
+/// (13,19)/(14,19)); the TGP-mW interpretation covers the Dlevel channels.
+/// `default_raw` is what xOCD's UI calls the "firmware default".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct PowerChannelPolicy {
+    /// Entry index in the info table (bit position in the mask).
+    pub index: u32,
+    pub policy_id: u32,
+    pub subtype: u32,
+    pub min_raw: u32,
+    pub default_raw: u32,
+    pub max_raw: u32,
+}
+
+impl PowerChannelPolicy {
+    /// True when this channel is one of the four known OCP-current
+    /// identities (raw unit mA).
+    pub fn is_ocp_current(&self) -> bool {
+        matches!(
+            (self.policy_id, self.subtype),
+            (19, 13) | (19, 12) | (13, 19) | (14, 19)
+        )
+    }
+}
+
 /// Version-independent view of a PowerMonitor GetInfo result: the channel
 /// mask + the raw descriptor bytes (owned, so it outlives the source struct).
 /// The v1|2728 / v3|3240 / v4|6312 layouts share an identical header +

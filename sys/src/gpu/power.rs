@@ -1074,6 +1074,13 @@ pub mod undocumented {
     // The min/default/max mW range + active policy index come from a SEPARATE
     // private GetInfo: NvAPI_GPU_ClientPowerPoliciesGetInfoPrivate (0x67F31384,
     // NOT the public 0x34206D86). It returns a 347136-byte struct; see below.
+    //
+    // SEMANTIC CORRECTION (xOCD RE, 2026-10-05): the same GET/SET pair
+    // carries MORE than TGP milliwatts — the (policyId, subtype)-keyed
+    // channel table includes policyId 19 = per-rail OCP CURRENT limits in
+    // raw mA: NVVDD=(19,13)/MSVDD=(19,12) (legacy (13,19)/(14,19)). The
+    // 2636B v1|0x10A4C stamp (R465 variant below) is the layout xOCD drives
+    // with a compact 40B channel stride. See NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4.
     // ------------------------------------------------------------------
 
     /// Number of TGP-watts power-policy entries the params struct reserves.
@@ -1183,10 +1190,22 @@ pub mod undocumented {
     }
 
     impl NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1 {
-        const ENTRY_STRIDE: usize = 136;
-        const ENTRY_BASE: usize = 1756;
-        const ENTRY_MW_OFF: usize = 72;
+        pub const ENTRY_STRIDE: usize = 136;
+        pub const ENTRY_BASE: usize = 1756;
+        pub const ENTRY_MW_OFF: usize = 72;
         const ENTRIES: usize = 6;
+
+        /// xOCD geometry (`BlackwellPowerPolicy` / `ParsePowerChannelPolicies`
+        /// NvApiSource.cs:1956-1970): per-channel entries at BUFFER byte
+        /// 28+40*i with the raw value at entry+32 (⇒ buffer 60+40i,
+        /// payload 52+40i). Raw unit = **mA for the OCP channels**
+        /// (policyId 19 family; UI shows A ×1000), TGP-mW on the Dlevel
+        /// channels per the ref-tool reading — units are per-channel, see
+        /// [`NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4`].
+        pub const COMPACT_STRIDE: usize = 40;
+        pub const COMPACT_VALUE_OFF: usize = 32;
+        pub const COMPACT_ENTRY_BASE: usize = 28;
+        pub const COMPACT_ENTRIES: usize = 6;
 
         /// Power-mW of entry `index` (None = sentinel 0xFFFFFFFF / OOB).
         pub fn power_mw(&self, index: usize) -> Option<u32> {
@@ -1199,7 +1218,178 @@ pub mod undocumented {
                 .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .filter(|mw| *mw != 0xFFFF_FFFF)
         }
+
+        /// Compact-geometry channel value (xOCD layout; see
+        /// [`Self::COMPACT_STRIDE`]). None = OOB / sentinel.
+        pub fn channel_value_compact(&self, index: usize) -> Option<u32> {
+            if index >= Self::COMPACT_ENTRIES {
+                return None;
+            }
+            let off =
+                Self::COMPACT_ENTRY_BASE + Self::COMPACT_STRIDE * index + Self::COMPACT_VALUE_OFF
+                    - 8;
+            self.payload
+                .get(off..off + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .filter(|v| *v != 0xFFFF_FFFF)
+        }
+
+        /// Write the compact-geometry channel value (sets mask bit `index`).
+        pub fn set_channel_value_compact(&mut self, index: usize, raw: u32) {
+            if index >= Self::COMPACT_ENTRIES {
+                return;
+            }
+            let off =
+                Self::COMPACT_ENTRY_BASE + Self::COMPACT_STRIDE * index + Self::COMPACT_VALUE_OFF
+                    - 8;
+            if let Some(slot) = self.payload.get_mut(off..off + 4) {
+                slot.copy_from_slice(&raw.to_le_bytes());
+                self.mask |= 1u32 << index;
+            }
+        }
+
+        /// Detect which geometry the live GET filled: compare both candidate
+        /// value lists against the info-side (min, default, max) triplets —
+        /// a geometry "fits" when every entry value lands inside its
+        /// [min, max] window. Returns true for the compact (xOCD) geometry,
+        /// false for the R465 136B-stride one, None when ambiguous.
+        pub fn detect_compact_geometry(&self, triplets: &[(u32, u32, u32)]) -> Option<bool> {
+            if triplets.is_empty() {
+                return None;
+            }
+            let fits = |get: &dyn Fn(usize) -> Option<u32>| {
+                triplets
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &(lo, _def, hi))| get(i).map(|v| v >= lo && v <= hi).unwrap_or(false))
+            };
+            let compact_fits = fits(&|i| self.channel_value_compact(i));
+            let r465_fits = fits(&|i| self.power_mw(i));
+            match (compact_fits, r465_fits) {
+                (true, false) => Some(true),
+                (false, true) => Some(false),
+                _ => None,
+            }
+        }
     }
+
+    // ------------------------------------------------------------------
+    // PowerChannels policy descriptors (NDA, ID 0x67F31384) — the OCP half
+    // of the SAME interface family the ref tool drives as TGP-watts. xOCD RE
+    // (NvApiSource.cs:1715-2058): info v4, stamp (4<<16)+2672 = 264816,
+    // per-channel entries at buffer byte 56+88*i:
+    //   policyId @+4, subtype @+8, min @+16, default @+20, max @+24
+    // (raw **mA** on the policyId-19 OCP channels; UI shows A = raw/1000).
+    // Channel identity is the (policyId, subtype) pair:
+    //   NVVDD OCP = (19,13), legacy fallback (13,19);
+    //   MSVDD OCP = (19,12), legacy fallback (14,19).
+    // "firmware default" = the info `default` dword. The control half is
+    // 0x8B3E7343/0xAFFC2279 with the 0x10A4C stamp (compact geometry) — see
+    // NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::channel_value_compact. Our
+    // earlier 347124B ref-tool layout (below) is a DIFFERENT stamp of the
+    // same ID; dispatch by returned/stamped size, never assume.
+    // ------------------------------------------------------------------
+
+    nvstruct! {
+        /// PowerChannels policy/range descriptor — xOCD layout, info v4,
+        /// stamp (4<<16)+2672. Opaque except the decoded accessors below.
+        pub struct NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4 {
+            pub version: NvVersion,
+            /// channel-populated mask (xOCD requests 0x7FFF)
+            pub mask: u32,
+            /// Opaque body; per-channel entries decoded by accessors.
+            pub payload: Array<[u8; 2672 - 8]>,
+        }
+    }
+
+    /// Byte offsets / identity constants for
+    /// [`NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4`].
+    pub mod power_channels_info_v4 {
+        /// first per-channel entry (buffer-absolute)
+        pub const ENTRY_BASE: usize = 56;
+        /// per-channel entry stride
+        pub const ENTRY_STRIDE: usize = 88;
+        pub const POLICY_ID: usize = 4;
+        pub const SUBTYPE: usize = 8;
+        pub const MIN: usize = 16;
+        pub const DEFAULT: usize = 20;
+        pub const MAX: usize = 24;
+        /// NVVDD OCP (policyId, subtype)
+        pub const OCP_NVVDD: (u32, u32) = (19, 13);
+        /// NVVDD OCP legacy fallback
+        pub const OCP_NVVDD_LEGACY: (u32, u32) = (13, 19);
+        /// MSVDD OCP (policyId, subtype)
+        pub const OCP_MSVDD: (u32, u32) = (19, 12);
+        /// MSVDD OCP legacy fallback
+        pub const OCP_MSVDD_LEGACY: (u32, u32) = (14, 19);
+        /// write-value hard clamp from xOCD (raw mA)
+        pub const OCP_RAW_MIN: u32 = 1000;
+        /// write-value hard clamp from xOCD (raw mA); entries whose driver
+        /// max exceeds this are treated as unusable
+        pub const OCP_RAW_MAX: u32 = 5_001_000;
+    }
+
+    impl NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4 {
+        fn entry_field(&self, i: usize, off: usize) -> Option<u32> {
+            let abs = power_channels_info_v4::ENTRY_BASE
+                .checked_add(i.checked_mul(power_channels_info_v4::ENTRY_STRIDE)?)?
+                .checked_add(off)?;
+            let off = abs.checked_sub(8)?;
+            self.payload
+                .get(off..off + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        }
+
+        /// Channel `i` (policyId, subtype).
+        pub fn channel_id(&self, i: usize) -> Option<(u32, u32)> {
+            Some((
+                self.entry_field(i, power_channels_info_v4::POLICY_ID)?,
+                self.entry_field(i, power_channels_info_v4::SUBTYPE)?,
+            ))
+        }
+
+        /// Channel `i` (min, default, max) raw triplet (mA on OCP channels).
+        pub fn channel_range(&self, i: usize) -> Option<(u32, u32, u32)> {
+            Some((
+                self.entry_field(i, power_channels_info_v4::MIN)?,
+                self.entry_field(i, power_channels_info_v4::DEFAULT)?,
+                self.entry_field(i, power_channels_info_v4::MAX)?,
+            ))
+        }
+
+        /// Index of the channel matching `(policy_id, subtype)` among the
+        /// mask-populated entries — exact pair first, then the legacy
+        /// fallback pair when provided.
+        pub fn find_channel(
+            &self,
+            mask_bits: u32,
+            policy_id: u32,
+            subtype: u32,
+            legacy: Option<(u32, u32)>,
+        ) -> Option<usize> {
+            for exact in [true, false] {
+                if !exact && legacy.is_none() {
+                    break;
+                }
+                let (p, s) = if exact {
+                    (policy_id, subtype)
+                } else {
+                    legacy.unwrap()
+                };
+                for bit in 0..15u32 {
+                    if mask_bits & (1 << bit) == 0 {
+                        continue;
+                    }
+                    if self.channel_id(bit as usize) == Some((p, s)) {
+                        return Some(bit as usize);
+                    }
+                }
+            }
+            None
+        }
+    }
+
+    nvversion! { @=NV_GPU_CLIENT_POWER_CHANNELS_INFO NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4(4) = 2672 }
 
     nvapi! {
         /// Undocumented (NDA, ID 0x8B3E7343). Fills the TGP-watts control buffer
@@ -2070,4 +2260,65 @@ pub mod undocumented {
     nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V1_2728(1) = 2728 }
     nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V3_3240(3) = 3240 }
     nvversion! { NV_GPU_POWER_MONITOR_GET_INFO_V4(4) = 6312 }
+
+    #[cfg(test)]
+    mod xocd_power_channels_tests {
+        use super::*;
+
+        /// xOCD PowerChannels info v4 layout: entries at 56+88*i with
+        /// policyId/subtype/min/default/max — byte-replay of the (19,13)
+        /// NVVDD OCP channel.
+        #[test]
+        fn power_channels_info_v4_parse() {
+            let mut buf = NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4::zeroed();
+            buf.mask = 0x7FFF;
+            // entry 0: policyId@60, subtype@64, min@72, default@76, max@80
+            // (buffer-absolute; payload starts at buffer byte 8)
+            fn w(buf: &mut NV_GPU_CLIENT_POWER_CHANNELS_INFO_V4, abs: usize, v: u32) {
+                buf.payload[abs - 8..abs - 4].copy_from_slice(&v.to_le_bytes());
+            }
+            w(&mut buf, 60, 19);
+            w(&mut buf, 64, 13);
+            w(&mut buf, 72, 1000);
+            w(&mut buf, 76, 63_000);
+            w(&mut buf, 80, 125_000);
+            assert_eq!(buf.channel_id(0), Some((19, 13)));
+            assert_eq!(buf.channel_range(0), Some((1000, 63_000, 125_000)));
+            assert_eq!(buf.find_channel(0x7FFF, 19, 13, Some((13, 19))), Some(0));
+            // legacy fallback hit when the exact pair is absent
+            assert_eq!(buf.find_channel(0x7FFF, 19, 14, Some((13, 19))), None);
+            w(&mut buf, 60, 13);
+            w(&mut buf, 64, 19);
+            assert_eq!(buf.find_channel(0x7FFF, 19, 14, Some((13, 19))), Some(0));
+            assert!(buf.payload.len() >= 2672 - 8);
+        }
+
+        /// The 0x10A4C control carries TWO candidate geometries (xOCD
+        /// compact 40B@28 vs R465 136B@1756) — both must address distinct,
+        /// in-range dwords, and the detector must separate them.
+        #[test]
+        fn tgp_10a4c_dual_geometry() {
+            let mut c = NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::zeroed();
+            // compact entry 2 → buffer 28+80+32 = 140 → payload 132
+            c.payload[132..136].copy_from_slice(&42424u32.to_le_bytes());
+            assert_eq!(c.channel_value_compact(2), Some(42424));
+            // r465 entry 1 → buffer 1756+136+72 = 1964 → payload 1956
+            c.payload[1956..1960].copy_from_slice(&777u32.to_le_bytes());
+            assert_eq!(c.power_mw(1), Some(777));
+
+            // detector: compact inside the window, r465 outside ⇒ compact
+            let mut d = NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::zeroed();
+            d.payload[52..56].copy_from_slice(&5_000u32.to_le_bytes()); // compact ch0
+            d.payload[1820..1824].copy_from_slice(&999_999u32.to_le_bytes()); // r465 e0
+            assert_eq!(d.detect_compact_geometry(&[(1000, 5000, 9000)]), Some(true));
+            // and the mirror image
+            let mut e = NV_GPU_CLIENT_TGP_WATT_STATUS_10A4C_V1::zeroed();
+            e.payload[52..56].copy_from_slice(&999_999u32.to_le_bytes());
+            e.payload[1820..1824].copy_from_slice(&5_000u32.to_le_bytes());
+            assert_eq!(
+                e.detect_compact_geometry(&[(1000, 5000, 9000)]),
+                Some(false)
+            );
+        }
+    }
 }

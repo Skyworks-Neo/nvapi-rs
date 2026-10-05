@@ -426,6 +426,52 @@ impl ClkDomainControlEntry {
     }
 }
 
+/// One entry of the PerfClientLimits (0xE440B867) 7-domain lock table,
+/// decoded per the xOCD `DecodeBoostLock` RE (NvApiSource.cs:1228-1280 —
+/// the layout [`crate::Gpu::boost_lock_snapshot`] wraps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct BoostLockEntry {
+    /// Raw domain id: 0 = Gpu, 1 = Gpu lower-bound, 2 = Memory,
+    /// 3 = Memory lower-bound, 4/5 = pstate-pin helpers, 6 = Voltage.
+    pub id: u32,
+    /// Lock mode: 0 = default, 1 = pstate select, 2 = manual frequency,
+    /// 3 = manual voltage.
+    pub mode: u32,
+    /// Lock value: kHz on the clock ids, µV on id 6.
+    pub value: u32,
+}
+
+impl BoostLockEntry {
+    /// id ∈ {0,1} + mode 2 + value ≤ 1e7 ⇒ an external clock-RANGE lock is
+    /// active (nvidia-smi `-lgc` class). xOCD refuses to stack a voltage
+    /// lock on top of this; nvoc writers should check before locking.
+    pub fn is_clock_range_lock(&self) -> bool {
+        matches!(self.id, 0 | 1) && self.mode == 2 && self.value <= 10_000_000
+    }
+
+    /// id == 6 + mode 3 + value in 300000..=1500000 µV ⇒ the V/F voltage
+    /// lock is active (300–1500 mV sanity window from xOCD).
+    pub fn is_voltage_lock(&self) -> bool {
+        self.id == 6 && self.mode == 3 && (300_000..=1_500_000).contains(&self.value)
+    }
+}
+
+/// V/F boost-table delta scale (xOCD `NvVfApi.cs:267-313`): deltas are
+/// ×2-encoded when the 0x64B43A6A domain-range table reports exactly
+/// ±2 000 000 AND the arch is GP102/GP104-class (0x130..0x140) — nvapioc's
+/// Pascal-era convention, now with a decision rule. Caveat kept from our
+/// own RE: the R610.74 live round-trip on Ada showed PLAIN kHz (90000 →
+/// +90 MHz), so do NOT apply this blindly — gate on arch + range as done
+/// here and confirm on the target generation (audit E1/E6).
+pub fn vf_delta_scale(arch: u32, range_min: i32, range_max: i32) -> u32 {
+    if (0x130..0x140).contains(&arch) && range_min == -2_000_000 && range_max == 2_000_000 {
+        2
+    } else {
+        1
+    }
+}
+
 /// Read-only snapshot of the controllable clock-domain block from GetControl.
 /// `mask` is the controllable-domain bitmask; `entries` one per set bit.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

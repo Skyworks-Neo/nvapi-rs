@@ -252,6 +252,13 @@ pub mod undocumented {
         /// PROCESSOR(7) are read for effective clocks; the rest are research.
         /// (RTSS aliases some domains to the same value — e.g. NV==GPC==0 —
         /// those aliases are omitted; Rust enums can't repeat discriminants.)
+        ///
+        /// Domain 20/21 naming adjudication (user, 2026-10-05): 20 = Pwr
+        /// (xOCD 616.92-era names it "UPROC") and 21 = Msd — **MSD = media
+        /// subsystem domain**, which GPU-Z and nvidia-smi both surface as
+        /// "video clock". xOCD's "Video/NVD" label for private domain 21 is
+        /// treated as a 50-series reinterpretation, not authoritative; keep
+        /// the RTSS/MSD naming here.
         pub enum NV_GPU_CLOCK_DOMAIN_ID / ClockDomainId {
             NV_GPU_CLOCK_DOMAIN_GPC / Gpc = 0,
             NV_GPU_CLOCK_DOMAIN_XBAR / Xbar = 1,
@@ -1108,6 +1115,7 @@ pub mod undocumented {
     ///    — and +12 is the slot index 0..n, so trusting +12 mislabels every
     ///    row as P0..P4 → `true`.
     ///  - V100-era: header all-zero → ID at +12 → `false`.
+    ///
     /// Rule: NO header value plausible as kHz, AND every +4 value is a valid
     /// pstate id (≤ 15), AND the set is distinct (a real id set never
     /// repeats). A single-record buffer cannot prove distinctness and stays
@@ -1773,6 +1781,47 @@ pub mod undocumented {
         pub const MSVDD_UV: usize = 0x11C;
     }
 
+    /// Semantic (freq, voltage-demand) value-dword slots per control record,
+    /// from the xOCD RE (`NvApiSource.cs` SetDomainClock :3124-3144 /
+    /// SetVoltageDemand :3203-3245) reconciled with our rec+268 8-dword
+    /// VALUES[] model. xOCD's buffer-absolute offsets (slot*772 + {556,560,
+    /// 564,568,572,576}) land exactly on our VALUES[] dwords once the +292
+    /// record base is applied (VALUES[i] abs = 560+4i):
+    ///
+    /// - privateId != 0 (normal routed domains): record type != 0x0F →
+    ///   freq = VALUES[0], volt = VALUES[1]; type == 0x0F (Blackwell) →
+    ///   freq = VALUES[2] (== `clk_ctrl_entry_v2_blackwell::FREQ_KHZ`),
+    ///   volt = VALUES[4] (== `MSVDD_UV`).
+    /// - privateId == 0 (GPC-class records whose routed private domain id is
+    ///   0): the whole map shifts one dword DOWN: type != 0x0F → freq at
+    ///   rec+264 (immediately before VALUES[0], outside the VALUES[] window),
+    ///   volt = VALUES[0]; type == 0x0F → freq = VALUES[1], volt = VALUES[3].
+    ///   The privateId split needs the 0x57B5A5DF routing table to resolve
+    ///   and is NOT auto-detected here — callers pass an explicit override
+    ///   if they need it.
+    ///
+    /// Voltage demand units are µV with the interface-native ±500 000 clamp
+    /// (xOCD validates -500000..=500000 before every write).
+    pub mod clk_ctrl_entry_v2_semantics {
+        /// freq slot, type 0x0F record, privateId != 0
+        pub const FREQ_SLOT_BLACKWELL: usize = 2;
+        /// voltage-demand slot, type 0x0F record, privateId != 0
+        pub const VOLT_SLOT_BLACKWELL: usize = 4;
+        /// freq slot, non-0x0F record (e.g. Ada 0x0A), privateId != 0
+        pub const FREQ_SLOT_LEGACY: usize = 0;
+        /// voltage-demand slot, non-0x0F record, privateId != 0
+        pub const VOLT_SLOT_LEGACY: usize = 1;
+        /// freq slot, type 0x0F record, privateId == 0
+        pub const FREQ_SLOT_BLACKWELL_PID0: usize = 1;
+        /// voltage-demand slot, type 0x0F record, privateId == 0
+        pub const VOLT_SLOT_BLACKWELL_PID0: usize = 3;
+        /// freq field for privateId==0 / non-0x0F records: rec+264, one dword
+        /// before VALUES[0] (use raw record access, not `value()`)
+        pub const FREQ_OFF_PID0_PREVALUES: usize = 264;
+        /// interface-native voltage-demand clamp (±500 mV in µV)
+        pub const MAX_VOLT_DEMAND_UV: i32 = 500_000;
+    }
+
     nvstruct! {
         /// V2 control block for the private ClockClient GetControl/SetControl.
         /// Magic 0x261A4 = version 2 | size 0x61A4 = 24996 bytes. NOTE: an
@@ -1868,6 +1917,32 @@ pub mod undocumented {
         pub fn record_type_blackwell(&self, bit: u32) -> Option<bool> {
             self.record_type(bit)
                 .map(|t| t == clk_ctrl_entry_v2_blackwell::TYPE_BLACKWELL)
+        }
+
+        /// Resolve the (freq_kHz, volt_µV) VALUES[] slot pair for a record
+        /// per the xOCD field map — see
+        /// [`clk_ctrl_entry_v2_semantics`]. `private_id_zero` forces the
+        /// GPC-class shifted map (pass `true` only when the 0x57B5A5DF
+        /// routing resolved this domain's private id to 0); `None` = record
+        /// absent. The privateId==0 / non-0x0F combo (freq at rec+264) has
+        /// no VALUES[] slot — reported as `volt` only via
+        /// `(usize::MAX, VOLT_SLOT_LEGACY)`; use
+        /// [`clk_ctrl_entry_v2_semantics::FREQ_OFF_PID0_PREVALUES`] for it.
+        pub fn xocd_semantic_slots(
+            &self,
+            bit: u32,
+            private_id_zero: bool,
+        ) -> Option<(usize, usize)> {
+            use clk_ctrl_entry_v2_semantics as sem;
+            // type byte 0 = the driver never filled this record — no slots.
+            self.record_type(bit).filter(|&t| t != 0)?;
+            let blackwell = self.record_type_blackwell(bit)?;
+            Some(match (blackwell, private_id_zero) {
+                (true, false) => (sem::FREQ_SLOT_BLACKWELL, sem::VOLT_SLOT_BLACKWELL),
+                (true, true) => (sem::FREQ_SLOT_BLACKWELL_PID0, sem::VOLT_SLOT_BLACKWELL_PID0),
+                (false, false) => (sem::FREQ_SLOT_LEGACY, sem::VOLT_SLOT_LEGACY),
+                (false, true) => (usize::MAX, sem::VOLT_SLOT_LEGACY),
+            })
         }
 
         fn bw_u32(&self, bit: u32, field_off: usize) -> Option<i32> {
@@ -2196,6 +2271,12 @@ pub mod undocumented {
             Some(u32::from_le_bytes(
                 self.rest.get(off..off + 4)?.try_into().ok()?,
             ))
+        }
+
+        /// Public raw dword read at a buffer-absolute offset (readback for
+        /// out-of-band resolved offsets, e.g. the unique-0xE660 fallback).
+        pub fn u32_at(&self, abs: usize) -> Option<u32> {
+            self.u32_abs(abs)
         }
 
         /// Record `i` translated tag enum (rec+0x64).
@@ -5604,6 +5685,10 @@ pub mod undocumented {
     /// caller's buffer selects the slot count. Declared by hand (not via
     /// `nvapi!`) because the macro derives the `Api` variant from the fn
     /// name and the enum cannot carry a duplicate id.
+    ///
+    /// # Safety
+    /// `pInfo` must point to a writable `NV_GPU_CLOCK_ADC_DEVICES_INFO2`
+    /// with its version stamp initialized.
     pub unsafe fn NvAPI_GPU_ClockAdcDevicesGetInfoV2(
         hPhysicalGPU: NvPhysicalGpuHandle,
         pInfo: *mut NV_GPU_CLOCK_ADC_DEVICES_INFO2,
@@ -5630,6 +5715,10 @@ pub mod undocumented {
     /// buffer (0x10340 vs 0x109C8) selects the slot count. Hand-written
     /// wrapper over the V1 symbol (the `nvapi!` macro derives the `Api`
     /// variant from the fn name; the enum cannot carry a duplicate id).
+    ///
+    /// # Safety
+    /// `pStatus` must point to a writable `NV_GPU_CLOCK_ADC_DEVICES_STATUS_V2`
+    /// with its version stamp initialized.
     pub unsafe fn NvAPI_GPU_ClockAdcDevicesGetStatusV2(
         hPhysicalGPU: NvPhysicalGpuHandle,
         pStatus: *mut NV_GPU_CLOCK_ADC_DEVICES_STATUS_V2,
@@ -5827,6 +5916,78 @@ pub mod undocumented {
             let mut lm = NV_GPU_LOCKED_CLOCK_MODE_STATUS::default();
             lm.mode_mask = 0b1010;
             assert_eq!(lm.mode_mask, 0b1010);
+        }
+    }
+
+    #[cfg(test)]
+    mod xocd_semantics_tests {
+        use super::*;
+
+        /// xOCD semantic slot map on the V2 ClkDomains control: Ada (0x0A)
+        /// → (VALUES[0], VALUES[1]); Blackwell (0x0F) → (VALUES[2],
+        /// VALUES[4]); Blackwell privateId==0 → (VALUES[1], VALUES[3]).
+        /// VALUES[i] abs = 292 + 772*bit + 268 + 4i.
+        #[test]
+        fn clk_domains_semantic_slots() {
+            let mut c = NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2::default();
+            c.set_mask(0x3FF);
+            let set_type = |c: &mut NV_GPU_CLOCK_CLIENT_CLK_DOMAINS_CONTROL2, bit: u32, ty: u8| {
+                let off = 292 + 772 * bit as usize - 4;
+                c.rest[off] = ty;
+            };
+            set_type(&mut c, 1, 0x0A);
+            set_type(&mut c, 2, 0x0F);
+            assert_eq!(c.xocd_semantic_slots(1, false), Some((0, 1)));
+            assert_eq!(c.xocd_semantic_slots(2, false), Some((2, 4)));
+            assert_eq!(c.xocd_semantic_slots(2, true), Some((1, 3)));
+            assert_eq!(c.xocd_semantic_slots(3, false), None);
+
+            // freq slot for a Blackwell record IS the 0x114 anchor:
+            // write VALUES[2] and read it back through the anchor accessor.
+            c.set_value(2, 2, 123_456);
+            assert_eq!(c.value(2, 2), Some(123_456));
+            assert_eq!(c.bw_freq_khz(2), Some(123_456));
+            c.set_value(2, 4, -45_000);
+            assert_eq!(c.bw_msvdd_uv(2), Some(-45_000));
+        }
+
+        /// TopRels ratio encode: 0.9 keeps the exact hardware literal
+        /// 0xE660, xOCD's 0.7/1.2 envelope encodes to 45875/78643.
+        #[test]
+        fn top_rels_encode() {
+            assert_eq!(
+                NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::encode_ratio(0.9),
+                Some(clk_top_rels_control::DEFAULT_RATIO_RAW)
+            );
+            assert_eq!(
+                NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::encode_ratio(0.7),
+                Some(45_875)
+            );
+            assert_eq!(
+                NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::encode_ratio(1.2),
+                Some(78_643)
+            );
+            assert_eq!(
+                NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::encode_ratio(2.5),
+                None
+            );
+        }
+
+        /// U16.16 round-trip through resolve/patch on a synthesized control
+        /// block (unique 0xE660 fallback resolution path).
+        #[test]
+        fn top_rels_ratio_roundtrip() {
+            let mut c = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::zeroed();
+            c.seed_mask();
+            // place the default raw at rec0+0x68 (abs 0x68): sane-value path
+            let abs = clk_top_rels_control::REC_RATIO;
+            let off = abs - 4;
+            c.rest[off..off + 4].copy_from_slice(&0xE660u32.to_le_bytes());
+            assert_eq!(c.ratio_raw(), Some((abs, 0xE660)));
+            c.set_ratio_raw(abs, 45_875).unwrap();
+            assert_eq!(c.u32_at(abs), Some(45_875));
+            // insane values are rejected by both encode and set
+            assert_eq!(c.set_ratio_raw(abs, 3 * 65536), None);
         }
     }
 }
