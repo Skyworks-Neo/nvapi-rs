@@ -9752,6 +9752,21 @@ impl Architecture {
             Architecture::Unknown { implementation, .. } => implementation,
         }
     }
+
+    /// Pre-Ampere (everything before GA100, plus any unrecognized id): the
+    /// ClientTgpWattSetStatus power-channel SET (0xAFFC2279) faults these
+    /// stacks — nvlddmkm event 14/153 bursts, the value applies and the
+    /// control table then reverts to defaults (Turing TU106 r610 desktop and
+    /// Pascal GP100 r582 TCC, probe + event-log correlation 2026-10-07).
+    /// Ampere (GA10x) and later answer Ok cleanly. This is a denylist of the
+    /// verified-good architectures, so unrecognized ids classify as
+    /// pre-Ampere and stay refused.
+    pub fn is_pre_ampere(&self) -> bool {
+        !matches!(
+            self,
+            Architecture::GA100(..) | Architecture::AD100(..) | Architecture::GB200(..)
+        )
+    }
 }
 
 impl fmt::Display for Architecture {
@@ -11058,5 +11073,59 @@ mod xocd2_power_graph_decode_tests {
         put_dword(&mut g, entry(5) + 8, 0);
 
         assert!(decode(&g).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod pre_ampere_tests {
+    use super::Architecture;
+    use crate::sys::gpu;
+
+    #[test]
+    fn pre_ampere_matches_everything_before_ga100() {
+        // (GP100, impl GP100=0) = the P100 capture machine; (TU100, impl
+        // TU106=6) = the Turing desktop that faults+reverts.
+        let cases = [
+            (gpu::NV_GPU_ARCHITECTURE_GP100, 0i32),
+            (gpu::NV_GPU_ARCHITECTURE_TU100, 6),
+        ];
+        for (id, impl_repr) in cases {
+            let arch = Architecture::from_raw(
+                id,
+                gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(impl_repr),
+            );
+            assert!(arch.is_pre_ampere(), "{arch} must classify pre-Ampere");
+        }
+    }
+
+    #[test]
+    fn unknown_ids_classify_pre_ampere_conservatively() {
+        // 0x01D0 is an architecture id outside the enum (future/unknown
+        // silicon) — from_raw falls back to Unknown, which must stay refused.
+        let arch = Architecture::from_raw(
+            gpu::NV_GPU_ARCHITECTURE_ID::with_repr(0x0000_01D0),
+            gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(0),
+        );
+        assert!(matches!(arch, Architecture::Unknown { .. }));
+        assert!(arch.is_pre_ampere(), "Unknown must classify pre-Ampere");
+    }
+
+    #[test]
+    fn ampere_and_later_are_not_pre_ampere() {
+        let cases = [
+            (gpu::NV_GPU_ARCHITECTURE_GA100, 2i32), // GA102
+            (gpu::NV_GPU_ARCHITECTURE_AD100, 7),    // AD107 (RTX 4060 Laptop)
+            (gpu::NV_GPU_ARCHITECTURE_GB200, 2),    // GB202
+        ];
+        for (id, impl_repr) in cases {
+            let arch = Architecture::from_raw(
+                id,
+                gpu::NV_GPU_ARCH_IMPLEMENTATION_ID::with_repr(impl_repr),
+            );
+            assert!(
+                !arch.is_pre_ampere(),
+                "{arch} must classify Ampere-or-later"
+            );
+        }
     }
 }
