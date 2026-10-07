@@ -13,7 +13,7 @@
 #![cfg(windows)]
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 type DeviceIoControlFn = unsafe extern "system" fn(
     isize,
@@ -26,10 +26,33 @@ type DeviceIoControlFn = unsafe extern "system" fn(
     *mut c_void,
 ) -> i32;
 
+/// `ntdll!NtDeviceIoControlFile` 原型(kernel32!DeviceIoControl 的下一站)。
+type NtDeviceIoControlFileFn = unsafe extern "system" fn(
+    isize,
+    isize,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    u32,
+    *mut c_void,
+    u32,
+    *mut c_void,
+    u32,
+) -> i32;
+
 const BLOCK_CMD_DEFAULT: u32 = 0x2080_E61B;
 
 static HOOK_COUNT: AtomicUsize = AtomicUsize::new(0);
+static NT_HOOK_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// ntdll 旁路拨号记录的内存缓冲:在 hook 里做 std 的 println!/文件 I/O 会
+/// 0xc0000005(见 hook_nt_device_io_control 注释),所以先攒在内存,测试末尾
+/// 统一落盘。
+static NT_LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static NT_DUMP_SECTIONS: AtomicBool = AtomicBool::new(false);
+/// 被补掉的首个 `NtDeviceIoControlFile` 原函数(非空即表示至少补到一个导入槽)。
+static NTDLL_ORIG: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static mut ORIG_DEVICE_IO_CONTROL: Option<DeviceIoControlFn> = None;
+static mut ORIG_NT_DEVICE_IO_CONTROL: Option<NtDeviceIoControlFileFn> = None;
 
 // ---- 裸 FFI(nvapi 包无 windows-sys 依赖,自带声明) ----
 #[link(name = "kernel32")]
@@ -216,7 +239,7 @@ fn where_is(id: u32) {
     let ptr = unsafe { qf(id) };
     let addr = ptr as usize;
     if addr == 0 {
-        println!("  nvapi {id:#010x} -> NULL(未实现)");
+        emit(&format!("  nvapi {id:#010x} -> NULL(未实现)"));
         return;
     }
     let mut mods = [0isize; 512];
@@ -245,11 +268,11 @@ fn where_is(id: u32) {
         };
         if addr >= base && addr < base + img_size {
             let name = String::from_utf16_lossy(&buf[..n as usize]);
-            println!("  nvapi {id:#010x} -> {addr:#x} in {name}");
+            emit(&format!("  nvapi {id:#010x} -> {addr:#x} in {name}"));
             return;
         }
     }
-    println!("  nvapi {id:#010x} -> {addr:#x} (模块未识别)");
+    emit(&format!("  nvapi {id:#010x} -> {addr:#x} (模块未识别)"));
 }
 
 #[link(name = "psapi")]
@@ -440,6 +463,182 @@ unsafe extern "system" fn hook_device_io_control(
     rc
 }
 
+/// `ntdll!NtDeviceIoControlFile` 的旁路记录。r590/r610 新驱动上 kernel32!
+/// DeviceIoControl 全程看不到任何写路径调用,只有两种解释:新驱动的 SET 已经
+/// 变成共享节直写(无内核传输),或者它绕过 kernel32 直接走 ntdll 系统调用。
+/// 这个 hook 就是用来判定后者的 —— 若这里也静默,则"无内核传输"成立。
+unsafe extern "system" fn hook_nt_device_io_control(
+    h: isize,
+    event: isize,
+    apc: *mut c_void,
+    apcctx: *mut c_void,
+    iostat: *mut c_void,
+    ioctl: u32,
+    inbuf: *mut c_void,
+    insz: u32,
+    outbuf: *mut c_void,
+    outsz: u32,
+) -> i32 {
+    // 绝不能在这里 panic:本函数是 extern "system",panic 穿出去是 UB(实测为
+    // 0xc0000005)。所以取不到原函数就退化成 ntdll 里的裸指针,再不行直接放弃。
+    let orig = match unsafe { ORIG_NT_DEVICE_IO_CONTROL } {
+        Some(o) => o,
+        None => {
+            let p = NTDLL_ORIG.load(Ordering::SeqCst);
+            if p.is_null() {
+                return -1;
+            }
+            unsafe { std::mem::transmute(p) }
+        }
+    };
+    NT_HOOK_COUNT.fetch_add(1, Ordering::SeqCst);
+    let seq = HOOK_COUNT.fetch_add(1, Ordering::SeqCst);
+    let line = format!(
+        "seq={seq:03} via=ntdll ioctl={ioctl:#x} insize={insz} outsize={outsz} dev={}",
+        device_path(h)
+    );
+    // 只往内存缓冲里塞,**不在 hook 里做 std 的 println!/文件 I/O**。实测:这个
+    // hook 会被 kernelbase/advapi32 在任意线程上调用,在 hook 内 println! 会
+    // 0xc0000005(与补丁无关 —— 纯透传/纯计数/纯格式化都正常),所以落盘统一
+    // 挪到测试末尾 `flush_nt_log()`。
+    {
+        let mut g = NT_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        if g.len() < 4096 {
+            g.push(line);
+        }
+    }
+    let r = unsafe {
+        orig(
+            h, event, apc, apcctx, iostat, ioctl, inbuf, insz, outbuf, outsz,
+        )
+    };
+    // 0x470807 的 payload 在共享节里:也要 dump,但同样只做内存读取。
+    if ioctl == 0x0004_70807 && NT_DUMP_SECTIONS.load(Ordering::SeqCst) {
+        dump_sections(&log_dir(), seq);
+    }
+    r
+}
+
+/// 同时给所有可能发起内核传输的模块打 `NtDeviceIoControlFile` 导入槽(以及
+/// nvapi64.dll 自己的 DeviceIoControl)。IAT 补丁不做代码改写,没有指令对齐
+/// 风险;代价是漏掉用 GetProcAddress 动态解析的调用方,因此返回值交给调用方
+/// 做**存活性自检**(见 `nt_ioctl_hook_live`),静默必须是"确实没调用"而不是
+/// "hook 没装上"。
+unsafe fn install_nt_ioctl_hook() -> Option<NtDeviceIoControlFileFn> {
+    let hook = hook_nt_device_io_control as *mut c_void;
+    // 先把 ntdll 里的真函数解析并**在打补丁之前**存好:补丁一落地就可能有
+    // 其它线程立刻走到 hook,而 hook 里 `ORIG_NT_DEVICE_IO_CONTROL` 为空会
+    // 在 extern "system" 里 panic —— 那是 UB/AV,不是干净的报错。
+    let ntdll = unsafe { LoadLibraryA(b"ntdll.dll\0".as_ptr()) };
+    let real = unsafe { GetProcAddress(ntdll, b"NtDeviceIoControlFile\0".as_ptr()) };
+    if real.is_null() {
+        eprintln!("!!! 拿不到 ntdll!NtDeviceIoControlFile");
+        return None;
+    }
+    unsafe { ORIG_NT_DEVICE_IO_CONTROL = Some(std::mem::transmute(real)) };
+    eprintln!(
+        "ntdll!NtDeviceIoControlFile @{:x} prologue={:02x?}",
+        real as usize,
+        unsafe { core::slice::from_raw_parts(real as *const u8, 24) }
+    );
+    // 不靠固定清单:每台机器上真正发起系统调用的模块不同(kernel32 只是转发
+    // 体,实现落在 kernelbase 等),固定清单会整条漏掉。直接扫**所有**确实导入
+    // NtDeviceIoControlFile 的已驻留模块。
+    let hits = unsafe { patch_all_importers(b"NtDeviceIoControlFile", hook) };
+    eprintln!("NtDeviceIoControlFile: 命中 {hits} 个模块的导入槽");
+    unsafe {
+        if let Some(o) = patch_iat_fn(
+            "nvapi64.dll",
+            b"DeviceIoControl",
+            hook_device_io_control as *mut c_void,
+        ) {
+            eprintln!("nvapi64.dll!DeviceIoControl IAT 已补 -> {o:p}");
+            if ORIG_DEVICE_IO_CONTROL.is_none() {
+                ORIG_DEVICE_IO_CONTROL = Some(std::mem::transmute(o));
+            }
+        }
+    }
+    if hits == 0 {
+        eprintln!("!!! ntdll 传输 hook 一个都没装上:整个进程没有模块导入它");
+    }
+    NTDLL_ORIG.store(real as *mut c_void, Ordering::SeqCst);
+    Some(unsafe { std::mem::transmute(real) })
+}
+
+/// 遍历所有已驻留模块,把导入 `fname` 的槽全部补上,返回命中的模块数。
+/// `patch_iat_fn` 只认模块基名,所以这里从完整路径里取文件名再回填;顺带把
+/// 首个原函数指针记进 `NTDLL_ORIG`,供存活性自检/复位使用。
+unsafe fn patch_all_importers(fname: &[u8], hook: *mut c_void) -> usize {
+    let mut mods = [0isize; 512];
+    let mut needed = 0u32;
+    unsafe {
+        EnumProcessModules(
+            GetCurrentProcess(),
+            mods.as_mut_ptr(),
+            (mods.len() * 8) as u32,
+            &mut needed,
+        )
+    };
+    let count = (needed as usize / 8).min(mods.len());
+    let mut hits = 0usize;
+    for (k, m) in mods[..count].iter().enumerate() {
+        let mut buf = [0u16; 260];
+        let n = unsafe { GetModuleFileNameExW(GetCurrentProcess(), *m, buf.as_mut_ptr(), 260) };
+        if n == 0 {
+            continue;
+        }
+        let path = String::from_utf16_lossy(&buf[..n as usize]);
+        let base = path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string();
+        if std::env::var_os("NVOC_TRACE_IAT").is_some() {
+            eprintln!("  [{k}/{count}] 扫 {base}");
+        }
+        if let Some(o) = unsafe { patch_iat_fn(&base, fname, hook) } {
+            hits += 1;
+            eprintln!("  导入方: {base} (orig={o:p})");
+            if NTDLL_ORIG.load(Ordering::SeqCst).is_null() {
+                NTDLL_ORIG.store(o, Ordering::SeqCst);
+            }
+        }
+    }
+    hits
+}
+
+/// 存活性自检:用一个**已经打开的假设备句柄**,经 kernel32 的**真实函数体**
+/// (内联 hook 的 trampoline,而不是我们自己的 hook)发一次 DeviceIoControl。
+/// kernel32 无论如何都会把它转给 ntdll 系统调用(拿回 STATUS_INVALID_HANDLE),
+/// 所以 `NT_HOOK_COUNT` 自增即证明 ntdll 侧 hook 确实在被调;不自增就说明本次
+/// "写路径静默"是 hook 失效,而不是真的没有内核传输。
+unsafe fn nt_ioctl_hook_live() -> bool {
+    let Some(orig) = (unsafe { ORIG_DEVICE_IO_CONTROL }) else {
+        eprintln!("自检跳过:kernel32 hook 未装(无 trampoline 可调)");
+        return false;
+    };
+    let nul = wide("\\\\.\\NUL");
+    let h = unsafe { CreateFileW(nul.as_ptr(), 0, 3, std::ptr::null_mut(), 3, 0, 0) };
+    if h == -1 {
+        eprintln!("自检跳过:CreateFileW(\\\\.\\NUL) 失败");
+        return false;
+    }
+    let before = NT_HOOK_COUNT.load(Ordering::SeqCst);
+    let mut out = 0u32;
+    let mut ret = 0u32;
+    // ioctl 码随便是多少:参数错/句柄错也照样走到 NtDeviceIoControlFile。
+    unsafe {
+        orig(
+            h,
+            0,
+            std::ptr::null_mut(),
+            0,
+            (&mut out as *mut u32).cast(),
+            4,
+            &mut ret,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe { CloseHandle(h) };
+    NT_HOOK_COUNT.load(Ordering::SeqCst) > before
+}
+
 /// 在指定模块内定位名为 `fname` 的导入槽,全部换上 `hook`,返回首个原函数指针。
 unsafe fn patch_iat_fn(module: &str, fname: &[u8], hook: *mut c_void) -> Option<*mut c_void> {
     let name: Vec<u16> = module.encode_utf16().chain(std::iter::once(0)).collect();
@@ -451,15 +650,22 @@ unsafe fn patch_iat_fn(module: &str, fname: &[u8], hook: *mut c_void) -> Option<
     let base = hmod as *const u8;
     let e_lfanew = unsafe { *(base.add(0x3C) as *const u32) } as usize;
     let nt = unsafe { base.add(e_lfanew) };
+    let img_size = unsafe { *(nt.add(24 + 56) as *const u32) } as usize; // SizeOfImage
     let import_rva = unsafe { *(nt.add(24 + 120) as *const u32) } as usize; // DataDirectory[1] for PE32+
-    if import_rva == 0 {
-        eprintln!("无导入表");
+    if import_rva == 0 || import_rva >= img_size {
+        eprintln!("{module}: 无导入表/越界(rva={import_rva:#x} size={img_size:#x})");
         return None;
     }
     let mut first_orig: Option<*mut c_void> = None;
-    // 内存映射镜像:RVA 即相对 base 的偏移(不做文件节区转换)。
+    // 内存映射镜像:RVA 即相对 base 的偏移(不做文件节区转换)。整个导入表在
+    // 模块镜像内,所有 RVA 都按 SizeOfImage 做上界校验,避免在畸形/特殊模块
+    // 上走出镜像触发 AV —— 逐模块扫描必须做到这点。
     let mut desc = base.add(import_rva) as *const u8;
     loop {
+        if (desc as usize) - (base as usize) + 20 > img_size {
+            eprintln!("导入表里未找到 {}", String::from_utf8_lossy(fname));
+            return first_orig;
+        }
         let name_rva = unsafe { *(desc.add(12) as *const u32) } as usize;
         if name_rva == 0 {
             eprintln!("导入表里未找到 {}", String::from_utf8_lossy(fname));
@@ -467,15 +673,23 @@ unsafe fn patch_iat_fn(module: &str, fname: &[u8], hook: *mut c_void) -> Option<
         }
         let orig_first = unsafe { *(desc as *const u32) } as usize;
         let first = unsafe { *(desc.add(16) as *const u32) } as usize;
-        if orig_first != 0 && first != 0 {
+        if orig_first != 0 && first != 0 && orig_first < img_size && first + 8 <= img_size {
             let mut i = 0usize;
             loop {
+                if orig_first + i * 8 + 8 > img_size || first + i * 8 + 8 > img_size {
+                    break;
+                }
                 let int_rva = unsafe { *(base.add(orig_first + i * 8) as *const u64) } as usize;
                 if int_rva == 0 {
                     break;
                 }
                 if int_rva & 0x8000_0000_0000_0000 == 0 {
-                    let hint = unsafe { base.add((int_rva & 0xFFFF_FFFF) + 2) };
+                    let name_off = int_rva & 0xFFFF_FFFF;
+                    if name_off + 2 + fname.len() > img_size {
+                        i += 1;
+                        continue;
+                    }
+                    let hint = unsafe { base.add(name_off + 2) };
                     let nm = unsafe { core::slice::from_raw_parts(hint, fname.len()) };
                     if nm == fname {
                         let slot = unsafe { base.add(first + i * 8) } as *mut *mut c_void;
@@ -485,9 +699,22 @@ unsafe fn patch_iat_fn(module: &str, fname: &[u8], hook: *mut c_void) -> Option<
                             String::from_utf8_lossy(fname)
                         );
                         let mut old = 0u32;
-                        unsafe { VirtualProtect(slot as *mut c_void, 8, 0x40, &mut old) };
+                        let tr = std::env::var_os("NVOC_TRACE_IAT").is_some();
+                        if tr {
+                            eprintln!("  VP1 前 slot={slot:p}");
+                        }
+                        let ok1 = unsafe { VirtualProtect(slot as *mut c_void, 8, 0x40, &mut old) };
+                        if tr {
+                            eprintln!("  VP1 后 ok={ok1} old={old:#x}");
+                        }
                         unsafe { *slot = hook };
-                        unsafe { VirtualProtect(slot as *mut c_void, 8, old, &mut old) };
+                        if tr {
+                            eprintln!("  写入完成 {i}");
+                        }
+                        let ok2 = unsafe { VirtualProtect(slot as *mut c_void, 8, old, &mut old) };
+                        if tr {
+                            eprintln!("  VP2 后 ok={ok2}");
+                        }
                         if first_orig.is_none() {
                             first_orig = Some(orig);
                         }
@@ -497,6 +724,9 @@ unsafe fn patch_iat_fn(module: &str, fname: &[u8], hook: *mut c_void) -> Option<
             }
         }
         desc = unsafe { desc.add(20) };
+        if std::env::var_os("NVOC_TRACE_IAT").is_some() {
+            eprintln!("  描述符前进一档");
+        }
     }
 }
 
@@ -603,6 +833,15 @@ extern "system" {
     fn GetModuleFileNameW(h: isize, buf: *mut u16, sz: u32) -> u32;
     fn CloseHandle(h: isize) -> i32;
     fn GetCurrentThreadId() -> u32;
+    fn CreateFileW(
+        path: *const u16,
+        access: u32,
+        share: u32,
+        sa: *mut c_void,
+        disp: u32,
+        flags: u32,
+        tmpl: isize,
+    ) -> isize;
 }
 
 #[link(name = "advapi32")]
@@ -751,8 +990,12 @@ fn report_nv_module_versions() {
 }
 
 const MEM_MAPPED_KIND: u32 = 0x40000;
+/// 单节逐字节快照上限:够覆盖观察到的全部载体节(最大 0x181000);更大的节
+/// 只留指纹,不做差分。
+const SNAPSHOT_CAP: usize = 0x40_0000;
 
-/// 一个映射节的指纹(仅取前 2MB 做 FNV-1a;够覆盖毒表,避免全量读大节)。
+/// 一个映射节的指纹(仅取前 2MB 做 FNV-1a;够覆盖毒表,避免全量读大节)与
+/// 全量快照(≤ `SNAPSHOT_CAP`),后者用于逐字节差分定位真正的载体字段。
 #[derive(Clone)]
 struct RegionFp {
     base: usize,
@@ -760,6 +1003,7 @@ struct RegionFp {
     protect: u32,
     hash: u64,
     head: Vec<u8>,
+    data: Vec<u8>,
 }
 
 fn mapped_scan() -> Vec<RegionFp> {
@@ -784,12 +1028,18 @@ fn mapped_scan() -> Vec<RegionFp> {
                 h ^= b as u64;
                 h = h.wrapping_mul(0x0000_0100_0000_01b3);
             }
+            let snapshot = if size <= SNAPSHOT_CAP {
+                unsafe { core::slice::from_raw_parts(base as *const u8, size) }.to_vec()
+            } else {
+                Vec::new()
+            };
             out.push(RegionFp {
                 base,
                 size,
                 protect,
                 hash: h,
                 head: data[..data.len().min(0x40)].to_vec(),
+                data: snapshot,
             });
         }
         addr = base + size.max(0x1000);
@@ -814,6 +1064,7 @@ fn fp_report(tag: &str, r: &[RegionFp]) {
     }
 }
 
+#[allow(dead_code)]
 fn hexdump_full(tag: &str, base: usize, size: usize) -> String {
     let take = size.min(0x10_0000);
     let d = unsafe { core::slice::from_raw_parts(base as *const u8, take) };
@@ -839,25 +1090,181 @@ fn hexdump_full(tag: &str, base: usize, size: usize) -> String {
     s
 }
 
-/// 前后指纹差分:内容发生变化的映射节 = 该 NVAPI 调用真正写入的载体。把改动节
-/// 的 前/后 字节都落盘,换机换驱动都成立(不依赖私有 stamp)。
-fn dump_changed(prefix: &str, before: &[RegionFp], after: &[RegionFp]) {
+/// 找出两段字节里所有不同的区间(允许 ≤8B 的间隙合并成一段连续改写)。
+fn diff_runs(before: &[u8], after: &[u8]) -> Vec<(usize, usize)> {
+    let m = before.len().min(after.len());
+    let mut runs = Vec::new();
+    let mut i = 0usize;
+    while i < m {
+        if before[i] == after[i] {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut last = i;
+        let mut j = i + 1;
+        while j < m {
+            if before[j] != after[j] {
+                last = j;
+                j += 1;
+            } else if j - last <= 8 {
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        runs.push((start, last));
+        i = j;
+    }
+    runs
+}
+
+/// 一段区间的 前/后 对照行(带改变位标记)。显示窗口带 ±16B 上下文并按 16 对齐。
+fn diff_window(base: usize, before: &[u8], after: &[u8], start: usize, end: usize) -> String {
+    const CTX: usize = 16;
+    const MAX_ROWS: usize = 16;
+    let lo = (start.saturating_sub(CTX)) & !0xF;
+    let hi = (((end + CTX) / 16 + 1) * 16)
+        .min(before.len())
+        .min(after.len());
+    let mut s = format!(
+        "  base+{start:#06x}..={end:#06x} (len={})\n",
+        end - start + 1
+    );
+    let mut i = lo;
+    let mut rows = 0usize;
+    while i < hi {
+        let e = (i + 16).min(hi);
+        if rows >= MAX_ROWS {
+            s.push_str(&format!("  ... (窗口截断,共 {}B)\n", hi - lo));
+            break;
+        }
+        let hexb: String = before[i..e]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let hexa: String = after[i..e]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mark: String = (i..e)
+            .map(|k| if before[k] == after[k] { ' ' } else { '^' })
+            .collect();
+        s.push_str(&format!("  {:#012x} B {hexb:<48}\n", base + i));
+        s.push_str(&format!("  {:#012x} A {hexa:<48}\n", base + i));
+        s.push_str(&format!("  {:12}   {mark:<48}\n", ""));
+        i = e;
+        rows += 1;
+    }
+    s
+}
+
+/// 前后指纹差分:内容发生变化的映射节 = 该 NVAPI 调用真正写入的载体。落盘的是
+/// **逐字节差异区间**(不是整节 dump),并标出 `needle`(本次写入的原始值)真正
+/// 落在哪个偏移 —— 这样毒机与对照机的改动偏移可以直接逐行对齐比较。
+fn dump_changed(
+    prefix: &str,
+    before: &[RegionFp],
+    after: &[RegionFp],
+    needle: Option<(u32, &str)>,
+) {
     let find = |v: &[RegionFp], base: usize| v.iter().find(|f| f.base == base).cloned();
     let mut n = 0usize;
     for a in after {
         match find(before, a.base) {
             Some(b) if b.hash != a.hash => {
-                let mut s = String::new();
-                s.push_str(&hexdump_full(&format!("{prefix} AFTER"), a.base, a.size));
-                s.push_str(&hexdump_full(&format!("{prefix} BEFORE"), b.base, b.size));
+                if a.data.is_empty() || b.data.is_empty() {
+                    emit(&format!(
+                        "CHANGED[{prefix}] base={:#x} size={:#x} hash {:018x} -> {:018x}(> 4MB,仅指纹)",
+                        a.base, a.size, b.hash, a.hash
+                    ));
+                    n += 1;
+                    continue;
+                }
+                let runs = diff_runs(&b.data, &a.data);
+                let mut s = format!(
+                    "=== {prefix} base={:#x} size={:#x} changed_bytes={} runs={} ===\n",
+                    a.base,
+                    a.size,
+                    runs.iter().map(|(x, y)| y - x + 1).sum::<usize>(),
+                    runs.len()
+                );
+                for (st, en) in &runs {
+                    s.push_str(&diff_window(a.base, &b.data, &a.data, *st, *en));
+                }
                 let _ = std::fs::write(
                     log_dir().join(format!("changed-{prefix}-{n:02}-{:x}.txt", a.base)),
                     &s,
                 );
+                let head: Vec<String> = runs
+                    .iter()
+                    .take(6)
+                    .map(|(x, y)| format!("+{x:#x}({})", y - x + 1))
+                    .collect();
+                let tail = if runs.len() > 6 {
+                    format!(" …共{}段", runs.len())
+                } else {
+                    String::new()
+                };
                 emit(&format!(
-                    "CHANGED[{prefix}] #{} base={:#x} size={:#x} hash {:018x} -> {:018x}",
-                    n, a.base, a.size, b.hash, a.hash
+                    "CHANGED[{prefix}] #{} base={:#x} size={:#x} 改动 {}B/{} 段: {}{}",
+                    n,
+                    a.base,
+                    a.size,
+                    runs.iter().map(|(x, y)| y - x + 1).sum::<usize>(),
+                    runs.len(),
+                    head.join(" "),
+                    tail
                 ));
+                if let Some((val, name)) = needle {
+                    // 明文不一定等于调用侧的值:同一物理量在驱动里可能按 µW/mW、
+                    // 或加固定偏移/编码存放(实测 180W 在改动的 4 字节里找不到
+                    // 180000 的明文)。所以把几种常见标度一起试,命中哪一个直接
+                    // 说明载体用的是哪种编码。
+                    let cands: [(u64, &str); 5] = [
+                        (val as u64, "原值"),
+                        (val as u64 * 1000, "原值×1000(µW)"),
+                        (val as u64 / 1000, "原值/1000"),
+                        (val as u64 * 65536, "原值×65536(Q16)"),
+                        (val as u64 & 0xFFFF, "原值低16位"),
+                    ];
+                    let mut hit = false;
+                    for (st, en) in &runs {
+                        let win = &a.data[*st..(en + 1).min(a.data.len())];
+                        for (c, label) in cands {
+                            for w in [4usize, 8] {
+                                if w == 8 && c > u32::MAX as u64 {
+                                    continue;
+                                }
+                                let pat = if w == 4 {
+                                    (c as u32).to_le_bytes().to_vec()
+                                } else {
+                                    c.to_le_bytes().to_vec()
+                                };
+                                let mut k = 0usize;
+                                while k + w <= win.len() {
+                                    if win[k..k + w] == pat[..] {
+                                        emit(&format!(
+                                            "CARRIES[{prefix}] {name} 值 {val} 以 {label}({w}B) 落在 base+{:#x}",
+                                            st + k
+                                        ));
+                                        hit = true;
+                                        k += w;
+                                    } else {
+                                        k += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !hit {
+                        emit(&format!(
+                            "CARRIES[{prefix}] {name} 值 {val} 在改动字节里没有明文命中(原值/µW/Q16/低16位都试过)—— 载体是索引或其它编码"
+                        ));
+                    }
+                }
                 n += 1;
             }
             None => emit(&format!(
@@ -876,7 +1283,7 @@ fn dump_changed(prefix: &str, before: &[RegionFp], after: &[RegionFp]) {
         }
     }
     if n == 0 {
-        emit(&format!("CHANGED[{prefix}] (none)"));
+        emit(&format!("CHANGED[{prefix}] (没有节发生变化)"));
     }
 }
 
@@ -1012,6 +1419,119 @@ fn cur_seq() -> usize {
     HOOK_COUNT.load(Ordering::SeqCst)
 }
 
+/// 把 ntdll 旁路 hook 攒下的记录落进 index.txt(**必须在 hook 之外**做,见
+/// `hook_nt_device_io_control` 的注释)。带 `via=ntdll` 前缀,和 kernel32 那条
+/// 通道的记录区分开 —— 这正是"新驱动是绕过 kernel32 直呼系统调用"的直接证据。
+fn flush_nt_log() {
+    let lines: Vec<String> = {
+        let mut g = NT_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *g)
+    };
+    let dir = log_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    for l in &lines {
+        append(&dir, "index.txt", &format!("{l}\n"));
+    }
+    emit(&format!(
+        "ntdll 旁路记录 {} 条(全部为 via=ntdll,已写入 index.txt)",
+        lines.len()
+    ));
+}
+
+/// 把序号区间 [from,to] 内捕获到的 ioctl 归到一次 NVAPI 调用名下 —— 这是
+/// "这次写到底走没走内核传输"的直接答案。空(NV 设备上)= 该调用期间没有
+/// DeviceIoControl / NtDeviceIoControlFile 落到显卡设备上,即改动只落在用户态
+/// 共享节里。判定前必须先看 LIVENESS;存活却仍为空才算"无内核传输"。
+///
+/// 进程里的 DeviceIoControl 流量并不都是显卡的(kernelbase/advapi32 导入方一
+/// 补上,连控制台之类的小设备都会冒出来,实测在非提权跑里 0x500016/h=0x64 能
+/// 刷几百条)。所以先建立"NV 设备句柄集合"——凡出现过 NV 特征 ioctl 的句柄都
+/// 算 —— 归因只看这个集合,集合外的单独计数,免得噪声淹没结论。
+fn transport_of(tag: &str, from: usize, to: usize) {
+    // ntdll 旁路的记录末尾才落盘,所以这里必须同时看内存缓冲,否则会把
+    // "经 ntdll 的传输"误判成"无内核传输"。
+    let mut txt = std::fs::read_to_string(log_dir().join("index.txt")).unwrap_or_default();
+    {
+        let g = NT_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        for l in g.iter() {
+            txt.push_str(l);
+            txt.push('\n');
+        }
+    }
+    const NV_SIG: [u32; 5] = [0x8de0004, 0x8de0008, 0x470807, 0x470813, 0x320004];
+    let mut handles: Vec<u32> = Vec::new();
+    for line in txt.lines() {
+        if let (Some(d), Some(i)) = (parse_dev(line), parse_ioctl(line)) {
+            if NV_SIG.contains(&i) && !handles.contains(&d) {
+                handles.push(d);
+            }
+        }
+    }
+    let mut nv: Vec<&str> = Vec::new();
+    let mut other = 0usize;
+    for line in txt.lines() {
+        if parse_ioctl(line).is_none() {
+            continue;
+        }
+        let Some(s) = parse_seq(line) else { continue };
+        if s < from || s > to {
+            continue;
+        }
+        match parse_dev(line) {
+            Some(d) if handles.contains(&d) => nv.push(line),
+            _ => other += 1,
+        }
+    }
+    let hx = || {
+        handles
+            .iter()
+            .map(|h| format!("{h:#x}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    if nv.is_empty() {
+        emit(&format!(
+            "TRANSPORT[{tag}] NV 设备上无内核传输(序号 {from}..{to};NV 句柄=[{}];已过滤其它设备 {other} 条)",
+            hx()
+        ));
+    } else {
+        emit(&format!(
+            "TRANSPORT[{tag}] NV 设备上 {} 条内核传输(NV 句柄=[{}];已过滤其它设备 {other} 条):",
+            nv.len(),
+            hx()
+        ));
+        for h in nv.iter().take(14) {
+            emit(&format!("    {h}"));
+        }
+    }
+}
+
+/// 从一行 ioctl 记录里取 `seq=`(全局序号)。
+fn parse_seq(line: &str) -> Option<usize> {
+    let p = line.find("seq=")?;
+    line.get(p + 4..p + 7)?.parse::<usize>().ok()
+}
+
+/// 从一行 ioctl 记录里取 `ioctl=`(十六进制 ioctl 码)。
+fn parse_ioctl(line: &str) -> Option<u32> {
+    let p = line.find("ioctl=")?;
+    let rest = &line[p + 6..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X')
+        .unwrap_or(rest.len());
+    u32::from_str_radix(rest.get(..end)?.trim_start_matches("0x"), 16).ok()
+}
+
+/// 从一行 ioctl 记录里取 `dev=h=0x..`(设备句柄),用于把流量按设备分开。
+fn parse_dev(line: &str) -> Option<u32> {
+    let p = line.find("dev=h=")?;
+    let rest = &line[p + 6..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X')
+        .unwrap_or(rest.len());
+    u32::from_str_radix(rest.get(..end)?.trim_start_matches("0x"), 16).ok()
+}
+
 fn cur_tid() -> u32 {
     unsafe { GetCurrentThreadId() }
 }
@@ -1037,6 +1557,9 @@ fn write_summary() {
 #[ignore = "对照机(30系)跑:身份/版本 + GET/SET 序列 + 毒写入载体差分;需提权"]
 fn tgpwatt_wire_diff() {
     NO_BLOCK.store(true, Ordering::SeqCst);
+    // 0x470807 的 payload 在共享节里:走 ntdll 旁路的那些调用也要 dump 节内容。
+    // (hook 内只做内存读取 + 文件写;唯一在 hook 内会炸的是 println!,已移出。)
+    NT_DUMP_SECTIONS.store(true, Ordering::SeqCst);
     let _ = std::fs::create_dir_all(log_dir());
     let _ = std::fs::write(log_dir().join("report.txt"), "");
     let _ = std::fs::write(log_dir().join("index.txt"), "");
@@ -1075,6 +1598,19 @@ fn tgpwatt_wire_diff() {
         }
     }
 
+    // ---- 第二层探针:直接抓 ntdll 系统调用导入,覆盖"绕过 kernel32 直呼
+    // NtDeviceIoControlFile"的可能;装完立刻做存活性自检,把"hook 死了"和
+    // "真没有内核传输"彻底分开。----
+    let nt_installed = unsafe { install_nt_ioctl_hook() }.is_some();
+    emit(&format!("ntdll 传输 hook 安装 = {nt_installed}"));
+    let live = unsafe { nt_ioctl_hook_live() };
+    emit(&format!("LIVENESS ntdll 传输 hook 存活自检 = {live}"));
+    if !live {
+        emit(
+            "!!! 自检失败 —— 下面的 TRANSPORT[...]=无 只能说明'没抓到',不能作为'无内核传输'的证据",
+        );
+    }
+
     let gpus = nvapi::PhysicalGpu::enumerate().expect("enumerate");
     emit(&format!("gpu count = {}", gpus.len()));
     for (i, g) in gpus.iter().enumerate() {
@@ -1095,8 +1631,14 @@ fn tgpwatt_wire_diff() {
     ] {
         where_is(id);
     }
+    unsafe { LoadLibraryA(b"nvapi64_impl.dll\0".as_ptr()) };
+    emit(&format!(
+        "nvapi64_impl.dll 驻留 = {}",
+        unsafe { GetModuleHandleW(wide("nvapi64_impl.dll").as_ptr()) } != 0
+    ));
 
     // ---- GET-only 基线(不含任何写) ----
+    let s_base = cur_seq();
     step("GET baseline");
     mark("G1>tgp_watt_range");
     let range = gpu.tgp_watt_range();
@@ -1134,8 +1676,10 @@ fn tgpwatt_wire_diff() {
         ));
         mark("G4<");
     }
+    transport_of("GET baseline(纯读)", s_base, cur_seq());
 
     // ---- 安全对照:percent 写(ClientPowerPoliciesSetStatus,历史安全接口) ----
+    let s_op1 = cur_seq();
     step("OP1 percent set_power_limit(100%)");
     mark("OP1>percent 100");
     emit(&format!(
@@ -1143,11 +1687,13 @@ fn tgpwatt_wire_diff() {
         gpu.set_power_limit([nvapi::Percentage1000(100_000)])
     ));
     mark("OP1<");
+    transport_of("OP1 percent100(安全接口)", s_op1, cur_seq());
 
     let pre = mapped_scan();
     fp_report("pre-toxic", &pre);
 
     // ---- 毒 OP2:绝对 TGP 写(0xAFFC2279)——对照机成功,毒机 TDR ----
+    let s_op2 = cur_seq();
     step("OP2 set_tgp_watt(180, idx2) TOXIC");
     mark("OP2>set_tgp_watt(180,2) TOXIC");
     let r2 = gpu.set_tgp_watt(180, 2);
@@ -1163,9 +1709,10 @@ fn tgpwatt_wire_diff() {
         "tgp_watt_range(after)  -> {:?}",
         gpu.tgp_watt_range()
     ));
+    transport_of("OP2 set_tgp_watt(毒接口)", s_op2, cur_seq());
     let post = mapped_scan();
     fp_report("post-watt", &post);
-    dump_changed("watt", &pre, &post);
+    dump_changed("watt", &pre, &post, Some((180_000, "tgp180W")));
 
     // ---- 毒 OP3:OCP 电流行(写一个与当前不同的值) ----
     let mut ocp_restore: Option<(u32, u32, u32)> = None;
@@ -1175,6 +1722,7 @@ fn tgpwatt_wire_diff() {
             ocp_restore = Some((ocp.policy_id, ocp.subtype, ocp.default_raw));
             let bp = mapped_scan();
             step(&format!("OP3 OCP-current write idx{}", ocp.index));
+            let s_op3 = cur_seq();
             mark(&format!(
                 "OP3>ocp({},{}) write {target} (def {})",
                 ocp.policy_id, ocp.subtype, ocp.default_raw
@@ -1190,8 +1738,9 @@ fn tgpwatt_wire_diff() {
                 "power_channel_control(after) -> {:?}",
                 gpu.power_channel_control(p)
             ));
+            transport_of("OP3 OCP 电流写(毒族)", s_op3, cur_seq());
             let ap = mapped_scan();
-            dump_changed("ocp", &bp, &ap);
+            dump_changed("ocp", &bp, &ap, Some((target, "ocpTarget")));
         }
     }
 
@@ -1201,6 +1750,7 @@ fn tgpwatt_wire_diff() {
             let target = (board.default_raw + 20_000).min(board.max_raw);
             let bp = mapped_scan();
             step(&format!("OP4 board-power write idx{}", board.index));
+            let s_op4 = cur_seq();
             mark(&format!(
                 "OP4>board({},{}) write {target} (def {})",
                 board.policy_id, board.subtype, board.default_raw
@@ -1216,12 +1766,14 @@ fn tgpwatt_wire_diff() {
                 "power_channel_control(after) -> {:?}",
                 gpu.power_channel_control(p)
             ));
+            transport_of("OP4 板功率写(毒族)", s_op4, cur_seq());
             let ap = mapped_scan();
-            dump_changed("board", &bp, &ap);
+            dump_changed("board", &bp, &ap, Some((target, "boardTarget")));
         }
     }
 
     // ---- 复位 ----
+    let s_restore = cur_seq();
     step("restore");
     mark("R1>restore percent 100");
     emit(&format!(
@@ -1237,6 +1789,8 @@ fn tgpwatt_wire_diff() {
         ));
         mark("R2<");
     }
+    transport_of("restore", s_restore, cur_seq());
+    flush_nt_log();
     mark("S>needle scan");
     scan_process_memory(&[
         (180_000, "watt180"),
@@ -1247,8 +1801,10 @@ fn tgpwatt_wire_diff() {
 
     write_summary();
     emit(&format!(
-        "done; ioctls captured = {}",
-        HOOK_COUNT.load(Ordering::SeqCst)
+        "done; kernel32 DeviceIoControl = {}, ntdll NtDeviceIoControlFile = {}, hook 存活={}",
+        HOOK_COUNT.load(Ordering::SeqCst),
+        NT_HOOK_COUNT.load(Ordering::SeqCst),
+        live
     ));
     emit(&format!("capture dir = {}", log_dir().display()));
     std::process::exit(0);
