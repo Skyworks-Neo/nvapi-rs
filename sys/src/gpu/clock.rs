@@ -260,6 +260,15 @@ pub mod undocumented {
         /// treated as a 50-series reinterpretation, not authoritative; keep
         /// the RTSS/MSD naming here.
         ///
+        /// Domain 21 UPGRADE 2026-10-11 (RTX PRO 6000 Blackwell Server live):
+        /// the direct-measure interface 0x527FC458 at +4=21 read 2107.001 MHz
+        /// — exactly the video clock max (nvidia-smi "Max Clocks Video 2107")
+        /// — while GetAllClocks[21] floats 41-211 MHz at deep idle (media
+        /// subsystem idle gating). xOCD's Video attribution is LIVE-CONFIRMED
+        /// on 50-series: domain 21 IS the video/media clock. The Msd/Vid
+        /// dual-label stands; deep-idle floating values are real gating, not
+        /// a wrong reading (blackwell_recon_live + get-status sampling).
+        ///
         /// Domain 20 = uProc cross-naming promoted 2026-10-11: on the RTX
         /// PRO 6000 Blackwell Server (GB202) the domain reads 1990.8 MHz —
         /// core-adjacent (0.82x GPC), NOT the fixed 540 MHz it held on the
