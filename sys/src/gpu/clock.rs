@@ -259,6 +259,14 @@ pub mod undocumented {
         /// "video clock". xOCD's "Video/NVD" label for private domain 21 is
         /// treated as a 50-series reinterpretation, not authoritative; keep
         /// the RTSS/MSD naming here.
+        ///
+        /// Domain 20 = uProc cross-naming promoted 2026-10-11: on the RTX
+        /// PRO 6000 Blackwell Server (GB202) the domain reads 1990.8 MHz —
+        /// core-adjacent (0.82x GPC), NOT the fixed 540 MHz it held on the
+        /// Ada 4060L — matching the "uProc" (microprocessor) name a second
+        /// third-party source gives the 50-series core-adjacent domain
+        /// (user, 2026-10-11; consistent with xOCD's UPROC). Dual-labeled
+        /// below like Hub/Msd.
         pub enum NV_GPU_CLOCK_DOMAIN_ID / ClockDomainId {
             NV_GPU_CLOCK_DOMAIN_GPC / Gpc = 0,
             NV_GPU_CLOCK_DOMAIN_XBAR / Xbar = 1,
@@ -301,6 +309,9 @@ pub mod undocumented {
             // dual-label aliases — RTSS enum name first, cross-tool name second.
             Hub = "Hub/L2C",
             Msd = "Msd/Vid",
+            // 50-series core-adjacent microprocessor clock (xOCD "UPROC";
+            // live GB202 1990.8 MHz vs GPC 2427.7 — was fixed 540 on Ada).
+            Pwr = "Pwr/uProc",
             _ = _,
         }
     }

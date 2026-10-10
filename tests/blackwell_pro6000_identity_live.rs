@@ -61,7 +61,12 @@ fn blackwell_identity_raw() {
                     for r in rails {
                         println!(
                             "  rail ch{}: id={} type={} name={} {}mW conf={:?}",
-                            r.channel_bit, r.pwr_rail, r.channel_type, r.rail_name, r.pwr_mw, r.confidence
+                            r.channel_bit,
+                            r.pwr_rail,
+                            r.channel_type,
+                            r.rail_name,
+                            r.pwr_mw,
+                            r.confidence
                         );
                     }
                 }

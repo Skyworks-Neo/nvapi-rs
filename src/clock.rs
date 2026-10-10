@@ -84,9 +84,13 @@ pub type EffectiveClocks = BTreeMap<ClockDomain, Kilohertz>;
 ///   The fabric clocks that SCALE with load (Xbar(1) 71→1984, Sys(2) 249→1894,
 ///     Host(5) 825→1350, Msd(21) 246→1970) are the dynamically-clocked fabric
 ///     domains; the constant ones (Hub(3)=450, Disp(6)=675, Pwr(20)=540,
-///     Utils(22)=108) are fixed clocks. GPU-Z's "crossbar clock" most likely
-///     corresponds to whichever fabric domain scales with the core on a given
-///     architecture — verify against GPU-Z rather than trusting the enum label.
+///     Utils(22)=108) are fixed clocks. GENERATION CAVEAT (RTX PRO 6000
+///     Blackwell Server, 2026-10-11): Pwr(20) is NO longer fixed there — it
+///     reads 1990.8 MHz core-adjacent (the 50-series "uProc" microprocessor
+///     clock; see ClockDomainId's domain-20 note). Fixed-on-Ada only.
+///     GPU-Z's "crossbar clock" most likely corresponds to whichever fabric
+///     domain scales with the core on a given architecture — verify against
+///     GPU-Z rather than trusting the enum label.
 ///
 /// Additionally, `Pciegen` (index 31) is NOT a clock frequency — **its value
 /// IS the current PCIe link generation number** (1=Gen1 … 5=Gen5). It is
