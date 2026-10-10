@@ -612,7 +612,13 @@ impl PhysicalGpu {
         trace!("gpu.bus_info()");
         let bus_type = self.bus_type()?;
         Ok(BusInfo {
-            irq: self.irq()?,
+            // NvAPI_GPU_GetIRQ is unimplemented in Linux libnvidia-api
+            // (rc=-3; live RTX PRO 6000 Blackwell 580.173.02) while
+            // GetBusType/GetBusId/GetBusSlotId all succeed — letting the
+            // IRQ error propagate zeroed the whole BusInfo down to
+            // `Bus::Other(Unknown)` on Linux. IRQ is meaningless on MSI-era
+            // GPUs anyway; default it instead of failing the block.
+            irq: self.irq().unwrap_or(0),
             id: self.bus_id()?,
             slot_id: self.bus_slot_id()?,
             bus: match bus_type {

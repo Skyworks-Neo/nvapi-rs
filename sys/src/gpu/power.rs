@@ -1994,7 +1994,15 @@ pub mod undocumented {
             NV_GPU_PERF_FLAGS_VOLTAGE_OP_LIMIT / VOLTAGE_OP_LIMIT = 8,
             /// GPU utilization
             NV_GPU_PERF_FLAGS_NO_LOAD_LIMIT / NO_LOAD_LIMIT = 16,
-            /// Never seen this
+            /// NVIDIA's own public nvapi.h names this UNKNOWN_32 — no
+            /// documented semantics anywhere. Now SEEN: it is in the
+            /// supported set of RTX PRO 6000 Blackwell Server Edition
+            /// (580.173.02, get-info Perf Limits 0x3F). GSP-RM limitation
+            /// reason names that lack an NVAPI bit above (candidates,
+            /// unattributed): ECC_MAX, PWR_SUPPLY_CAPACITY, SYSPERF,
+            /// AUX_PWR_STATE, POWERMIZER_HARD — see
+            /// docs/reverse-engineering/nvapi/blackwell-pro6000-580-173-02-audit.md
+            /// T3/T4 for the load-correlation experiment.
             NV_GPU_PERF_FLAGS_UNKNOWN_32 / UNKNOWN_32 = 32,
         }
     }

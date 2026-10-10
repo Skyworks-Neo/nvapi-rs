@@ -869,7 +869,11 @@ pub fn power_rail_name(rail: u32) -> &'static str {
     // For values outside the enum, callers should use power_rail_name_owned.
     match PowerRail::try_from(rail as i32) {
         Ok(r) => match r {
-            PowerRail::Unknown => "Unknown",
+            // The descriptor really carried rail id 0 — the driver did not
+            // label this channel (live on RTX PRO 6000 Blackwell Server:
+            // ch3 Summation + ch26 SensorClientAligned). "Unlabeled" keeps
+            // that fact distinct from "we don't know what it is".
+            PowerRail::Unknown => "Unlabeled",
             PowerRail::OutputNvvdd => "OutputNvvdd",
             PowerRail::OutputFbvdd => "OutputFbvdd",
             PowerRail::OutputFbvddq => "OutputFbvddq",

@@ -856,6 +856,10 @@ pub mod undocumented {
             NV_GPU_RAM_LPDDR2 / LPDDR2 = 9,
             NV_GPU_RAM_GDDR5X / GDDR5X = 10,
             NV_GPU_RAM_GDDR6X / GDDR6X = 15,
+            /// GDDR7. Live-confirmed on RTX PRO 6000 Blackwell Server Edition
+            /// (580.173.02 Linux): NvAPI_GPU_GetRamType rc=0 raw=16 —
+            /// tests/blackwell_pro6000_identity_live.rs.
+            NV_GPU_RAM_GDDR7 / GDDR7 = 16,
         }
     }
 
