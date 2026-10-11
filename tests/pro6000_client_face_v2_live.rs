@@ -26,11 +26,10 @@ fn client_table(gpu: &PhysicalGpu) -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONT
             b.assume_init()
         };
         ctl.version = NvVersion::with_version(0x12420);
-        // seed points 0..254 (255 points; bit 255 is out of range and -1s)
-        for d in ctl.mask.mask.iter_mut() {
-            *d = u32::MAX;
-        }
-        ctl.mask.mask[7] = 0x7FFF_FFFF;
+        // seed from GetInfo's valid-point mask (vfp_table_raw's exact recipe;
+        // arbitrary supersets like all-ones / 0..254 are refused with -1)
+        let info = gpu.vfp_mask().expect("vfp_mask");
+        ctl.mask = info.mask;
         let st = NvAPI_GPU_ClockClientClkVfPointsGetControl(
             *gpu.handle(),
             ptr::from_mut(&mut *ctl).cast(),
