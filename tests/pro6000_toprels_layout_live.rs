@@ -7,7 +7,9 @@
 //! cargo test --test pro6000_toprels_layout_live -- --nocapture --ignored
 
 use nvapi::PhysicalGpu;
-use nvapi::sys::gpu::clock::undocumented::{NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL, clk_top_rels_control};
+use nvapi::sys::gpu::clock::undocumented::{
+    NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL, clk_top_rels_control,
+};
 use nvapi::sys::nvapi::NvVersion;
 
 const SLOTS: [usize; 5] = [0, 10, 11, 12, 13];
@@ -49,6 +51,9 @@ fn toprels_record_layout_dump() {
             println!("  {name}: abs {abs:#x} = {v:#x?}");
         }
         // the shipped helper must agree with the pinned plane
-        println!("  api top_rels_ratio_at({slot}) = {:?}", gpu.top_rels_ratio_at(slot));
+        println!(
+            "  api top_rels_ratio_at({slot}) = {:?}",
+            gpu.top_rels_ratio_at(slot)
+        );
     }
 }

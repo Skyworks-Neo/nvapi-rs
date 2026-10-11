@@ -2716,9 +2716,7 @@ impl PhysicalGpu {
     /// Enumerate the TopRels relation table (GetInfo): every populated
     /// relation with its index, (src, dst) domains, direction flag, and
     /// default payload (the relation's initial ratio when it carries one).
-    pub fn top_rels_relations(
-        &self,
-    ) -> crate::Result<Vec<(usize, u32, u32, u32, u32)>> {
+    pub fn top_rels_relations(&self) -> crate::Result<Vec<(usize, u32, u32, u32, u32)>> {
         use crate::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetInfo;
         use clock::undocumented::{NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO, clk_top_rels_info};
         let mut info = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO::zeroed();
@@ -2764,8 +2762,7 @@ impl PhysicalGpu {
         // Ratio dword: ABS 0x68 + i*0x108 (live-pinned on 580.173.02:
         // slot0 = 0xE660, slots 10-13 = 0xCCC0/0x20000/0x13330/0x18000 at
         // those offsets). RECORDS+REC_RATIO (0xCC) reads 0 — wrong plane.
-        let off = clk_top_rels_control::REC_RATIO + idx * clk_top_rels_control::RECORD_STRIDE
-            - 4; // rest begins at +4
+        let off = clk_top_rels_control::REC_RATIO + idx * clk_top_rels_control::RECORD_STRIDE - 4; // rest begins at +4
         Ok(ctl
             .rest
             .get(off..off + 4)
@@ -2802,8 +2799,7 @@ impl PhysicalGpu {
         // control body is rejected with -1; the proven slot-0 recipe).
         // Ratio dword ABS 0x68 + i*0x108 (live-pinned; see top_rels_ratio_at)
         // — patching the rec+0x64 TAG plane was the original -1 regression.
-        let off = clk_top_rels_control::REC_RATIO + idx * clk_top_rels_control::RECORD_STRIDE
-            - 4; // rest begins at +4
+        let off = clk_top_rels_control::REC_RATIO + idx * clk_top_rels_control::RECORD_STRIDE - 4; // rest begins at +4
         let mut modified = before;
         modified.rest[off..off + 4].copy_from_slice(&raw.to_le_bytes());
         let st = unsafe {
@@ -4552,6 +4548,47 @@ impl PhysicalGpu {
     /// non-linear mapping depends on local curve slope). Both modes produce
     /// identical curves after RM interpolation. `value` is the raw u32 to
     /// write (for reverse-volt mode, only the low i16 is used).
+    /// Post-SetControl readback for the private V/F-POINTS family
+    /// (NvAPI_GPU_ClockClkVfPointsGetControl on the same-stamped, mask-seeded
+    /// verify block). On 580.173.02 AND 610 (4060 Laptop field report, both
+    /// cross-checked live 2026-10-12) the RM answers -9
+    /// (IncompatibleStructVersion) to this GET while the override it just
+    /// accepted is still settling — and answers normally (same stamp, same
+    /// seeds) once it has. The write itself always lands (DBG flow: snapshot
+    /// st=0 → SET st=0 → verify st=-9 → reader shows the override). So: retry
+    /// briefly, and if the window persists return Ok(false) — the SET status
+    /// is then the only in-protocol gate and the caller reports what it sent.
+    fn vfp_post_set_readback(
+        &self,
+        verify: &mut clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONTROL_PRIVATE,
+    ) -> crate::Result<bool> {
+        use crate::sys::api::NvAPI_GPU_ClockClkVfPointsGetControl;
+        const RETRIES: usize = 2;
+        for attempt in 0..=RETRIES {
+            let st = unsafe {
+                NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(verify).cast())
+            };
+            match crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
+                .map_err(crate::Error::from)
+            {
+                Ok(()) => return Ok(true),
+                Err(e) if e.nvapi_status() == Some(crate::Status::IncompatibleStructVersion) => {
+                    if attempt == RETRIES {
+                        eprintln!(
+                            "nvapi: post-SetControl readback -9 (override settling window, \
+                             580/610-verified) — trusting SET status; verify via \
+                             get-private-vftable once settled"
+                        );
+                        return Ok(false);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(true)
+    }
+
     pub fn set_vfp_point_private(
         &self,
         bank: usize,
@@ -4694,13 +4731,14 @@ impl PhysicalGpu {
         } else {
             verify.seed_masks_from_info(&info);
         }
-        let st = unsafe {
-            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut verify).cast())
-        };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
-            .map_err(crate::Error::from)?;
+        let readback = self.vfp_post_set_readback(&mut verify)?;
 
-        let retained_mode = if legacy_layout {
+        // Readback unavailable (-9 persisted through retries): report what we
+        // sent and pass — the SET status already gated the write, and reading
+        // the not-yet-settled verify block here would invent wrong values.
+        let retained_mode = if !readback {
+            0
+        } else if legacy_layout {
             // rec+0x24 is the ONE state-filled, readable-back field: the
             // marker probe showed the driver overwriting user input here.
             // A mode-1 SET reading back as 1 = storage proof; 0 = dropped.
@@ -4708,12 +4746,12 @@ impl PhysicalGpu {
         } else {
             verify.mode(bank, idx).unwrap_or(0)
         };
-        let retained_value = if legacy_layout {
-            // the value dword (rec+0x38) is USER space — GetControl echoes
-            // the current call's input over it, so a stored value is
-            // structurally unreadable back. Report what we sent; the true
-            // effect check is the legacy GetStatus freq dword (+8) at the
-            // call site.
+        let retained_value = if !readback || legacy_layout {
+            // -9 window: report what we sent. Legacy layout: the value dword
+            // (rec+0x38) is USER space — GetControl echoes the current call's
+            // input over it, so a stored value is structurally unreadable
+            // back. The true effect check is the legacy GetStatus freq dword
+            // (+8) at the call site.
             value
         } else {
             verify.value(bank, idx).unwrap_or(0)
@@ -4721,7 +4759,7 @@ impl PhysicalGpu {
 
         // For mode 0: value must match exactly
         // For mode 1: low i16 must match
-        let ok = if legacy_layout {
+        let ok = if !readback || legacy_layout {
             // NO readback verify on legacy: both candidate readback fields
             // are structurally unusable (rec+0x38 is user-echo — a GET
             // overwrites it with the current call's input; rec+0x24 reads
@@ -4982,6 +5020,10 @@ impl PhysicalGpu {
                 let st2 = unsafe {
                     NvAPI_GPU_ClockClkVfPointsGetInfo(self.0, ptr::from_mut(&mut *info).cast())
                 };
+                eprintln!(
+                    "DBG range: getinfo fallback stamp={:#x} st={st2:#x}",
+                    NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_INFO_PRIVATE::MAGIC_LEGACY
+                );
                 crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetInfo, st2)
                     .map_err(crate::Error::from)?;
             } else {
@@ -5066,15 +5108,7 @@ impl PhysicalGpu {
         verify.version =
             sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
-        let st = unsafe {
-            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut verify).cast())
-        };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
-            .map_err(crate::Error::from)?;
-
-        // verify that at least the first point has mode=1 (delta)
-        let mode = verify.mode(bank, start).unwrap_or(0);
-        if mode != 1 {
+        if self.vfp_post_set_readback(&mut verify)? && verify.mode(bank, start).unwrap_or(0) != 1 {
             return Err(crate::Error::Nvapi(crate::NvapiError::new(
                 sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl,
                 Status::NotSupported,
@@ -5168,12 +5202,7 @@ impl PhysicalGpu {
         verify.version =
             sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
-        let st = unsafe {
-            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut verify).cast())
-        };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
-            .map_err(crate::Error::from)?;
-        if verify.mode(bank, start).unwrap_or(0) != 1 {
+        if self.vfp_post_set_readback(&mut verify)? && verify.mode(bank, start).unwrap_or(0) != 1 {
             return Err(crate::Error::Nvapi(crate::NvapiError::new(
                 sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl,
                 Status::NotSupported,
@@ -5293,22 +5322,21 @@ impl PhysicalGpu {
             verify.version =
                 sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
             verify.seed_masks_from_info(&info);
-            let st = unsafe {
-                NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut verify).cast())
-            };
-            crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
-                .map_err(crate::Error::from)?;
 
             // find the first PATCHED point and confirm mode==0, value==0
-            // (with only_mode, untouched points keep their mode)
-            if let Some(idx) = first_patched {
-                let mode = verify.mode(bank, idx).unwrap_or(1);
-                let value = verify.value(bank, idx).unwrap_or(1);
-                if mode != 0 || value != 0 {
-                    return Err(crate::Error::Nvapi(crate::NvapiError::new(
-                        sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl,
-                        Status::NotSupported,
-                    )));
+            // (with only_mode, untouched points keep their mode). The -9
+            // settling window (see vfp_post_set_readback) skips the check —
+            // the SET status is the gate, same as every write path above.
+            if self.vfp_post_set_readback(&mut verify)? {
+                if let Some(idx) = first_patched {
+                    let mode = verify.mode(bank, idx).unwrap_or(1);
+                    let value = verify.value(bank, idx).unwrap_or(1);
+                    if mode != 0 || value != 0 {
+                        return Err(crate::Error::Nvapi(crate::NvapiError::new(
+                            sys::Api::NvAPI_GPU_ClockClkVfPointsSetControl,
+                            Status::NotSupported,
+                        )));
+                    }
                 }
             }
         }

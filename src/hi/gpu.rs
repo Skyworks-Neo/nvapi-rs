@@ -1892,9 +1892,7 @@ impl Gpu {
     }
 
     /// Enumerate the TopRels relation table (GetInfo).
-    pub fn top_rels_relations(
-        &self,
-    ) -> crate::Result<Vec<(usize, u32, u32, u32, u32)>> {
+    pub fn top_rels_relations(&self) -> crate::Result<Vec<(usize, u32, u32, u32, u32)>> {
         self.gpu.top_rels_relations()
     }
 
@@ -1908,7 +1906,6 @@ impl Gpu {
     pub fn set_top_rels_ratio_at(&self, idx: usize, raw: u32) -> crate::Result<Option<u32>> {
         self.gpu.set_top_rels_ratio_at(idx, raw)
     }
-
 
     /// Power-command channel read (xOCD 2.0 `ReadPowerCommand`; NDA
     /// 0x33AB0353 GET). `command` ∈ {0xF8, 0xFE}, channel 0..=31. Read-only;
