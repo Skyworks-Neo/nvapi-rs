@@ -828,6 +828,15 @@ pub enum ClkVfDomainHint {
     Gpc,
     Xbar,
     Msd,
+    /// 4th vf_curve (operator-pinned 2026-10-12, Blackwell RTX PRO 6000
+    /// 580.173.02: bank0 383..509, 127 pts). Attribution path HOST → SYS
+    /// mirrors the ordinal-2 curve's; the A/B that pinned it: this segment
+    /// shifted where MSD did not, in the SYS band.
+    Sys,
+    /// 5th vf_curve (operator-pinned 2026-10-12, Blackwell bank0 510..636,
+    /// 127 pts): the PWR or UPROC curve — the range is confirmed, the two
+    /// candidate identities are not yet separated by an A/B.
+    PwrUproc,
     Disp,
     Mem,
     /// Pascal server (GP100) bank-0 plane A (points 0..79): the voltage-side
@@ -854,6 +863,8 @@ impl ClkVfDomainHint {
             ClkVfDomainHint::Gpc => "gpc",
             ClkVfDomainHint::Xbar => "xbar",
             ClkVfDomainHint::Msd => "msd",
+            ClkVfDomainHint::Sys => "sys",
+            ClkVfDomainHint::PwrUproc => "pwr_uproc",
             ClkVfDomainHint::Disp => "disp",
             ClkVfDomainHint::Mem => "mem",
             ClkVfDomainHint::GpcPreOc => "gpc_pre_oc",

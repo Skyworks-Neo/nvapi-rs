@@ -10442,7 +10442,11 @@ fn build_perf_freq_cap_buffer(cap: PerfFreqCap) -> Vec<u8> {
 /// CURVE rather than a pstate-bin list — curves run 80/127/128 points, bin
 /// lists 2-8. Shared with the merge rule's voltage-drawdown exemption so the
 /// two bars cannot drift apart.
-const CURVE_MIN_POINTS: u16 = 8;
+// 9, not 8: Blackwell bank0 packs an 8-point typed (type-12) DISP pstate
+// list right after the five curves — exactly at the old bar, it classified
+// as a fake curve. Every REAL curve observed is 80+ points; bin lists are
+// 2/4/5/7/8 points (mem, Turing, Ada mem/disp, Blackwell disp).
+const CURVE_MIN_POINTS: u16 = 9;
 
 fn segment_vf_points(
     points: &[crate::clock::ClkVfPointPrivate],
@@ -10482,7 +10486,8 @@ fn segment_vf_points(
         // can only ever bridge short bin lists, never two long curves.
         // (Known limit: a bin list longer than that bar that wobbles in
         // voltage would still shatter — none observed, and the bar is
-        // not a new magic number.)
+        // not a new magic number. Blackwell's 8-pt DISP list is the
+        // longest bin run on file and sits one below the bar.)
         // NON-decreasing, not strict: plateaus are normal on both axes
         // (voltage 643.8/643.8 and 737.5/737.5 in that same dump; the
         // P100 80-pt ladder holds 405 MHz across points) and a strict
@@ -10537,8 +10542,8 @@ fn segment_vf_points(
     // the two kinds (Turing's GPC curve and Ada's bins share a type).
     // UNTYPED (type-0) runs are always pstate bins regardless of length —
     // they are the driver's pstate frequency ladder (P100: 405/648/810/
-    // 1080 doubled), never a V/F curve; without this the 8-record bin
-    // run would cross the CURVE_MIN_POINTS bar and plot as a fake curve.
+    // 1080 doubled), never a V/F curve. Kept even though the bar now
+    // clears the 8-record run: a longer untyped ladder must never plot.
     for s in segments.iter_mut() {
         s.kind = if s.record_type == 0 {
             crate::clock::ClkVfSegmentKind::PstateBins
@@ -10604,6 +10609,12 @@ fn segment_vf_points(
             // A/B (+200 MHz shifted every point, Host MEASURE unmoved)
             // pinned MSD (see ClkVfSegment::domain_hint doc)
             (crate::clock::ClkVfSegmentKind::VfCurve, 2) => crate::clock::ClkVfDomainHint::Msd,
+            // Blackwell (RTX PRO 6000, 580.173.02): ordinals 3 and 4 are
+            // real curves the older generations never unpacked — the
+            // operator-pinned A/B names them SYS and PWR/UPROC (see
+            // ClkVfDomainHint docs)
+            (crate::clock::ClkVfSegmentKind::VfCurve, 3) => crate::clock::ClkVfDomainHint::Sys,
+            (crate::clock::ClkVfSegmentKind::VfCurve, 4) => crate::clock::ClkVfDomainHint::PwrUproc,
             (crate::clock::ClkVfSegmentKind::PstateBins, 0) => crate::clock::ClkVfDomainHint::Mem,
             // 4060: disp pstate ceiling (675/1080/1350 observed live;
             // initially mislabeled HOST); Turing: unknown 5-bin list —
