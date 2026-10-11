@@ -1882,8 +1882,8 @@ impl Gpu {
     /// The driver-reported default GPC:XBAR ratio (GetInfo relation payload,
     /// U16.16). Reset source for the ratio — read from the driver's own
     /// relation table, not hard-coded. `None` when the edge is absent.
-    pub fn top_rels_default_ratio(&self, slot: usize) -> crate::Result<Option<f64>> {
-        self.gpu.top_rels_default_ratio(slot)
+    pub fn top_rels_default_ratio(&self) -> crate::Result<Option<f64>> {
+        self.gpu.top_rels_default_ratio()
     }
 
     /// The driver-reported default ratio for one TopRels relation index.
@@ -1909,16 +1909,6 @@ impl Gpu {
         self.gpu.set_top_rels_ratio_at(idx, raw)
     }
 
-    /// Read one TopRels control slot's ratio (raw U16.16).
-    pub fn top_rels_ratio_slot(&self, slot: usize) -> crate::Result<Option<u32>> {
-        self.gpu.top_rels_ratio_slot(slot)
-    }
-
-    /// Write one TopRels control slot's ratio (raw U16.16) with readback
-    /// verification. Returns the landed value; `None` when not retained.
-    pub fn set_top_rels_ratio_slot(&self, slot: usize, raw: u32) -> crate::Result<Option<u32>> {
-        self.gpu.set_top_rels_ratio_slot(slot, raw)
-    }
 
     /// Power-command channel read (xOCD 2.0 `ReadPowerCommand`; NDA
     /// 0x33AB0353 GET). `command` ∈ {0xF8, 0xFE}, channel 0..=31. Read-only;
