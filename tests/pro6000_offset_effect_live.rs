@@ -131,29 +131,34 @@ fn offset_effect_probe() {
     println!("\n== baseline (loaded) ==");
     sample(gpu, "base ", 4);
 
-    // ---- XBAR slot2 -100 MHz --------------------------------------------
-    println!("\n== XBAR slot2 = -100 MHz ==");
-    let before = slot_value(gpu, 1, 2).unwrap_or(0);
-    println!("  snapshot slot2 = {before}");
-    gpu.set_clk_domain_offset(1, -100_000, 2, false)
-        .expect("xbar slot2 SET failed under root — unexpected");
-    println!("  write ok, readback slot2 = {:?}", slot_value(gpu, 1, 2));
-    sample(gpu, "xbar-", 8);
-    gpu.set_clk_domain_offset(1, before, 2, false)
-        .expect("xbar restore failed");
-    println!("  restored slot2 = {:?}", slot_value(gpu, 1, 2));
+    // Probe sets: domain:slot pairs. Slot 2/3 proven dead on this SKU
+    // (prior run) — the open question is whether the server GSP policy
+    // still attaches the LEGACY planes 0 (freq) / 1 (volt). Override via
+    // NVOC_PROBE_SETS="domain:slot,domain:slot".
+    let sets: Vec<(u32, usize)> = std::env::var("NVOC_PROBE_SETS")
+        .unwrap_or_else(|_| "1:0,0:0".into())
+        .split(',')
+        .filter_map(|p| {
+            let (d, s) = p.trim().split_once(':')?;
+            Some((d.parse().ok()?, s.parse().ok()?))
+        })
+        .collect();
 
-    // ---- GPC slot2 -100 MHz ----------------------------------------------
-    println!("\n== GPC slot2 = -100 MHz ==");
-    let before = slot_value(gpu, 0, 2).unwrap_or(0);
-    println!("  snapshot slot2 = {before}");
-    gpu.set_clk_domain_offset(0, -100_000, 2, false)
-        .expect("gpc slot2 SET failed under root — unexpected");
-    println!("  write ok, readback slot2 = {:?}", slot_value(gpu, 0, 2));
-    sample(gpu, "gpc-", 8);
-    gpu.set_clk_domain_offset(0, before, 2, false)
-        .expect("gpc restore failed");
-    println!("  restored slot2 = {:?}", slot_value(gpu, 0, 2));
+    for (domain, slot) in sets {
+        println!("\n== domain {domain} slot{slot} = -100 MHz ==");
+        let before = slot_value(gpu, domain, slot).unwrap_or(0);
+        println!("  snapshot slot{slot} = {before}");
+        gpu.set_clk_domain_offset(domain, -100_000, slot as u32, false)
+            .unwrap_or_else(|e| panic!("domain {domain} slot{slot} SET failed: {e}"));
+        println!("  write ok, readback = {:?}", slot_value(gpu, domain, slot));
+        sample(gpu, &format!("d{domain}s{slot}-"), 8);
+        gpu.set_clk_domain_offset(domain, before, slot as u32, false)
+            .unwrap_or_else(|e| panic!("domain {domain} slot{slot} restore failed: {e}"));
+        println!(
+            "  restored slot{slot} = {:?}",
+            slot_value(gpu, domain, slot)
+        );
+    }
 
     // ---- final integrity --------------------------------------------------
     println!("\n== final: all fabric slots must be back to snapshot ==");
@@ -163,8 +168,8 @@ fn offset_effect_probe() {
     }
 
     println!("\nVERDICT GUIDE:");
-    println!("  XBAR dropped ~100 MHz while written  -> offsets ARE effective here;");
-    println!("    the earlier 'no effect' was clamp/policy (e.g. TopRels 0.9 ratio on up-offsets)");
-    println!("  XBAR unchanged while record holds -100000 -> GSP accepts-but-ignores:");
+    println!("  clock dropped ~100 MHz while written  -> THAT plane is attached on this SKU;");
+    println!("    nvoc's Blackwell slot map must become platform-skewed (server = legacy planes)");
+    println!("  every plane unchanged while records hold values -> GSP accepts-but-ignores:");
     println!("    the record table is detached from the clock tree on this SKU (GSP RE next)");
 }
