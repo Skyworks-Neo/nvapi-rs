@@ -1,11 +1,13 @@
-//! TopRels GPC:XBAR ratio walk v2 — RAW sys calls with the PROVEN minimal
-//! seed: +4 = 0xFF ONLY (blackwell_recon_live seed A, rc=0, ratio 0xE660
-//! @abs 0x68). The hi-level top_rels_control_seeded() uses the 616.92-era
-//! full seeding (seed_mask: +4 + rec0 + 32B@+8) which this driver rejects
-//! (-104); recon seed B already showed the fuller seeding failing.
+//! TopRels ratio walk v3 — DOWN-walk + transition-triggered application test.
 //!
-//! Walk 0.9 -> 0.95 -> 1.0 -> 0.9 under NVENC load; direct-measure GPC/XBAR.
-//! Root required; restores the original ratio at the end.
+//! v2 result: ver1 SET lands (0xF333/0x10000 readback exact) but XBAR stays
+//! at ~0.898x GPC under stable load. Two hypotheses:
+//!   H1  upside clamp — lowering the ratio moves the clock (user suggestion)
+//!   H2  transition-applied — the ratio is only re-evaluated when GPC
+//!       re-clocks; stable-load GPC never transitions, so the stored ratio
+//!       is never re-read. Test: set 0.8, kill the load (GPC downclocks),
+//!       respawn (GPC re-upclocks) — if XBAR returns at 0.8x, the path is
+//!       LIVE but transition-applied.
 //!
 //!   sudo target/debug/deps/pro6000_toprels_ratio_live-<hash> --nocapture --ignored
 
@@ -20,20 +22,11 @@ use nvapi::sys::nvapi::NvVersion;
 use std::process::{Child, Command};
 use std::time::Duration;
 
-const RATIO_OFF: usize = 0x64; // rest-relative; absolute 0x68 in the buffer
+const RATIO_OFF: usize = 0x64;
 
 struct LoadGuard(Option<Child>);
 
-impl Drop for LoadGuard {
-    fn drop(&mut self) {
-        if let Some(c) = self.0.as_mut() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-    }
-}
-
-fn spawn_load() -> LoadGuard {
+fn spawn_load() -> (LoadGuard, bool) {
     match Command::new("ffmpeg")
         .args([
             "-hide_banner",
@@ -48,7 +41,7 @@ fn spawn_load() -> LoadGuard {
             "-preset",
             "p7",
             "-t",
-            "120",
+            "180",
             "-f",
             "null",
             "/dev/null",
@@ -58,13 +51,19 @@ fn spawn_load() -> LoadGuard {
         .spawn()
     {
         Ok(c) => {
-            println!("load: ffmpeg h264_nvenc spawned (pid {})", c.id());
+            println!("load: ffmpeg spawned (pid {})", c.id());
             std::thread::sleep(Duration::from_secs(3));
-            LoadGuard(Some(c))
+            (LoadGuard(Some(c)), true)
         }
-        Err(_) => {
-            println!("load: ffmpeg unavailable — external load only");
-            LoadGuard(None)
+        Err(_) => (LoadGuard(None), false),
+    }
+}
+
+impl Drop for LoadGuard {
+    fn drop(&mut self) {
+        if let Some(c) = self.0.as_mut() {
+            let _ = c.kill();
+            let _ = c.wait();
         }
     }
 }
@@ -74,7 +73,7 @@ fn seeded() -> Box<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL> {
         let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL>::new_zeroed();
         let mut b = b.assume_init();
         b.version = NvVersion::with_version(0x1075C);
-        b.rest[0..4].copy_from_slice(&0xFFu32.to_le_bytes()); // seed A ONLY
+        b.rest[0..4].copy_from_slice(&0xFFu32.to_le_bytes());
         b
     }
 }
@@ -149,44 +148,58 @@ fn toprels_ratio_walk() {
     println!("gpu: {}", gpu.full_name().unwrap_or_default());
 
     let Some(original) = get_ratio(gpu) else {
-        panic!("baseline GET failed — paste me");
+        panic!("baseline GET failed");
     };
     println!(
         "current ratio raw = {original:#x} ({:.4})",
         original as f64 / 65536.0
     );
-    let _load = spawn_load();
+    let (load1, had1) = spawn_load();
 
-    println!("\n== baseline @ {original:#x} ==");
-    sample(gpu, "r0.90", 4);
-
-    for raw in [0xF333u32, 0x10000] {
-        // 0.95, 1.0
-        println!(
-            "\n== SET ratio raw {raw:#x} ({:.4}) ==",
-            raw as f64 / 65536.0
-        );
+    // ---- H1: DOWN-walk 0.8, 0.7 ------------------------------------------
+    for raw in [0xCCCCu32, 0xB333] {
+        let r = raw as f64 / 65536.0;
+        println!("\n== H1 DOWN: SET ratio {r:.2} ==");
         match set_ratio(gpu, raw) {
             Some(rb) => println!("  landed = {rb:#x} ({:.4})", rb as f64 / 65536.0),
             None => {
-                println!("  SET/GET failed — restoring original");
+                println!("  failed — restoring");
                 set_ratio(gpu, original);
                 continue;
             }
         }
-        sample(gpu, &format!("r{:.2}", raw as f64 / 65536.0), 6);
+        sample(gpu, &format!("r{r:.2}"), 6);
     }
 
+    // ---- H2: transition-triggered application ----------------------------
+    println!("\n== H2: ratio 0.8 + GPC transition (load drop -> respawn) ==");
+    if let Some(rb) = set_ratio(gpu, 0xCCCC) {
+        println!("  ratio landed = {rb:#x}");
+    }
+    sample(gpu, "pre-drop", 2);
+    drop(load1);
+    if had1 {
+        println!("  -- load dropped, GPC downclocking --");
+    }
+    sample(gpu, "downclock", 6);
+    println!("  -- respawning load, GPC re-upclocks --");
+    {
+        let (_g2, _) = spawn_load();
+        sample(gpu, "reup", 8);
+    }
+
+    // ---- restore ---------------------------------------------------------
     println!("\n== restore {original:#x} ==");
     match set_ratio(gpu, original) {
         Some(rb) => println!("  restore ok, landed = {rb:#x}"),
-        None => println!("  restore FAILED — MANUAL CHECK: blackwell_recon_live GetControl"),
+        None => println!("  restore FAILED — MANUAL CHECK via blackwell_recon_live GET"),
     }
-    sample(gpu, "r0.90", 3);
+    sample(gpu, "final", 3);
 
     println!("\nVERDICT GUIDE:");
-    println!("  XBAR tracked 0.95/1.0 -> RATIO PATH LIVE: XBAR OC via TopRels SET_CONTROL;");
-    println!("    dead slot offsets were ratio-clamped — retest with headroom");
-    println!("  landed moves but clock pinned -> fourth inert face; GSP RE continues");
-    println!("  SET refused -> paste rc; face gated beyond the seed fix");
+    println!("  DOWN-walk moved XBAR                     -> H1: path live, upside-clamped;");
+    println!("    slot offsets were clamped by the ratio — raise ratio first, then slots");
+    println!("  XBAR returned at 0.8x after transition   -> H2: transition-applied;");
+    println!("    writes need a GPC re-clock to take effect (toggle load/pstate)");
+    println!("  neither                                  -> record inert on this build");
 }
