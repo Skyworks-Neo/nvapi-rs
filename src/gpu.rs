@@ -2695,16 +2695,143 @@ impl PhysicalGpu {
         Ok(info.relation_payload(slot).map(|p| p as f64 / 65536.0))
     }
 
+    /// The driver-reported default ratio for one TopRels relation index
+    /// (GetInfo relation payload, U16.16).
+    pub fn top_rels_default_ratio_at(&self, idx: usize) -> crate::Result<Option<u32>> {
+        use crate::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetInfo;
+        use clock::undocumented::{NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO, clk_top_rels_info};
+        let mut info = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO::zeroed();
+        info.version = NvVersion::with_version(clk_top_rels_info::MAGIC);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetInfo(self.0, ptr::from_mut(&mut info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetInfo, st)?;
+        Ok(info.relation_payload(idx).map(|p| p as u32))
+    }
+
+    /// Enumerate the TopRels relation table (GetInfo): every populated
+    /// relation with its index, (src, dst) domains, direction flag, and
+    /// default payload (the relation's initial ratio when it carries one).
+    pub fn top_rels_relations(
+        &self,
+    ) -> crate::Result<Vec<(usize, u32, u32, u32, u32)>> {
+        use crate::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetInfo;
+        use clock::undocumented::{NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO, clk_top_rels_info};
+        let mut info = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO::zeroed();
+        info.version = NvVersion::with_version(clk_top_rels_info::MAGIC);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetInfo(self.0, ptr::from_mut(&mut info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetInfo, st)?;
+        let mut out = Vec::new();
+        for i in 0..255usize {
+            if info.relation_masked(i) != Some(true) {
+                continue;
+            }
+            let raw = info.relation_raw_bytes(i).unwrap_or([0; 3]);
+            out.push((
+                i,
+                raw[0] as u32,
+                raw[1] as u32,
+                raw[2] as u32,
+                info.relation_payload(i).unwrap_or(0),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Read one TopRels control record's ratio dword (raw U16.16) at
+    /// relation index `idx`. Seed d0 covers the base relations plus `idx`.
+    pub fn top_rels_ratio_at(&self, idx: usize) -> crate::Result<Option<u32>> {
+        use crate::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetControl;
+        use clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL;
+        use clock::undocumented::clk_top_rels_control;
+        if idx >= 255 {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let mut ctl = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::zeroed();
+        ctl.version = NvVersion::with_version(clk_top_rels_control::MAGIC);
+        let d0 = 0xFFu32 | (1u32 << idx);
+        ctl.rest[0..4].copy_from_slice(&d0.to_le_bytes());
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut ctl).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)?;
+        let off = 0x64 + idx * 0x108;
+        Ok(ctl
+            .rest
+            .get(off..off + 4)
+            .and_then(|s| s.try_into().ok())
+            .map(u32::from_le_bytes))
+    }
+
+    /// Write one TopRels control record's ratio dword at relation index
+    /// `idx` with GET -> SET -> readback verification and best-effort
+    /// restore on readback mismatch. Returns the landed value.
+    pub fn set_top_rels_ratio_at(&self, idx: usize, raw: u32) -> crate::Result<Option<u32>> {
+        use crate::sys::api::{
+            NvAPI_GPU_ClockClkPropTopRelsGetControl, NvAPI_GPU_ClockClkPropTopRelsSetControl,
+        };
+        use clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL;
+        use clock::undocumented::clk_top_rels_control;
+        if idx >= 255 || raw > clk_top_rels_control::MAX_SANE_RAW {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let d0 = 0xFFu32 | (1u32 << idx);
+        let seeded = || {
+            let mut ctl = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::zeroed();
+            ctl.version = NvVersion::with_version(clk_top_rels_control::MAGIC);
+            ctl.rest[0..4].copy_from_slice(&d0.to_le_bytes());
+            ctl
+        };
+        let mut before = seeded();
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut before).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)?;
+        let original = before.rest[0x64 + idx * 0x108..0x64 + idx * 0x108 + 4].to_vec();
+
+        let mut modified = seeded();
+        modified.rest[0x64 + idx * 0x108..0x64 + idx * 0x108 + 4]
+            .copy_from_slice(&raw.to_le_bytes());
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsSetControl(self.0, ptr::from_ref(&modified).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsSetControl, st)?;
+
+        let mut verify = seeded();
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut verify).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)?;
+        let landed = u32::from_le_bytes(
+            verify.rest[0x64 + idx * 0x108..0x64 + idx * 0x108 + 4]
+                .try_into()
+                .unwrap(),
+        );
+        if landed != raw {
+            let mut restore = seeded();
+            restore.rest[0x64 + idx * 0x108..0x64 + idx * 0x108 + 4].copy_from_slice(&original);
+            let _ = unsafe {
+                NvAPI_GPU_ClockClkPropTopRelsSetControl(self.0, ptr::from_ref(&restore).cast())
+            };
+            return Ok(None);
+        }
+        Ok(Some(landed))
+    }
+
     /// The five writable GPC:XBAR ratio control slots (records 0, 10-13).
     /// Slot 0 is the engine-tracked active ratio; 10-13 are regime-variant
     /// stores (census + envelope-probe: all five land verbatim; only slot 0
     /// is behavioral on 580.173.02).
     pub const TOPRELS_RATIO_SLOTS: [usize; 5] = [0, 10, 11, 12, 13];
 
-    fn top_rels_slot_seed() -> [u8; 4] {
-        // bits 0-7 (base relations) + bits 10-13 (envelope records);
-        // d1 (bits 32-63) would be out of range and -1s
-        0x3CFFu32.to_le_bytes()
+    fn top_rels_slot_seed(slot: usize) -> [u8; 4] {
+        // SET validates the relation mask: slot 0 rides the base 0xFF alone
+        // (v3-walk proven); the envelope slots 10-13 must additionally carry
+        // their own bit. d1 (bits 32-63) is out of range and -1s.
+        let d0: u32 = if slot == 0 { 0xFF } else { 0xFF | (1 << slot) };
+        d0.to_le_bytes()
     }
 
     /// Read one TopRels control slot's ratio dword (raw U16.16).
@@ -2717,7 +2844,7 @@ impl PhysicalGpu {
         }
         let mut ctl = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::zeroed();
         ctl.version = NvVersion::with_version(clk_top_rels_control::MAGIC);
-        ctl.rest[0..4].copy_from_slice(&Self::top_rels_slot_seed());
+        ctl.rest[0..4].copy_from_slice(&Self::top_rels_slot_seed(slot));
         let st = unsafe {
             NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut ctl).cast())
         };
@@ -2753,7 +2880,7 @@ impl PhysicalGpu {
         let seeded = || {
             let mut ctl = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::zeroed();
             ctl.version = NvVersion::with_version(clk_top_rels_control::MAGIC);
-            ctl.rest[0..4].copy_from_slice(&Self::top_rels_slot_seed());
+            ctl.rest[0..4].copy_from_slice(&Self::top_rels_slot_seed(slot));
             ctl
         };
         let mut before = seeded();

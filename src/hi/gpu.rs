@@ -1886,6 +1886,29 @@ impl Gpu {
         self.gpu.top_rels_default_ratio(slot)
     }
 
+    /// The driver-reported default ratio for one TopRels relation index.
+    pub fn top_rels_default_ratio_at(&self, idx: usize) -> crate::Result<Option<u32>> {
+        self.gpu.top_rels_default_ratio_at(idx)
+    }
+
+    /// Enumerate the TopRels relation table (GetInfo).
+    pub fn top_rels_relations(
+        &self,
+    ) -> crate::Result<Vec<(usize, u32, u32, u32, u32)>> {
+        self.gpu.top_rels_relations()
+    }
+
+    /// Read one TopRels control record's ratio (raw U16.16) at relation idx.
+    pub fn top_rels_ratio_at(&self, idx: usize) -> crate::Result<Option<u32>> {
+        self.gpu.top_rels_ratio_at(idx)
+    }
+
+    /// Write one TopRels control record's ratio at relation idx (readback-
+    /// verified, auto-restore on mismatch). Returns the landed value.
+    pub fn set_top_rels_ratio_at(&self, idx: usize, raw: u32) -> crate::Result<Option<u32>> {
+        self.gpu.set_top_rels_ratio_at(idx, raw)
+    }
+
     /// Read one TopRels control slot's ratio (raw U16.16).
     pub fn top_rels_ratio_slot(&self, slot: usize) -> crate::Result<Option<u32>> {
         self.gpu.top_rels_ratio_slot(slot)
