@@ -157,19 +157,27 @@ fn toprels_ratio_walk() {
     let (load1, had1) = spawn_load();
 
     // ---- H1: DOWN-walk 0.8, 0.7 ------------------------------------------
-    for raw in [0xCCCCu32, 0xB333] {
+    // ENVELOPE MAP: down to the floor, fine-grained across the devinit
+    // point, up to the clamp top. Each step: SET -> landed readback -> 2
+    // clock samples (landed != requested => record-level clamp; landed ==
+    // requested but clock unchanged => behavioral clamp).
+    for raw in [
+        0x4CCCu32, 0x8000, 0xB333, 0xE148, original, 0xE800, 0xE900, 0xEA00, 0xF333, 0x10000,
+        0x1199, 0x1333,
+    ] {
         let r = raw as f64 / 65536.0;
-        println!("\n== H1 DOWN: SET ratio {r:.2} ==");
+        println!("\n== SET ratio {r:.4} (raw {raw:#x}) ==");
         match set_ratio(gpu, raw) {
             Some(rb) => println!("  landed = {rb:#x} ({:.4})", rb as f64 / 65536.0),
             None => {
-                println!("  failed — restoring");
-                set_ratio(gpu, original);
+                println!("  SET refused — continuing");
                 continue;
             }
         }
-        sample(gpu, &format!("r{r:.2}"), 6);
+        sample(gpu, &format!("r{r:.2}"), 2);
     }
+    // reseed original before final verification
+    let _ = set_ratio(gpu, original);
 
     // ---- H2: transition-triggered application ----------------------------
     println!("\n== H2: ratio 0.8 + GPC transition (load drop -> respawn) ==");
