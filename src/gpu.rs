@@ -2683,7 +2683,7 @@ impl PhysicalGpu {
     /// U16.16 — 0xE660 = 0.9 on this generation). Read from the driver's own
     /// relation table rather than hard-coded, so a reset follows whatever
     /// default the SKU/driver carries. `None` when the edge is absent.
-    pub fn top_rels_default_ratio(&self) -> crate::Result<Option<f64>> {
+    pub fn top_rels_default_ratio(&self, slot: usize) -> crate::Result<Option<f64>> {
         use crate::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetInfo;
         use clock::undocumented::{NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO, clk_top_rels_info};
         let mut info = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO::zeroed();
@@ -2692,11 +2692,101 @@ impl PhysicalGpu {
             NvAPI_GPU_ClockClkPropTopRelsGetInfo(self.0, ptr::from_mut(&mut info).cast())
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetInfo, st)?;
-        Ok(info
-            .find_gpc_xbar_records()
-            .first()
-            .and_then(|&i| info.relation_payload(i))
-            .map(|p| p as f64 / 65536.0))
+        Ok(info.relation_payload(slot).map(|p| p as f64 / 65536.0))
+    }
+
+    /// The five writable GPC:XBAR ratio control slots (records 0, 10-13).
+    /// Slot 0 is the engine-tracked active ratio; 10-13 are regime-variant
+    /// stores (census + envelope-probe: all five land verbatim; only slot 0
+    /// is behavioral on 580.173.02).
+    pub const TOPRELS_RATIO_SLOTS: [usize; 5] = [0, 10, 11, 12, 13];
+
+    fn top_rels_slot_seed() -> [u8; 4] {
+        // bits 0-7 (base relations) + bits 10-13 (envelope records);
+        // d1 (bits 32-63) would be out of range and -1s
+        0x3CFFu32.to_le_bytes()
+    }
+
+    /// Read one TopRels control slot's ratio dword (raw U16.16).
+    pub fn top_rels_ratio_slot(&self, slot: usize) -> crate::Result<Option<u32>> {
+        use crate::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetControl;
+        use clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL;
+        use clock::undocumented::clk_top_rels_control;
+        if !Self::TOPRELS_RATIO_SLOTS.contains(&slot) {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let mut ctl = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::zeroed();
+        ctl.version = NvVersion::with_version(clk_top_rels_control::MAGIC);
+        ctl.rest[0..4].copy_from_slice(&Self::top_rels_slot_seed());
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut ctl).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)?;
+        let off = 0x64 + slot * 0x108;
+        Ok(ctl
+            .rest
+            .get(off..off + 4)
+            .and_then(|s| s.try_into().ok())
+            .map(u32::from_le_bytes))
+    }
+
+    /// Write one TopRels control slot's ratio dword (raw U16.16) with
+    /// GET -> SET -> readback verification and best-effort restore on
+    /// readback mismatch. Returns the landed value.
+    pub fn set_top_rels_ratio_slot(
+        &self,
+        slot: usize,
+        raw: u32,
+    ) -> crate::Result<Option<u32>> {
+        use crate::sys::api::{
+            NvAPI_GPU_ClockClkPropTopRelsGetControl, NvAPI_GPU_ClockClkPropTopRelsSetControl,
+        };
+        use clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL;
+        use clock::undocumented::clk_top_rels_control;
+        if !Self::TOPRELS_RATIO_SLOTS.contains(&slot) {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        if raw > clk_top_rels_control::MAX_SANE_RAW {
+            return Err(crate::Error::ArgumentRange(Default::default()));
+        }
+        let off = 0x64 + slot * 0x108;
+        let seeded = || {
+            let mut ctl = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::zeroed();
+            ctl.version = NvVersion::with_version(clk_top_rels_control::MAGIC);
+            ctl.rest[0..4].copy_from_slice(&Self::top_rels_slot_seed());
+            ctl
+        };
+        let mut before = seeded();
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut before).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)?;
+        let original = before.rest[off..off + 4].to_vec();
+
+        let mut modified = seeded();
+        modified.rest[off..off + 4].copy_from_slice(&raw.to_le_bytes());
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsSetControl(self.0, ptr::from_ref(&modified).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsSetControl, st)?;
+
+        // readback
+        let mut verify = seeded();
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut verify).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)?;
+        let landed = u32::from_le_bytes(verify.rest[off..off + 4].try_into().unwrap());
+        if landed != raw {
+            // driver did not retain — best-effort restore of the original
+            let mut restore = seeded();
+            restore.rest[off..off + 4].copy_from_slice(&original);
+            let _ = unsafe {
+                NvAPI_GPU_ClockClkPropTopRelsSetControl(self.0, ptr::from_ref(&restore).cast())
+            };
+            return Ok(None);
+        }
+        Ok(Some(landed))
     }
 
     pub fn set_top_rels_ratio_raw(&self, raw: u32) -> crate::Result<u32> {
@@ -4557,7 +4647,7 @@ impl PhysicalGpu {
             verify.seed_masks_from_info(&info);
         }
         let st = unsafe {
-            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut verify).cast())
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
             .map_err(crate::Error::from)?;
@@ -4929,7 +5019,7 @@ impl PhysicalGpu {
             sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
-            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut verify).cast())
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
             .map_err(crate::Error::from)?;
@@ -5031,7 +5121,7 @@ impl PhysicalGpu {
             sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
         verify.seed_masks_from_info(&info);
         let st = unsafe {
-            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
+            NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut verify).cast())
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
             .map_err(crate::Error::from)?;
@@ -5156,7 +5246,7 @@ impl PhysicalGpu {
                 sys::api::NvVersion::with_version(clock::undocumented::clk_vfp_control::MAGIC);
             verify.seed_masks_from_info(&info);
             let st = unsafe {
-                NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut *verify).cast())
+                NvAPI_GPU_ClockClkVfPointsGetControl(self.0, ptr::from_mut(&mut verify).cast())
             };
             crate::status_result(sys::Api::NvAPI_GPU_ClockClkVfPointsGetControl, st)
                 .map_err(crate::Error::from)?;
