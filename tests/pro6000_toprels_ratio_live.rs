@@ -1,13 +1,13 @@
-//! TopRels ratio walk v3 — DOWN-walk + transition-triggered application test.
+//! TopRels ratio + ClkDomains slot offset COMBINED probe.
 //!
-//! v2 result: ver1 SET lands (0xF333/0x10000 readback exact) but XBAR stays
-//! at ~0.898x GPC under stable load. Two hypotheses:
-//!   H1  upside clamp — lowering the ratio moves the clock (user suggestion)
-//!   H2  transition-applied — the ratio is only re-evaluated when GPC
-//!       re-clocks; stable-load GPC never transitions, so the stored ratio
-//!       is never re-read. Test: set 0.8, kill the load (GPC downclocks),
-//!       respawn (GPC re-upclocks) — if XBAR returns at 0.8x, the path is
-//!       LIVE but transition-applied.
+//! Envelope (v4): the ratio is a live ceiling — engine applies
+//! XBAR = ratio x GPC clamped to a ~884 MHz frequency floor; anything above
+//! the devinit 0.9 lands in the record but the clock pins at 0.9x.
+//! This probe tests whether the ClkDomains slot-offset plane (xbar slot2)
+//! feeds the clock WITHIN the live window: set ratio 0.7 (XBAR ~1700), then
+//! slot2 +100 MHz (expect ~1800 if the slot plane feeds; unchanged if the
+//! slot plane is inert independent of ratio). Also probes slot2 -100 MHz in
+//! the same window. Root; everything restored.
 //!
 //!   sudo target/debug/deps/pro6000_toprels_ratio_live-<hash> --nocapture --ignored
 
@@ -26,7 +26,7 @@ const RATIO_OFF: usize = 0x64;
 
 struct LoadGuard(Option<Child>);
 
-fn spawn_load() -> (LoadGuard, bool) {
+fn spawn_load() -> LoadGuard {
     match Command::new("ffmpeg")
         .args([
             "-hide_banner",
@@ -41,7 +41,7 @@ fn spawn_load() -> (LoadGuard, bool) {
             "-preset",
             "p7",
             "-t",
-            "180",
+            "150",
             "-f",
             "null",
             "/dev/null",
@@ -53,9 +53,12 @@ fn spawn_load() -> (LoadGuard, bool) {
         Ok(c) => {
             println!("load: ffmpeg spawned (pid {})", c.id());
             std::thread::sleep(Duration::from_secs(3));
-            (LoadGuard(Some(c)), true)
+            LoadGuard(Some(c))
         }
-        Err(_) => (LoadGuard(None), false),
+        Err(_) => {
+            println!("load: ffmpeg unavailable — external load only");
+            LoadGuard(None)
+        }
     }
 }
 
@@ -99,7 +102,7 @@ fn set_ratio(gpu: &PhysicalGpu, raw: u32) -> Option<u32> {
         ctl.rest[RATIO_OFF..RATIO_OFF + 4].copy_from_slice(&raw.to_le_bytes());
         let st =
             NvAPI_GPU_ClockClkPropTopRelsSetControl(*gpu.handle(), ptr::from_ref(&*ctl).cast());
-        println!("  SET rc={st}");
+        println!("  ratio SET rc={st}");
         if st != 0 {
             return None;
         }
@@ -117,23 +120,36 @@ fn sample(gpu: &PhysicalGpu, tag: &str, n: usize) {
             .clk_domain_freq_direct(1)
             .ok()
             .map(|v| v.freq_khz as f64 / 1000.0);
+        let volt = gpu
+            .core_voltage()
+            .ok()
+            .map(|v| format!("{:.1} mV", v.0 as f64 / 1000.0));
         let live = match (xbar, gpc) {
             (Some(x), Some(g)) if g > 0.0 => format!("ratio={:.4}", x / g),
             _ => "ratio=-".into(),
         };
         println!(
-            "  {tag}: GPC {} | XBAR {} | {live}",
+            "  {tag}: GPC {} | XBAR {} | {live} | V {}",
             gpc.map(|f| format!("{f:.1}")).unwrap_or_else(|| "-".into()),
             xbar.map(|f| format!("{f:.1}"))
-                .unwrap_or_else(|| "-".into())
+                .unwrap_or_else(|| "-".into()),
+            volt.unwrap_or_else(|| "-".into())
         );
         std::thread::sleep(Duration::from_millis(300));
     }
 }
 
+fn slot_value(gpu: &PhysicalGpu, bit: u32, slot: usize) -> Option<i32> {
+    let ctl = gpu.clk_domains_control().ok()?;
+    ctl.entries
+        .iter()
+        .find(|e| e.bit == bit)
+        .and_then(|e| e.values_kHz.get(slot).copied())
+}
+
 #[test]
-#[ignore = "live GPU WRITE probe — root required; restores the original ratio"]
-fn toprels_ratio_walk() {
+#[ignore = "live GPU WRITE probe — root required; restores ratio and slot offsets"]
+fn ratio_plus_slot_combo() {
     let uid = std::process::Command::new("id")
         .arg("-u")
         .output()
@@ -146,68 +162,50 @@ fn toprels_ratio_walk() {
     nvapi::initialize().expect("init");
     let gpu = &PhysicalGpu::enumerate().expect("enumerate")[0];
     println!("gpu: {}", gpu.full_name().unwrap_or_default());
+    let _load = spawn_load();
 
-    let Some(original) = get_ratio(gpu) else {
-        panic!("baseline GET failed");
+    // ---- step 1: ratio 0.7 ------------------------------------------------
+    println!("\n== 1. ratio = 0.7 ==");
+    let Some(rb) = set_ratio(gpu, 0xB333) else {
+        println!("ratio SET failed — abort");
+        return;
     };
-    println!(
-        "current ratio raw = {original:#x} ({:.4})",
-        original as f64 / 65536.0
-    );
-    let (load1, had1) = spawn_load();
+    println!("  ratio landed = {rb:#x}");
+    sample(gpu, "r0.70", 3);
 
-    // ---- H1: DOWN-walk 0.8, 0.7 ------------------------------------------
-    // ENVELOPE MAP: down to the floor, fine-grained across the devinit
-    // point, up to the clamp top. Each step: SET -> landed readback -> 2
-    // clock samples (landed != requested => record-level clamp; landed ==
-    // requested but clock unchanged => behavioral clamp).
-    for raw in [
-        0x4CCCu32, 0x8000, 0xB333, 0xE148, original, 0xE800, 0xE900, 0xEA00, 0xF333, 0x10000,
-        0x1199, 0x1333,
-    ] {
-        let r = raw as f64 / 65536.0;
-        println!("\n== SET ratio {r:.4} (raw {raw:#x}) ==");
-        match set_ratio(gpu, raw) {
-            Some(rb) => println!("  landed = {rb:#x} ({:.4})", rb as f64 / 65536.0),
-            None => {
-                println!("  SET refused — continuing");
-                continue;
-            }
-        }
-        sample(gpu, &format!("r{r:.2}"), 2);
+    // ---- step 2: xbar slot2 +100 MHz inside the live window ---------------
+    println!("\n== 2. xbar slot2 = +100 MHz (inside the 0.7 window) ==");
+    let before = slot_value(gpu, 1, 2).unwrap_or(0);
+    match gpu.set_clk_domain_offset(1, 100_000, 2, false) {
+        Ok(_) => println!("  slot2 SET ok, readback = {:?}", slot_value(gpu, 1, 2)),
+        Err(e) => println!("  slot2 SET ERR: {e}"),
     }
-    // reseed original before final verification
-    let _ = set_ratio(gpu, original);
+    sample(gpu, "slot+100", 6);
+    gpu.set_clk_domain_offset(1, before, 2, false)
+        .expect("slot2 restore failed");
+    println!("  restored slot2 = {:?}", slot_value(gpu, 1, 2));
 
-    // ---- H2: transition-triggered application ----------------------------
-    println!("\n== H2: ratio 0.8 + GPC transition (load drop -> respawn) ==");
-    if let Some(rb) = set_ratio(gpu, 0xCCCC) {
-        println!("  ratio landed = {rb:#x}");
-    }
-    sample(gpu, "pre-drop", 2);
-    drop(load1);
-    if had1 {
-        println!("  -- load dropped, GPC downclocking --");
-    }
-    sample(gpu, "downclock", 6);
-    println!("  -- respawning load, GPC re-upclocks --");
-    {
-        let (_g2, _) = spawn_load();
-        sample(gpu, "reup", 8);
-    }
+    // ---- step 3: xbar slot2 -100 MHz (same window) ------------------------
+    println!("\n== 3. xbar slot2 = -100 MHz (same window) ==");
+    gpu.set_clk_domain_offset(1, -100_000, 2, false)
+        .expect("slot2 SET failed");
+    sample(gpu, "slot-100", 6);
+    gpu.set_clk_domain_offset(1, before, 2, false)
+        .expect("slot2 restore failed");
+    println!("  restored slot2 = {:?}", slot_value(gpu, 1, 2));
 
-    // ---- restore ---------------------------------------------------------
-    println!("\n== restore {original:#x} ==");
-    match set_ratio(gpu, original) {
-        Some(rb) => println!("  restore ok, landed = {rb:#x}"),
-        None => println!("  restore FAILED — MANUAL CHECK via blackwell_recon_live GET"),
+    // ---- step 4: restore ratio 0.9 ----------------------------------------
+    println!("\n== 4. restore ratio 0.9 ==");
+    match set_ratio(gpu, 0xE660) {
+        Some(rb) => println!("  ratio landed = {rb:#x}"),
+        None => println!("  ratio restore FAILED — MANUAL CHECK"),
     }
     sample(gpu, "final", 3);
 
     println!("\nVERDICT GUIDE:");
-    println!("  DOWN-walk moved XBAR                     -> H1: path live, upside-clamped;");
-    println!("    slot offsets were clamped by the ratio — raise ratio first, then slots");
-    println!("  XBAR returned at 0.8x after transition   -> H2: transition-applied;");
-    println!("    writes need a GPC re-clock to take effect (toggle load/pstate)");
-    println!("  neither                                  -> record inert on this build");
+    println!("  XBAR moved with slot offsets inside the 0.7 window  -> the slot plane");
+    println!("    FEEDS the clock but was ceiling-masked at 0.9; combined control =");
+    println!("    ratio (ceiling) + slot offset (trim) — a working XBAR control pair");
+    println!("  XBAR unmoved at +/-100 MHz inside the window         -> slot plane is");
+    println!("    inert independent of ratio; only the ratio itself is behavioral");
 }
