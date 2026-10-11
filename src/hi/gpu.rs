@@ -1879,6 +1879,13 @@ impl Gpu {
         self.gpu.set_top_rels_ratio(ratio)
     }
 
+    /// The driver-reported default GPC:XBAR ratio (GetInfo relation payload,
+    /// U16.16). Reset source for the ratio — read from the driver's own
+    /// relation table, not hard-coded. `None` when the edge is absent.
+    pub fn top_rels_default_ratio(&self) -> crate::Result<Option<f64>> {
+        self.gpu.top_rels_default_ratio()
+    }
+
     /// Power-command channel read (xOCD 2.0 `ReadPowerCommand`; NDA
     /// 0x33AB0353 GET). `command` ∈ {0xF8, 0xFE}, channel 0..=31. Read-only;
     /// the packet's preconditions are structural, so a refusal is an error

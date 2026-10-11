@@ -2645,15 +2645,14 @@ impl PhysicalGpu {
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetInfo, st)
             .map_err(crate::Error::from)?;
-        if info.find_gpc_xbar_records().len() != 1 {
-            return Err(crate::Error::Nvapi(crate::NvapiError::new(
-                sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl,
-                Status::NotSupported,
-            )));
-        }
-
+        // NO hard gate on the GPC:XBAR record count: Blackwell carries FIVE
+        // ratio records (0.8/0.9/1.2/1.5/2.0 — default + regime variants),
+        // so len()==1 is a pre-Blackwell shape, not a support contract.
+        // Live: audit TopRels section (down-free/up-clamped walk).
         let mut ctrl = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL::zeroed();
-        ctrl.seed_mask();
+        // MINIMAL seed: +4 = 0xFF only. The 616.92-era seed_mask() (full 32B
+        // mask + rec0 dword) is REJECTED by 580.173.02 (-104/-1).
+        ctrl.rest[0..4].copy_from_slice(&0xFFu32.to_le_bytes());
         ctrl.version = NvVersion::with_version(clock::undocumented::clk_top_rels_control::MAGIC);
         let st = unsafe {
             NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut ctrl).cast())
@@ -2680,6 +2679,26 @@ impl PhysicalGpu {
     /// snapshot → resolve offset → patch a COPY → SET → fresh GET →
     /// exact-dword readback → restore the full snapshot on mismatch.
     /// DANGEROUS driver-wide clock-tree write (no privilege gate).
+    /// The driver-reported default GPC:XBAR ratio (GetInfo relation payload,
+    /// U16.16 — 0xE660 = 0.9 on this generation). Read from the driver's own
+    /// relation table rather than hard-coded, so a reset follows whatever
+    /// default the SKU/driver carries. `None` when the edge is absent.
+    pub fn top_rels_default_ratio(&self) -> crate::Result<Option<f64>> {
+        use crate::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetInfo;
+        use clock::undocumented::{NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO, clk_top_rels_info};
+        let mut info = NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO::zeroed();
+        info.version = NvVersion::with_version(clk_top_rels_info::MAGIC);
+        let st = unsafe {
+            NvAPI_GPU_ClockClkPropTopRelsGetInfo(self.0, ptr::from_mut(&mut info).cast())
+        };
+        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetInfo, st)?;
+        Ok(info
+            .find_gpc_xbar_records()
+            .first()
+            .and_then(|&i| info.relation_payload(i))
+            .map(|p| p as f64 / 65536.0))
+    }
+
     pub fn set_top_rels_ratio_raw(&self, raw: u32) -> crate::Result<u32> {
         trace!("gpu.set_top_rels_ratio_raw({raw:#x})");
         use crate::sys::api::NvAPI_GPU_ClockClkPropTopRelsSetControl;

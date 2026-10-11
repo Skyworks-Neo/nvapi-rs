@@ -29,7 +29,14 @@ fn euid() -> u32 {
 #[ignore = "live GPU WRITE probe — run under sudo; restores everything"]
 fn privilege_write_diagnosis() {
     let uid = euid();
-    println!("euid = {uid} ({})", if uid == 0 { "root — RM admin gate should pass" } else { "NOT root — expect -137 NVAPI_INVALID_USER_PRIVILEGE" });
+    println!(
+        "euid = {uid} ({})",
+        if uid == 0 {
+            "root — RM admin gate should pass"
+        } else {
+            "NOT root — expect -137 NVAPI_INVALID_USER_PRIVILEGE"
+        }
+    );
 
     nvapi::initialize().expect("init");
     let idx: usize = std::env::var("NVOC_GPU_IDX")

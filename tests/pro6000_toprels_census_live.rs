@@ -9,8 +9,8 @@ use nvapi::sys::api::{
     NvAPI_GPU_ClockClkPropTopRelsGetControl, NvAPI_GPU_ClockClkPropTopRelsGetInfo,
 };
 use nvapi::sys::gpu::clock::undocumented::{
-    NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1, NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1,
-    clk_top_rels_control, clk_top_rels_info,
+    NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1,
+    NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1, clk_top_rels_control, clk_top_rels_info,
 };
 use nvapi::sys::nvapi::NvVersion;
 
@@ -32,7 +32,12 @@ fn toprels_census() {
     println!("\n== GetInfo: relation table ==");
     let mut info = box_zeroed::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1>();
     info.version = NvVersion::with_version(clk_top_rels_info::MAGIC);
-    let st = unsafe { nvapi::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetInfo(*gpu.handle(), std::ptr::from_mut(&mut *info).cast()) };
+    let st = unsafe {
+        nvapi::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetInfo(
+            *gpu.handle(),
+            std::ptr::from_mut(&mut *info).cast(),
+        )
+    };
     println!("GetInfo rc = {st}");
     if st == 0 {
         println!("relation_count = {}", info.relation_count());
@@ -51,13 +56,28 @@ fn toprels_census() {
     }
 
     // ---- GetControl census at increasing seeds ----------------------------
-    for seed in [0xFFu32, 0xFFFF, 0xFFFF_FFFF] {
-        println!("\n== GetControl seed +4 = {seed:#x} ==");
+    // seed combos: (dword0@+4, mask dword1@+8, dword2@+12) — the 256-bit
+    // relation mask spans +4..+36; bits 10..13 (the envelope records) live
+    // in dword0's high half
+    for (d0, d1, d2) in [
+        (0xFFu32, 0u32, 0u32),
+        (0x3CFF, 0, 0),      // rel 0-7 + 10-13 in dword0
+        (0xFFFF, 0, 0),      // rel 0-15
+        (0xFFFF_FFFF, 0, 0), // all dword0
+        (0xFF, 0x3C00, 0),   // rel 0-7 + 42-45 (dword1 high bits)
+        (0xFFFF_FFFF, 0xFFFF_FFFF, 0xFFFF_FFFF),
+    ] {
+        println!("\n== GetControl seed d0={d0:#x} d1={d1:#x} d2={d2:#x} ==");
         let mut ctl = box_zeroed::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1>();
         ctl.version = NvVersion::with_version(clk_top_rels_control::MAGIC);
-        ctl.rest[0..4].copy_from_slice(&seed.to_le_bytes());
+        ctl.rest[0..4].copy_from_slice(&d0.to_le_bytes());
+        ctl.rest[4..8].copy_from_slice(&d1.to_le_bytes());
+        ctl.rest[8..12].copy_from_slice(&d2.to_le_bytes());
         let st = unsafe {
-            NvAPI_GPU_ClockClkPropTopRelsGetControl(*gpu.handle(), std::ptr::from_mut(&mut *ctl).cast())
+            NvAPI_GPU_ClockClkPropTopRelsGetControl(
+                *gpu.handle(),
+                std::ptr::from_mut(&mut *ctl).cast(),
+            )
         };
         println!("rc = {st}");
         if st != 0 {
@@ -91,7 +111,10 @@ fn toprels_census() {
                         .collect::<Vec<_>>()
                 );
                 // ratio-slot dword (rec+4) explicitly
-                println!("    rec+4 (ratio slot) = {:#x}", dwords.get(1).unwrap_or(&0));
+                println!(
+                    "    rec+4 (ratio slot) = {:#x}",
+                    dwords.get(1).unwrap_or(&0)
+                );
             }
         }
         println!("populated records: {populated}");
