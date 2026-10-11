@@ -1,18 +1,26 @@
-//! TopRels GPC:XBAR ratio path — the one live-confirmed Blackwell-specific
-//! policy knob (ratio record 0xE660=0.9 @rec+0x68, GetControl works on this
-//! card, SetControl 0xEF3D20EA never tested). If the ratio is writable AND
-//! behavioral, XBAR tracking moves off 0.9x GPC — and the "dead" xbar slot
-//! offsets may have been ratio-clamped all along.
+//! TopRels GPC:XBAR ratio walk v2 — RAW sys calls with the PROVEN minimal
+//! seed: +4 = 0xFF ONLY (blackwell_recon_live seed A, rc=0, ratio 0xE660
+//! @abs 0x68). The hi-level top_rels_control_seeded() uses the 616.92-era
+//! full seeding (seed_mask: +4 + rec0 + 32B@+8) which this driver rejects
+//! (-104); recon seed B already showed the fuller seeding failing.
 //!
-//! Sequence (root; auto-restore on mismatch is built into the helper):
-//!   0.9 baseline  -> 0.95 -> 1.0 -> back to 0.9, direct-measure GPC/XBAR
-//!   at each step under an auto-spawned NVENC load.
+//! Walk 0.9 -> 0.95 -> 1.0 -> 0.9 under NVENC load; direct-measure GPC/XBAR.
+//! Root required; restores the original ratio at the end.
 //!
 //!   sudo target/debug/deps/pro6000_toprels_ratio_live-<hash> --nocapture --ignored
 
+use std::ptr;
+
 use nvapi::PhysicalGpu;
+use nvapi::sys::api::{
+    NvAPI_GPU_ClockClkPropTopRelsGetControl, NvAPI_GPU_ClockClkPropTopRelsSetControl,
+};
+use nvapi::sys::gpu::clock::undocumented::NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL;
+use nvapi::sys::nvapi::NvVersion;
 use std::process::{Child, Command};
 use std::time::Duration;
+
+const RATIO_OFF: usize = 0x64; // rest-relative; absolute 0x68 in the buffer
 
 struct LoadGuard(Option<Child>);
 
@@ -61,6 +69,45 @@ fn spawn_load() -> LoadGuard {
     }
 }
 
+fn seeded() -> Box<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL> {
+    unsafe {
+        let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL>::new_zeroed();
+        let mut b = b.assume_init();
+        b.version = NvVersion::with_version(0x1075C);
+        b.rest[0..4].copy_from_slice(&0xFFu32.to_le_bytes()); // seed A ONLY
+        b
+    }
+}
+
+fn get_ratio(gpu: &PhysicalGpu) -> Option<u32> {
+    unsafe {
+        let mut ctl = seeded();
+        let st =
+            NvAPI_GPU_ClockClkPropTopRelsGetControl(*gpu.handle(), ptr::from_mut(&mut *ctl).cast());
+        if st != 0 {
+            println!("  GET rc={st}");
+            return None;
+        }
+        Some(u32::from_le_bytes(
+            ctl.rest[RATIO_OFF..RATIO_OFF + 4].try_into().ok()?,
+        ))
+    }
+}
+
+fn set_ratio(gpu: &PhysicalGpu, raw: u32) -> Option<u32> {
+    unsafe {
+        let mut ctl = seeded();
+        ctl.rest[RATIO_OFF..RATIO_OFF + 4].copy_from_slice(&raw.to_le_bytes());
+        let st =
+            NvAPI_GPU_ClockClkPropTopRelsSetControl(*gpu.handle(), ptr::from_ref(&*ctl).cast());
+        println!("  SET rc={st}");
+        if st != 0 {
+            return None;
+        }
+        get_ratio(gpu)
+    }
+}
+
 fn sample(gpu: &PhysicalGpu, tag: &str, n: usize) {
     for _ in 0..n {
         let gpc = gpu
@@ -86,7 +133,7 @@ fn sample(gpu: &PhysicalGpu, tag: &str, n: usize) {
 }
 
 #[test]
-#[ignore = "live GPU WRITE probe — root required; auto-restores"]
+#[ignore = "live GPU WRITE probe — root required; restores the original ratio"]
 fn toprels_ratio_walk() {
     let uid = std::process::Command::new("id")
         .arg("-u")
@@ -101,40 +148,45 @@ fn toprels_ratio_walk() {
     let gpu = &PhysicalGpu::enumerate().expect("enumerate")[0];
     println!("gpu: {}", gpu.full_name().unwrap_or_default());
 
-    let current = gpu
-        .top_rels_ratio()
-        .map(|(_off, raw)| format!("raw={raw:#x} ({:.4})", raw as f64 / 65536.0))
-        .unwrap_or_else(|e| format!("ERR {e}"));
-    println!("current TopRels GPC:XBAR ratio = {current}");
+    let Some(original) = get_ratio(gpu) else {
+        panic!("baseline GET failed — paste me");
+    };
+    println!(
+        "current ratio raw = {original:#x} ({:.4})",
+        original as f64 / 65536.0
+    );
     let _load = spawn_load();
 
-    println!("\n== baseline @ 0.9 ==");
+    println!("\n== baseline @ {original:#x} ==");
     sample(gpu, "r0.90", 4);
 
-    for step in [0.95f64, 1.0] {
-        println!("\n== SET ratio {step} ==");
-        match gpu.set_top_rels_ratio(step) {
-            Ok(rb) => println!("  SET ok, readback ratio = {rb:.4}"),
-            Err(e) => {
-                println!("  SET ERR: {e}");
+    for raw in [0xF333u32, 0x10000] {
+        // 0.95, 1.0
+        println!(
+            "\n== SET ratio raw {raw:#x} ({:.4}) ==",
+            raw as f64 / 65536.0
+        );
+        match set_ratio(gpu, raw) {
+            Some(rb) => println!("  landed = {rb:#x} ({:.4})", rb as f64 / 65536.0),
+            None => {
+                println!("  SET/GET failed — restoring original");
+                set_ratio(gpu, original);
                 continue;
             }
         }
-        sample(gpu, &format!("r{:.2}", step), 6);
+        sample(gpu, &format!("r{:.2}", raw as f64 / 65536.0), 6);
     }
 
-    println!("\n== restore 0.9 ==");
-    match gpu.set_top_rels_ratio(0.9) {
-        Ok(rb) => println!("  restore ok, readback = {rb:.4}"),
-        Err(e) => println!("  restore ERR: {e} — MANUAL CHECK via top_rels_ratio"),
+    println!("\n== restore {original:#x} ==");
+    match set_ratio(gpu, original) {
+        Some(rb) => println!("  restore ok, landed = {rb:#x}"),
+        None => println!("  restore FAILED — MANUAL CHECK: blackwell_recon_live GetControl"),
     }
     sample(gpu, "r0.90", 3);
 
     println!("\nVERDICT GUIDE:");
-    println!("  XBAR tracked 0.95/1.0 steps  -> RATIO PATH IS LIVE: XBAR OC via TopRels");
-    println!("    SET_CONTROL works where the slot/point faces are store-only;");
-    println!("    then retest slot2 offsets WITH ratio headroom (clamp theory)");
-    println!("  readback moved but clock pinned -> ratio stored, engine ignores:");
-    println!("    fourth inert face — GSP RE continues");
-    println!("  SET refused (-x)             -> paste status; face gated differently");
+    println!("  XBAR tracked 0.95/1.0 -> RATIO PATH LIVE: XBAR OC via TopRels SET_CONTROL;");
+    println!("    dead slot offsets were ratio-clamped — retest with headroom");
+    println!("  landed moves but clock pinned -> fourth inert face; GSP RE continues");
+    println!("  SET refused -> paste rc; face gated beyond the seed fix");
 }
