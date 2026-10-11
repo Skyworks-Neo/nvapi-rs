@@ -26,10 +26,11 @@ fn client_table(gpu: &PhysicalGpu) -> Box<NV_GPU_CLOCK_CLIENT_CLK_VF_POINTS_CONT
             b.assume_init()
         };
         ctl.version = NvVersion::with_version(0x12420);
-        // seed the full 256-bit mask space
+        // seed points 0..254 (255 points; bit 255 is out of range and -1s)
         for d in ctl.mask.mask.iter_mut() {
             *d = u32::MAX;
         }
+        ctl.mask.mask[7] = 0x7FFF_FFFF;
         let st = NvAPI_GPU_ClockClientClkVfPointsGetControl(
             *gpu.handle(),
             ptr::from_mut(&mut *ctl).cast(),
