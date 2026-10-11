@@ -1,11 +1,11 @@
 //! Slot + VF-point write matrix at the devinit ratio 0.9 — xbar (bit 1):
-//!   A. ClkDomains slot2 (+/-100 MHz), slot3 (+/-100 mV), slot4 (+/-100 raw)
-//!   B. PRIVATE VF table xbar region (points 180..189): mode0 freq +50 MHz
-//!      per point, then mode1 raw 1000 per point — each write self-verifies
-//!      landing (the helper asserts readback == input).
+//! A. ClkDomains slot2 (+/-100 MHz), slot3 (+/-100 mV), slot4 (+/-100 raw)
+//! B. PRIVATE VF table xbar region (points 180..189): mode0 freq +50 MHz
+//! per point, then mode1 raw 1000 per point — each write self-verifies
+//! landing (the helper asserts readback == input).
 //! Clock/voltage sampled around every write; everything restored.
 //!
-//!   sudo target/debug/deps/pro6000_slot_vf_matrix_live-<hash> --nocapture --ignored
+//! sudo target/debug/deps/pro6000_slot_vf_matrix_live-<hash> --nocapture --ignored
 
 use nvapi::PhysicalGpu;
 use std::time::Duration;

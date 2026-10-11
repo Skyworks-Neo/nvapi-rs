@@ -13,7 +13,7 @@
 //! reports whether the PRIVATE-face readback (set_vfp_point_private's
 //! GetControl) sees the Client-face write — i.e. do the faces share storage?
 //!
-//!   sudo target/debug/deps/pro6000_client_face_live-<hash> --nocapture --ignored
+//! sudo target/debug/deps/pro6000_client_face_live-<hash> --nocapture --ignored
 
 use nvapi::PhysicalGpu;
 use nvapi::sys::api::NvAPI_GPU_ClockClientClkVfPointsGetControl;

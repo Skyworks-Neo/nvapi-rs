@@ -1,16 +1,16 @@
 //! TopRels ENVELOPE probe — the GPC:XBAR edge has FIVE ratio slots:
-//!   rec0  = 0xE660 (0.900, active — our walks wrote this; down works, up clamped)
-//!   rec10 = 0xCCC0 (0.800)
-//!   rec11 = 0x20000 (2.000)
-//!   rec12 = 0x13330 (1.200)
-//!   rec13 = 0x18000 (1.500)
+//! rec0  = 0xE660 (0.900, active — our walks wrote this; down works, up clamped)
+//! rec10 = 0xCCC0 (0.800)
+//! rec11 = 0x20000 (2.000)
+//! rec12 = 0x13330 (1.200)
+//! rec13 = 0x18000 (1.500)
 //! Question: is the up-clamp governed by the envelope slots? Tests, in order:
-//!   1. rec10 0xCCC0 -> 0xF333 (0.95): does the engine track rec10?
-//!   2. restore rec10
-//!   3. rec0 -> 0xF333 with rec11 (max) raised 0x20000 -> 0x30000 (3.0):
-//!      does lifting the envelope max unclamp rec0's upside?
-//!   4. full restore.
-//!   sudo target/debug/deps/pro6000_toprels_envelope_live-<hash> --nocapture --ignored
+//! 1. rec10 0xCCC0 -> 0xF333 (0.95): does the engine track rec10?
+//! 2. restore rec10
+//! 3. rec0 -> 0xF333 with rec11 (max) raised 0x20000 -> 0x30000 (3.0):
+//! does lifting the envelope max unclamp rec0's upside?
+//! 4. full restore.
+//! sudo target/debug/deps/pro6000_toprels_envelope_live-<hash> --nocapture --ignored
 
 use std::ptr;
 
@@ -23,7 +23,6 @@ use nvapi::sys::nvapi::NvVersion;
 use std::process::{Child, Command};
 use std::time::Duration;
 
-const RATIO_OFF: usize = 0x64; // rest-relative ratio slot for rec0
 const REC_BASE: usize = 0x60; // rest-relative record 0 base (rec i: +0x108*i)
 const REC_RATIO: usize = 4; // ratio dword within a record
 

@@ -5,9 +5,7 @@
 //!   cargo test -p nvapi --test pro6000_toprels_census_live -- --nocapture --ignored
 
 use nvapi::PhysicalGpu;
-use nvapi::sys::api::{
-    NvAPI_GPU_ClockClkPropTopRelsGetControl, NvAPI_GPU_ClockClkPropTopRelsGetInfo,
-};
+use nvapi::sys::api::NvAPI_GPU_ClockClkPropTopRelsGetControl;
 use nvapi::sys::gpu::clock::undocumented::{
     NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL_V1,
     NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_INFO_V1, clk_top_rels_control, clk_top_rels_info,
@@ -106,7 +104,6 @@ fn toprels_census() {
                         .iter()
                         .enumerate()
                         .filter(|(_, v)| **v != 0)
-                        .map(|(d, v)| (d, v))
                         .take(12)
                         .collect::<Vec<_>>()
                 );

@@ -9,7 +9,7 @@
 //! slot plane is inert independent of ratio). Also probes slot2 -100 MHz in
 //! the same window. Root; everything restored.
 //!
-//!   sudo target/debug/deps/pro6000_toprels_ratio_live-<hash> --nocapture --ignored
+//! sudo target/debug/deps/pro6000_toprels_ratio_live-<hash> --nocapture --ignored
 
 use std::ptr;
 

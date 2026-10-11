@@ -4,7 +4,7 @@
 //! settle whether the GetAllClocks Msd slot really tracks the video clock on
 //! RTX PRO 6000 Blackwell / 580.173.02, or only the direct interface does.
 //! READ-ONLY.
-//!   cargo test -p nvapi --test pro6000_msd_load_live -- --nocapture --ignored
+//! cargo test -p nvapi --test pro6000_msd_load_live -- --nocapture --ignored
 
 use nvapi::PhysicalGpu;
 

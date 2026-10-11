@@ -1,10 +1,10 @@
 //! Public OC face probe — the faces we NEVER tested on this server card:
-//!   1. Pstates20 SET (public SetPstates20 RMW, "RTX 50 core path"):
-//!      P0 GPC +50 MHz -> readback -> restore. GET/SET cascade ver2/ver3.
-//!   2. NVML GPC/MEM VF offsets (RM 0x2080D031 on 580): read -> write
-//!      +50/-50 -> readback -> restore 0.
+//! 1. Pstates20 SET (public SetPstates20 RMW, "RTX 50 core path"):
+//! P0 GPC +50 MHz -> readback -> restore. GET/SET cascade ver2/ver3.
+//! 2. NVML GPC/MEM VF offsets (RM 0x2080D031 on 580): read -> write
+//! +50/-50 -> readback -> restore 0.
 //! Each step self-verifies (the helpers assert readback) and restores.
-//!   sudo target/debug/deps/pro6000_public_oc_live-<hash> --nocapture --ignored
+//! Run: sudo target/debug/deps/pro6000_public_oc_live-<hash> --nocapture --ignored
 
 use nvapi::PhysicalGpu;
 
