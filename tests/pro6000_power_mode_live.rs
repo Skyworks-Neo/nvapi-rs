@@ -38,7 +38,7 @@ fn sample(gpu: &PhysicalGpu, tag: &str, n: usize) {
 #[test]
 #[ignore = "live GPU probe — read-only by default; --write adds the mode toggle (root)"]
 fn power_mode_probe() {
-    let write = std::env::args().any(|a| a == "--write");
+    let write = std::env::var("NVOC_WRITE").is_ok();
     let uid = std::process::Command::new("id")
         .arg("-u")
         .output()
