@@ -76,8 +76,9 @@ fn seeded() -> Box<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL> {
         let b = Box::<NV_GPU_CLOCK_CLIENT_CLK_PROP_TOP_RELS_CONTROL>::new_zeroed();
         let mut b = b.assume_init();
         b.version = NvVersion::with_version(0x1075C);
-        b.rest[0..4].copy_from_slice(&0xFFu32.to_le_bytes()); // seed A
-        b.rest[4..8].copy_from_slice(&0x3C00u32.to_le_bytes()); // bits 10-13
+        // d0 = bits 0-7 (base relations) + bits 10-13 (envelope records);
+        // d1 (bits 32-63) would be out of range and -1s
+        b.rest[0..4].copy_from_slice(&0x3CFFu32.to_le_bytes());
         b
     }
 }
