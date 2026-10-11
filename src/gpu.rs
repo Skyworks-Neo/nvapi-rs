@@ -2809,16 +2809,26 @@ impl PhysicalGpu {
         let st = unsafe {
             NvAPI_GPU_ClockClkPropTopRelsSetControl(self.0, ptr::from_ref(&modified).cast())
         };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsSetControl, st)?;
 
+        // Judge by READBACK, not the SET status: 580.173.02 has been observed
+        // to land the ratio verbatim AND answer -1 (operator live 2026-10-12,
+        // 0.8 -> rc -1 -> fresh GET 0xCCCD). A non-zero rc with a matching
+        // readback is an applied write.
         let mut verify = seeded();
-        let st = unsafe {
+        let vst = unsafe {
             NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut verify).cast())
         };
-        crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)?;
-        let landed = u32::from_le_bytes(verify.rest[off..off + 4].try_into().unwrap());
+        let landed = if vst == 0 {
+            u32::from_le_bytes(verify.rest[off..off + 4].try_into().unwrap())
+        } else {
+            raw.wrapping_sub(1) // force mismatch on verify failure
+        };
         if landed != raw {
-            // driver did not retain — restore the original snapshot (best effort).
+            if st != 0 {
+                // refused AND not retained — surface the driver's verdict
+                crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsSetControl, st)?;
+            }
+            // rc 0 but not retained — restore the original snapshot (best effort).
             let _ = unsafe {
                 NvAPI_GPU_ClockClkPropTopRelsSetControl(self.0, ptr::from_ref(&before).cast())
             };
