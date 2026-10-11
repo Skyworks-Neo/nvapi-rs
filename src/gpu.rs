@@ -2761,7 +2761,11 @@ impl PhysicalGpu {
             NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut ctl).cast())
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)?;
-        let off = 0x64 + idx * 0x108;
+        // Ratio dword: ABS 0x68 + i*0x108 (live-pinned on 580.173.02:
+        // slot0 = 0xE660, slots 10-13 = 0xCCC0/0x20000/0x13330/0x18000 at
+        // those offsets). RECORDS+REC_RATIO (0xCC) reads 0 — wrong plane.
+        let off = clk_top_rels_control::REC_RATIO + idx * clk_top_rels_control::RECORD_STRIDE
+            - 4; // rest begins at +4
         Ok(ctl
             .rest
             .get(off..off + 4)
@@ -2796,9 +2800,12 @@ impl PhysicalGpu {
 
         // SET base = the GET snapshot (never a zero template — a mostly-zero
         // control body is rejected with -1; the proven slot-0 recipe).
+        // Ratio dword ABS 0x68 + i*0x108 (live-pinned; see top_rels_ratio_at)
+        // — patching the rec+0x64 TAG plane was the original -1 regression.
+        let off = clk_top_rels_control::REC_RATIO + idx * clk_top_rels_control::RECORD_STRIDE
+            - 4; // rest begins at +4
         let mut modified = before;
-        modified.rest[0x64 + idx * 0x108..0x64 + idx * 0x108 + 4]
-            .copy_from_slice(&raw.to_le_bytes());
+        modified.rest[off..off + 4].copy_from_slice(&raw.to_le_bytes());
         let st = unsafe {
             NvAPI_GPU_ClockClkPropTopRelsSetControl(self.0, ptr::from_ref(&modified).cast())
         };
@@ -2809,11 +2816,7 @@ impl PhysicalGpu {
             NvAPI_GPU_ClockClkPropTopRelsGetControl(self.0, ptr::from_mut(&mut verify).cast())
         };
         crate::status_result(sys::Api::NvAPI_GPU_ClockClkPropTopRelsGetControl, st)?;
-        let landed = u32::from_le_bytes(
-            verify.rest[0x64 + idx * 0x108..0x64 + idx * 0x108 + 4]
-                .try_into()
-                .unwrap(),
-        );
+        let landed = u32::from_le_bytes(verify.rest[off..off + 4].try_into().unwrap());
         if landed != raw {
             // driver did not retain — restore the original snapshot (best effort).
             let _ = unsafe {
