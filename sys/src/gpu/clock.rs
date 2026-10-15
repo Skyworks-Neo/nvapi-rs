@@ -540,7 +540,8 @@ pub mod undocumented {
         pub enum NV_GPU_CLOCK_LOCK_MODE / ClockLockMode {
             NVAPI_GPU_CLOCK_LOCK_NONE / None = 0,
             /// Select a P-State (entry value = pstate number). RE'd from
-            /// the ref tool setPState: entries with id 4/5 (Unknown_4/5) use mode 1
+            /// the ref tool setPState: entries with id 4/5
+            /// (PstateSelectLower/PstateSelectUpper) use mode 1
             /// to pin the active pstate.
             NVAPI_GPU_CLOCK_LOCK_PSTATE_SELECT / PstateSelect = 1,
             NVAPI_GPU_CLOCK_LOCK_MANUAL_FREQUENCY / ManualFrequency = 2,
@@ -554,8 +555,23 @@ pub mod undocumented {
             NV_PERF_CLIENT_LIMIT_ID_GPU_UNKNOWN / GpuLowerbound = 1,
             NV_PERF_CLIENT_LIMIT_ID_MEMORY / Memory = 2,
             NV_PERF_CLIENT_LIMIT_ID_MEMORY_UNKNOWN / MemoryLowerbound = 3,
-            NV_PERF_CLIENT_LIMIT_ID_UNKNOWN_4 / Unknown_4 = 4,
-            NV_PERF_CLIENT_LIMIT_ID_UNKNOWN_5 / Unknown_5 = 5,
+            /// P-State select pin, LOWER bound of the allowed pstate pair
+            /// (mode 1, value = pstate number). RE'd from the ref tool
+            /// setPState: a pin writes BOTH select entries (5 then 4) with
+            /// the same pstate, and reset clears 0/1/4/5 — ids 4/5 are the
+            /// pstate analog of the 0/1 core-freq upper/lower pair. The
+            /// Upper/Lower assignment mirrors the ref tool's write order
+            /// (5 first, then 4, matching 0-then-1 in PstateAndFreq); both
+            /// entries always carry the same value, so the asymmetry is
+            /// inferred, not observed.
+            #[serde(alias = "Unknown_4")]
+            NV_PERF_CLIENT_LIMIT_ID_PSTATE_SELECT_LOWER / PstateSelectLower = 4,
+            /// P-State select pin, UPPER bound of the pair (see
+            /// [`PerfLimitId::PstateSelectLower`]).
+            #[serde(alias = "Unknown_5")]
+            NV_PERF_CLIENT_LIMIT_ID_PSTATE_SELECT_UPPER / PstateSelectUpper = 5,
+            /// Manual voltage lock (mode 3, value = µV; nvapioc's
+            /// `-cvolt/-mvolt` path writes this entry).
             NV_PERF_CLIENT_LIMIT_ID_VOLTAGE / Voltage = 6,
         }
     }
@@ -566,6 +582,9 @@ pub mod undocumented {
             GpuLowerbound = "GPU Core Lowerbound",
             Memory = "Memory Upperbound",
             MemoryLowerbound = "Memory Lowerbound",
+            PstateSelectLower = "GPU P-State Select Lowerbound",
+            PstateSelectUpper = "GPU P-State Select Upperbound",
+            Voltage = "Voltage Lock",
             _ = _,
         }
     }

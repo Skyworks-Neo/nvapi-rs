@@ -17,7 +17,8 @@ fn collect_domain<T: Copy, U: From<T>>(
 
 pub use crate::{
     AllClockEntry, AllClocks, AllClocksDetailed, ArchInfo, Bus, BusInfo, BusType, Celsius,
-    ClockDomain, ClockFrequencies, ClockLockEntry, ClockLockValue, ComputeCapabilities,
+    ClockDomain, ClockFrequencies, ClockLockEntry, ClockLockMode, ClockLockValue,
+    ComputeCapabilities,
     ConnectedIdsFlags, CoolerControl, CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings,
     CoolerStatus, CoolerTarget, CoolerType, DisplayId, DriverModel, EccErrors, EffectiveClocks,
     FanArbiterControl, FanArbiterStatus, FanCoolerId, FanCurve, FanCurvePoint, Foundry, GpuType,
@@ -1998,8 +1999,10 @@ impl Gpu {
         self.gpu
             .set_vfp_locks([ClockLockEntry {
                 limit: PerfLimitId::Voltage,
-                clock: ClockDomain::Graphics,
+                mode: ClockLockMode::None,
                 lock_value: voltage.map(ClockLockValue::Voltage),
+                select_pstate: None,
+                clock: ClockDomain::Graphics,
             }])
             .map_err(Into::into)
     }
@@ -2023,16 +2026,20 @@ impl Gpu {
                         true => PerfLimitId::Gpu,
                         false => PerfLimitId::Memory,
                     },
-                    clock: domain,
+                    mode: ClockLockMode::None,
                     lock_value: frequency.map(ClockLockValue::Frequency),
+                    select_pstate: None,
+                    clock: domain,
                 },
                 ClockLockEntry {
                     limit: match gpu {
                         true => PerfLimitId::GpuLowerbound,
                         false => PerfLimitId::MemoryLowerbound,
                     },
-                    clock: domain,
+                    mode: ClockLockMode::None,
                     lock_value: frequency.map(ClockLockValue::Frequency),
+                    select_pstate: None,
+                    clock: domain,
                 },
             ])
             .map_err(Into::into)
@@ -2041,7 +2048,9 @@ impl Gpu {
     pub fn reset_vfp_lock(&self) -> crate::Result<()> {
         self.gpu
             .set_vfp_locks(self.gpu.vfp_locks(None)?.into_iter().map(|mut lock| {
+                lock.mode = ClockLockMode::None;
                 lock.lock_value = None;
+                lock.select_pstate = None;
                 lock
             }))
             .map_err(Into::into)

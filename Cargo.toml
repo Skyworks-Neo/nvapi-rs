@@ -21,6 +21,9 @@ include = [
 	"/COPYING*",
 ]
 
+[dev-dependencies]
+serde_json = "1"
+
 [dependencies]
 nvapi-sys = { version = "0.3", path = "sys", default-features = false }
 serde = { version = "1", features = ["derive"], optional = true }

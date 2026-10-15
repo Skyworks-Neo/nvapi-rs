@@ -17,7 +17,7 @@ use std::fmt;
 
 pub use sys::gpu::clock::PublicClockId as ClockDomain;
 pub use sys::gpu::clock::undocumented::ClockDomainId;
-pub use sys::gpu::clock::undocumented::{PerfLimitId, VfPointType};
+pub use sys::gpu::clock::undocumented::{ClockLockMode, PerfLimitId, VfPointType};
 pub use sys::gpu::power::undocumented::{PerfFlags, PowerTopologyChannelId};
 
 impl RawConversion for clock::NV_GPU_CLOCK_FREQUENCIES {
@@ -1968,7 +1968,17 @@ impl fmt::Display for ClockLockValue {
 #[derive(Debug, Copy, Clone, Hash, PartialOrd, Ord, PartialEq, Eq)]
 pub struct ClockLockEntry {
     pub limit: PerfLimitId,
+    /// Raw lock mode. `PstateSelect` pins the active P-State (the target
+    /// rides in [`ClockLockEntry::select_pstate`]);
+    /// `ManualFrequency`/`ManualVoltage` carry the value in `lock_value`;
+    /// `None` = unlocked. Carried through decode so a P-State pin survives a
+    /// `GpuSettings` round-trip (the pin is invisible in `lock_value`,
+    /// which is `None` for both pins and unlocked entries).
+    pub mode: clock::undocumented::ClockLockMode,
     pub lock_value: Option<ClockLockValue>,
+    /// Pin target when [`ClockLockEntry::mode`] is `PstateSelect`
+    /// (the entry's raw `value` field, a pstate number).
+    pub select_pstate: Option<u8>,
     pub clock: ClockDomain,
 }
 
@@ -1981,15 +1991,23 @@ impl RawConversion for clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
         trace!("convert_raw({:#?})", self);
         let clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
             id,
-            mode: _,
-            value: _,
+            mode,
+            value,
             clock_id,
             ..
         } = *self;
+        let mode: clock::undocumented::ClockLockMode = mode.try_into()?;
         Ok(ClockLockEntry {
             limit: id.try_into()?,
-            clock: clock_id.try_into()?,
+            mode,
             lock_value: ClockLockValue::from_raw(self)?,
+            select_pstate: match mode {
+                clock::undocumented::ClockLockMode::PstateSelect => {
+                    Some(u8::try_from(value).map_err(|_| sys::ArgumentRangeError { value: value as i64 })?)
+                }
+                _ => None,
+            },
+            clock: clock_id.try_into()?,
         })
     }
 }
@@ -2446,6 +2464,46 @@ pub struct LockedClockModeStatus {
 mod tests {
     use super::*;
     use crate::sys::gpu::clock::undocumented::NV_GPU_CLOCK_INFO_V2;
+
+    /// The pre-rename JSON keys ("Unknown_4"/"Unknown_5") still deserialize
+    /// into the renamed variants, so GpuSettings.vfp_locks maps saved before
+    /// the rename stay loadable (serde alias on the enum variants).
+    #[test]
+    fn perf_limit_id_serde_alias_accepts_pre_rename_keys() {
+        assert!(matches!(
+            serde_json::from_str::<PerfLimitId>("\"Unknown_4\"").unwrap(),
+            PerfLimitId::PstateSelectLower
+        ));
+        assert!(matches!(
+            serde_json::from_str::<PerfLimitId>("\"Unknown_5\"").unwrap(),
+            PerfLimitId::PstateSelectUpper
+        ));
+        // new names serialize back
+        assert_eq!(
+            serde_json::to_string(&PerfLimitId::PstateSelectUpper).unwrap(),
+            "\"PstateSelectUpper\""
+        );
+    }
+
+    /// A decoded PstateSelect entry must carry its pin target — the pin is
+    /// invisible in `lock_value` (None for both pins and unlocked entries).
+    #[test]
+    fn clock_lock_entry_decode_keeps_pstate_pin() {
+        use sys::gpu::clock::undocumented::{ClockLockMode, NV_GPU_PERF_CLIENT_LIMITS_ENTRY};
+        let raw = NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
+            id: PerfLimitId::PstateSelectUpper.into(),
+            b: 0,
+            mode: ClockLockMode::PstateSelect.into(),
+            d: 0,
+            // Graphics (the core domain; matches convert_raw's try_into)
+            clock_id: crate::ClockDomain::Graphics.into(),
+            value: 3,
+        };
+        let entry: ClockLockEntry = RawConversion::convert_raw(&raw).unwrap();
+        assert_eq!(entry.mode, ClockLockMode::PstateSelect);
+        assert_eq!(entry.select_pstate, Some(3));
+        assert_eq!(entry.lock_value, None);
+    }
 
     /// Universal prior: def 1470 → C 0.3375 must hold (identical on all
     /// live datasets), gaps between bands return None, fabric overrides

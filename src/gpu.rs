@@ -1516,14 +1516,24 @@ impl PhysicalGpu {
             trace!("gpu.set_vfp_lock({:?})", lock);
             data.count += 1;
             entry.id = lock.limit.into();
-            let (mode, value) = match lock.lock_value {
-                Some(crate::clock::ClockLockValue::Frequency(v)) => {
-                    (ClockLockMode::ManualFrequency.value(), v.0)
+            // PstateSelect pins carry their target in `select_pstate`
+            // (`lock_value` is None for pins — the pin is not a freq/volt
+            // value); the manual modes keep deriving from `lock_value`.
+            let (mode, value) = if lock.mode == ClockLockMode::PstateSelect {
+                (
+                    ClockLockMode::PstateSelect.value(),
+                    lock.select_pstate.map(u32::from).unwrap_or(0),
+                )
+            } else {
+                match lock.lock_value {
+                    Some(crate::clock::ClockLockValue::Frequency(v)) => {
+                        (ClockLockMode::ManualFrequency.value(), v.0)
+                    }
+                    Some(crate::clock::ClockLockValue::Voltage(v)) => {
+                        (ClockLockMode::ManualVoltage.value(), v.0)
+                    }
+                    None => (ClockLockMode::None.value(), 0),
                 }
-                Some(crate::clock::ClockLockValue::Voltage(v)) => {
-                    (ClockLockMode::ManualVoltage.value(), v.0)
-                }
-                None => (ClockLockMode::None.value(), 0),
             };
             entry.mode = mode;
             entry.value = value;
@@ -3737,8 +3747,8 @@ impl PhysicalGpu {
             PerfLimitId::GpuLowerbound,
             PerfLimitId::Memory,
             PerfLimitId::MemoryLowerbound,
-            PerfLimitId::Unknown_4,
-            PerfLimitId::Unknown_5,
+            PerfLimitId::PstateSelectLower,
+            PerfLimitId::PstateSelectUpper,
             PerfLimitId::Voltage,
         ];
         for (entry, id) in status.entries.iter_mut().zip(ids) {
@@ -6236,7 +6246,8 @@ impl PhysicalGpu {
     /// `[GPUHandle::setPState]`:
     ///
     /// - `PStateNativeLock::Reset` → 4 entries clearing limit IDs 0,1,4,5
-    ///   (Gpu, GpuLowerbound, Unknown_4, Unknown_5) to mode 0 (None).
+    ///   (Gpu, GpuLowerbound, PstateSelectLower, PstateSelectUpper) to mode 0
+    ///   (None).
     /// - `PStateNativeLock::PstateOnly(n)` → 2 entries (id 5,4 mode 1 value n)
     ///   selecting pstate `n` without touching frequency.
     /// - `PStateNativeLock::PstateAndFreq { pstate, freq_khz }` → 4 entries:
