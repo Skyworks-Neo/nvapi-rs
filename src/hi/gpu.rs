@@ -179,7 +179,10 @@ pub struct GpuStatus {
     pub current_thermal_level: Option<u32>,
     pub current_fan_speed_level: Option<u32>,
     pub vfp: Option<VfpTable>,
-    pub vfp_locks: BTreeMap<PerfLimitId, ClockLockValue>,
+    /// ACTIVE client-limit locks only (mode != None): frequency upper/lower
+    /// bounds, PstateSelect pins (see `select_pstate`), voltage locks. The
+    /// full 7-entry table lives in `GpuSettings.vfp_locks` / get-lock-status.
+    pub vfp_locks: BTreeMap<PerfLimitId, ClockLockEntry>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -543,7 +546,8 @@ impl Gpu {
             vfp_locks: match allowable_result(self.gpu.vfp_locks(PerfLimitId::values()))? {
                 Ok(l) => l
                     .into_iter()
-                    .filter_map(|lock| lock.lock_value.map(|value| (lock.limit, value)))
+                    .filter(|lock| lock.mode != ClockLockMode::None)
+                    .map(|lock| (lock.limit, lock))
                     .collect(),
                 Err(..) => Default::default(),
             },
