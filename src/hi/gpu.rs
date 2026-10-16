@@ -18,17 +18,16 @@ fn collect_domain<T: Copy, U: From<T>>(
 pub use crate::{
     AllClockEntry, AllClocks, AllClocksDetailed, ArchInfo, Bus, BusInfo, BusType, Celsius,
     ClockDomain, ClockFrequencies, ClockLockEntry, ClockLockMode, ClockLockValue,
-    ComputeCapabilities,
-    ConnectedIdsFlags, CoolerControl, CoolerController, CoolerInfo, CoolerPolicy, CoolerSettings,
-    CoolerStatus, CoolerTarget, CoolerType, DisplayId, DriverModel, EccErrors, EffectiveClocks,
-    FanArbiterControl, FanArbiterStatus, FanCoolerId, FanCurve, FanCurvePoint, Foundry, GpuType,
-    Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts, MicrovoltsDelta, PState,
-    PStateNativeLock, PciIdentifiers, Percentage, PerfFreqCap, PerfFreqCapEntry, PerfInfo,
-    PerfLimitId, PerfStatus, PerformanceDecreaseReason, PffCurve, PffPoint, PhysicalGpu,
-    PowerMonitor, PowerRails, PowerTopologyChannelId, PrivateCoolerInfo, RamMaker, RamType, Range,
-    Rpm, SetFanRpmResult, SystemType, ThermalChannelInfo, ThermalChannelStatus, ThermalController,
-    ThermalTarget, UtilizationDomain, Utilizations, Vendor, VfPointType, VoltageDomain,
-    VoltageStatus, VoltageTable,
+    ComputeCapabilities, ConnectedIdsFlags, CoolerControl, CoolerController, CoolerInfo,
+    CoolerPolicy, CoolerSettings, CoolerStatus, CoolerTarget, CoolerType, DisplayId, DriverModel,
+    EccErrors, EffectiveClocks, FanArbiterControl, FanArbiterStatus, FanCoolerId, FanCurve,
+    FanCurvePoint, Foundry, GpuType, Kibibytes, Kilohertz, KilohertzDelta, MemoryInfo, Microvolts,
+    MicrovoltsDelta, PState, PStateNativeLock, PciIdentifiers, Percentage, PerfFreqCap,
+    PerfFreqCapEntry, PerfInfo, PerfLimitId, PerfStatus, PerformanceDecreaseReason, PffCurve,
+    PffPoint, PhysicalGpu, PowerMonitor, PowerRails, PowerTopologyChannelId, PrivateCoolerInfo,
+    RamMaker, RamType, Range, Rpm, SetFanRpmResult, SystemType, ThermalChannelInfo,
+    ThermalChannelStatus, ThermalController, ThermalTarget, UtilizationDomain, Utilizations,
+    Vendor, VfPointType, VoltageDomain, VoltageStatus, VoltageTable,
 };
 use crate::{
     BaseVoltage, ClockEntry, ClockFrequencyType, ClockRange, ClockTable, PStates, PffStatus,
@@ -2042,6 +2041,16 @@ impl Gpu {
                     clock: domain,
                 },
             ])
+            .map_err(Into::into)
+    }
+
+    /// Write PerfClientLimits lock entries verbatim. Each entry carries its
+    /// own mode, so PstateSelect pins (ids 4/5) survive a round-trip — this
+    /// is the replay path for captured `GpuSettings.vfp_locks` maps. The
+    /// caller owns the RMW (GET current, overlay, write).
+    pub fn set_vfp_lock_entries(&self, entries: &[ClockLockEntry]) -> crate::Result<()> {
+        self.gpu
+            .set_vfp_locks(entries.iter().copied())
             .map_err(Into::into)
     }
 

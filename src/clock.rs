@@ -2003,7 +2003,9 @@ impl RawConversion for clock::undocumented::NV_GPU_PERF_CLIENT_LIMITS_ENTRY {
             lock_value: ClockLockValue::from_raw(self)?,
             select_pstate: match mode {
                 clock::undocumented::ClockLockMode::PstateSelect => {
-                    Some(u8::try_from(value).map_err(|_| sys::ArgumentRangeError { value: value as i64 })?)
+                    Some(u8::try_from(value).map_err(|_| sys::ArgumentRangeError {
+                        value: value as i64,
+                    })?)
                 }
                 _ => None,
             },
