@@ -101,3 +101,13 @@ nv_declare_handle! {
 pub const NVDX_SWAPCHAIN_NONE: NVDX_SwapChainHandle = NVDX_SwapChainHandle(::std::ptr::null());
 
 pub const NVAPI_DEFAULT_HANDLE: usize = 0;
+
+nv_declare_handle! {
+    /// A Driver Settings (DRS) registry session (NvAPI_DRS_CreateSession)
+    NvDRSSessionHandle
+}
+
+nv_declare_handle! {
+    /// A Driver Settings (DRS) profile (NvAPI_DRS_GetBaseProfile and friends)
+    NvDRSProfileHandle
+}

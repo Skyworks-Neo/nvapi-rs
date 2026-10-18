@@ -19,6 +19,7 @@ pub mod value;
 /// NVAPI_HANDLE_INVALIDATED is received by an app, it should discard all
 /// handles, and re-enumerate them.
 pub mod handles;
+pub mod drs;
 
 /// The display driver APIs are used to retrieve information about the display driver.
 pub mod driverapi;
@@ -67,6 +68,7 @@ pub mod api {
     pub use crate::gpu::thermal::*;
     pub use crate::gpu::*;
     pub use crate::gsync::*;
+    pub use crate::drs::*;
     pub use crate::handles::*;
     pub use crate::i2c::*;
     pub use crate::nvapi::*;

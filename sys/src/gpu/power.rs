@@ -24,6 +24,9 @@ pub mod undocumented {
             pub version: NvVersion,
             /// uiDelta — unsigned percent of boost range, clamped [0, 100]
             /// (AmpereOC + HYDRA both treat as unsigned; never negative).
+            /// AB 19412 `ClientVoltageRail_SetControl` decode: 40B block,
+            /// version 0x10028, control value written to the low BYTE of this
+            /// dword (@+4); GetControl reads the same byte back.
             pub percent: u32,
             pub unknown: Padding<[u32; 8]>,
         }

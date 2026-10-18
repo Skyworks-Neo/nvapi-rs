@@ -590,6 +590,11 @@ pub mod undocumented {
     }
 
     nvstruct! {
+        /// AB 19412 `ClientFanCoolers_SetControl` decode confirms this layout
+        /// end-to-end: it GETs the block (version 0x105AC), mutates per-cooler
+        /// `level` (entry+4) and `flags` bit0 = manual (entry+8) on the 44B
+        /// stride — count byte @+8 low byte — then SETs the whole block back
+        /// (RMW, never partial).
         pub struct NV_GPU_CLIENT_FAN_COOLERS_CONTROL_V1 {
             pub version: NvVersion,
             pub flags: u32,

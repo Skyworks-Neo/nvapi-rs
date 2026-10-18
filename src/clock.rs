@@ -2069,10 +2069,10 @@ pub struct PerfStatus {
     pub active: Option<PerfFlags>,
     /// Raw nanoseconds counter from the status params (semantics unconfirmed).
     #[cfg_attr(feature = "serde", serde(default))]
-    pub timer: u64,
+    pub timer_ns: u64,
     /// Per-policy nanosecond timers (raw; unconfirmed companion fields).
     #[cfg_attr(feature = "serde", serde(default))]
-    pub policy_timers: [u64; 3],
+    pub policy_timers_ns: [u64; 3],
 }
 
 impl RawConversion for power::undocumented::NV_GPU_PERF_POLICIES_STATUS_PARAMS {
@@ -2097,8 +2097,8 @@ impl RawConversion for power::undocumented::NV_GPU_PERF_POLICIES_STATUS_PARAMS {
                 active: PerfFlags::from_bits(unknown),
                 limits: PerfFlags::from_bits(limits.value)
                     .ok_or_else(|| sys::ArgumentRangeError::new(limits.value as _))?,
-                timer,
-                policy_timers: timers,
+                timer_ns: timer,
+                policy_timers_ns: timers,
             }),
             _ => Err(sys::ArgumentRangeError::new(self.flags as _)),
         }
@@ -2675,8 +2675,8 @@ mod convert_raw_tests {
                     | crate::sys::gpu::power::undocumented::PerfFlags::VOLTAGE_REL_LIMIT
             )
         );
-        assert_eq!(status.timer, 0x1234);
-        assert_eq!(status.policy_timers, [1, 2, 3]);
+        assert_eq!(status.timer_ns, 0x1234);
+        assert_eq!(status.policy_timers_ns, [1, 2, 3]);
 
         // Unknown active bits must decode to `None` (raw kept in `unknown`).
         let unnamed = NV_GPU_PERF_POLICIES_STATUS_PARAMS {

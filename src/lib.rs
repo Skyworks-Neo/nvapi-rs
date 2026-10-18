@@ -11,6 +11,7 @@ pub mod hi;
 #[macro_use]
 mod macros;
 mod clock;
+mod drs;
 mod ecc;
 mod error;
 mod gpu;
@@ -24,6 +25,7 @@ mod thermal;
 mod types;
 
 pub use clock::*;
+pub use drs::*;
 pub use ecc::*;
 pub use error::*;
 // explicit: the thread-local last-error ledger helpers (glob-shadowing-
