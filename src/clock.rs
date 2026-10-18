@@ -2058,6 +2058,21 @@ impl RawConversion for power::undocumented::NV_GPU_PERF_POLICIES_INFO_PARAMS {
 pub struct PerfStatus {
     pub unknown: u32,
     pub limits: PerfFlags,
+    /// Active-policy mask decoded from the raw `unknown` dword, with the same
+    /// bit semantics as `limits` (ccminer cross-refs: 1/4/5 while mining,
+    /// 16 idle, 7 in idle clocks). `None` when the raw value carries bits
+    /// PerfFlags does not name yet — the raw dword stays in `unknown`.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub active: Option<PerfFlags>,
+    /// Raw nanoseconds counter from the status params (semantics unconfirmed).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub timer: u64,
+    /// Per-policy nanosecond timers (raw; unconfirmed companion fields).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub policy_timers: [u64; 3],
 }
 
 impl RawConversion for power::undocumented::NV_GPU_PERF_POLICIES_STATUS_PARAMS {
@@ -2070,15 +2085,20 @@ impl RawConversion for power::undocumented::NV_GPU_PERF_POLICIES_STATUS_PARAMS {
         match *self {
             power::undocumented::NV_GPU_PERF_POLICIES_STATUS_PARAMS {
                 flags: 0,
+                timer,
                 limits,
                 zero0: 0,
                 unknown,
                 zero1: 0,
+                timers,
                 ..
             } => Ok(PerfStatus {
                 unknown,
+                active: PerfFlags::from_bits(unknown),
                 limits: PerfFlags::from_bits(limits.value)
                     .ok_or_else(|| sys::ArgumentRangeError::new(limits.value as _))?,
+                timer,
+                policy_timers: timers,
             }),
             _ => Err(sys::ArgumentRangeError::new(self.flags as _)),
         }
@@ -2639,13 +2659,35 @@ mod convert_raw_tests {
             flags: 0,
             limits: crate::sys::gpu::power::undocumented::NV_GPU_PERF_FLAGS::with_repr(1), // power limit bit
             zero0: 0,
-            unknown: 0xAB,
+            unknown: 5, // POWER_LIMIT | VOLTAGE_REL_LIMIT — fully nameable
             zero1: 0,
+            timer: 0x1234,
+            timers: [1, 2, 3],
             ..unsafe { std::mem::zeroed() }
         };
         let status = raw.convert_raw().unwrap();
-        assert_eq!(status.unknown, 0xAB);
+        assert_eq!(status.unknown, 5);
         assert_eq!(status.limits.bits(), 1);
+        assert_eq!(
+            status.active,
+            Some(crate::sys::gpu::power::undocumented::PerfFlags::POWER_LIMIT
+                | crate::sys::gpu::power::undocumented::PerfFlags::VOLTAGE_REL_LIMIT)
+        );
+        assert_eq!(status.timer, 0x1234);
+        assert_eq!(status.policy_timers, [1, 2, 3]);
+
+        // Unknown active bits must decode to `None` (raw kept in `unknown`).
+        let unnamed = NV_GPU_PERF_POLICIES_STATUS_PARAMS {
+            flags: 0,
+            limits: crate::sys::gpu::power::undocumented::NV_GPU_PERF_FLAGS::with_repr(1),
+            zero0: 0,
+            unknown: 0x80, // bit 7 has no PerfFlags name
+            zero1: 0,
+            ..unsafe { std::mem::zeroed() }
+        };
+        let status = unnamed.convert_raw().unwrap();
+        assert_eq!(status.unknown, 0x80);
+        assert_eq!(status.active, None);
 
         let bad = NV_GPU_PERF_POLICIES_STATUS_PARAMS {
             flags: 1,
