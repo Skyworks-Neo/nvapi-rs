@@ -8,7 +8,6 @@
 //!
 //! The DRS registry is process/driver-global — no GPU handle involved.
 
-use crate::nvcall;
 use crate::sys::api;
 use crate::sys::drs::NV_DRS_SETTING;
 use crate::sys::handles::{NvDRSProfileHandle, NvDRSSessionHandle};
@@ -32,8 +31,13 @@ fn with_session<T>(
     })();
     // DestroySession on every path; a failing destroy must not mask the inner
     // result, but is itself worth surfacing when the inner run succeeded.
-    let destroyed = raw_status_result(unsafe { api::NvAPI_DRS_DestroySession(session) })
-        .map_err(|status| crate::Error::Nvapi(crate::NvapiError::new(crate::sys::Api::NvAPI_DRS_DestroySession, status)));
+    let destroyed =
+        raw_status_result(unsafe { api::NvAPI_DRS_DestroySession(session) }).map_err(|status| {
+            crate::Error::Nvapi(crate::NvapiError::new(
+                crate::sys::Api::NvAPI_DRS_DestroySession,
+                status,
+            ))
+        });
     match (result, destroyed) {
         (Ok(v), Ok(())) => Ok(v),
         (Err(e), _) => Err(e),
