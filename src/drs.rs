@@ -124,3 +124,22 @@ mod tests {
         (fps & !FRAME_RATE_LIMIT_FLAG) | FRAME_RATE_LIMIT_FLAG
     }
 }
+
+/// Whether this driver carries the legacy FRL DRS setting at all (AB parity
+/// with `IsFramerateLimitControlSupported`: the limiter UI only lights up
+/// when GetSetting answers). False on branches where SetSetting would fail
+/// with `NVAPI_SETTING_NOT_FOUND` (-160).
+pub fn framerate_limit_supported() -> crate::Result<bool> {
+    with_session(|session, profile| {
+        let mut setting = NV_DRS_SETTING::default();
+        let status = unsafe {
+            api::NvAPI_DRS_GetSetting(
+                session,
+                profile,
+                FRAME_RATE_LIMIT_SETTING_ID,
+                core::ptr::from_mut(&mut setting).cast(),
+            )
+        };
+        Ok(raw_status_result(status).is_ok())
+    })
+}
