@@ -145,3 +145,21 @@ pub fn framerate_limit_supported() -> crate::Result<bool> {
         Ok(raw_status_result(status).is_ok())
     })
 }
+
+#[cfg(test)]
+mod i2c_stamp_tests {
+    /// The driver-side gate (nvapi64 I2CReadEx handler) is an exact-dword
+    /// compare against 0x10050 at struct offset 0 — a zeroed version field
+    /// is exactly the INCOMPATIBLE_STRUCT_VERSION (-9) reproduction.
+    #[test]
+    fn driver_v1_default_version_is_zero_and_stamp_fixes_it() {
+        use crate::sys::i2c::driver_v1::*;
+        let bare = NV_I2C_INFO_DRIVER_V1::default();
+        assert_eq!(bare.version, 0); // the -9 bug shape
+        let stamped = NV_I2C_INFO_DRIVER_V1 {
+            version: NV_I2C_INFO_DRIVER_V1_STAMP,
+            ..Default::default()
+        };
+        assert_eq!(stamped.version, 0x10050);
+    }
+}

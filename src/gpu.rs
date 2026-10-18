@@ -8805,9 +8805,9 @@ impl PhysicalGpu {
                 // Route a mode-6 read (N bytes via one inline register byte);
                 // port routing per AB: 0-2 DDC mask bit, >=3 portId.
                 let mut drv = i2c::driver_v1::NV_I2C_INFO_DRIVER_V1 {
+                    version: i2c::driver_v1::NV_I2C_INFO_DRIVER_V1_STAMP,
                     display_mask: display_mask & 0x1,
-                    ddc_and_dev_addr: u16::from(port.is_none() || port.unwrap() < 3) << 8
-                        | u16::from(address) << 8,
+                    ddc_and_dev_addr: u16::from(address) << 8,
                     port_id: match port {
                         Some(p) if p >= 3 => p,
                         _ => 0xFF,
@@ -8895,6 +8895,7 @@ impl PhysicalGpu {
                 // Write twin of the read fallback: private 80-byte struct,
                 // mode 9 (extended pointers: reg len/ptr + data len/ptr).
                 let mut drv = i2c::driver_v1::NV_I2C_INFO_DRIVER_V1 {
+                    version: i2c::driver_v1::NV_I2C_INFO_DRIVER_V1_STAMP,
                     display_mask: display_mask & 0x1,
                     ddc_and_dev_addr: u16::from(address) << 8,
                     port_id: match port {
