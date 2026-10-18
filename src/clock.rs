@@ -2670,8 +2670,10 @@ mod convert_raw_tests {
         assert_eq!(status.limits.bits(), 1);
         assert_eq!(
             status.active,
-            Some(crate::sys::gpu::power::undocumented::PerfFlags::POWER_LIMIT
-                | crate::sys::gpu::power::undocumented::PerfFlags::VOLTAGE_REL_LIMIT)
+            Some(
+                crate::sys::gpu::power::undocumented::PerfFlags::POWER_LIMIT
+                    | crate::sys::gpu::power::undocumented::PerfFlags::VOLTAGE_REL_LIMIT
+            )
         );
         assert_eq!(status.timer, 0x1234);
         assert_eq!(status.policy_timers, [1, 2, 3]);
