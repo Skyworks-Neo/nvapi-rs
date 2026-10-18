@@ -624,12 +624,18 @@ pub mod undocumented {
     nvversion! { @=NV_GPU_PERF_CLIENT_LIMITS NV_GPU_PERF_CLIENT_LIMITS_V2(2) = 0x30c }
 
     nvapi! {
-        /// Pascal only
+        /// Pascal only. Dual-named interface: MSI Afterburner 4.6.7.19412's
+        /// `CNVAPIWrapper::VFCurve_SetCurve` drives the SAME id (0x39442CFB) as
+        /// its primary V/F-curve writer — before writing it primes
+        /// ClientThermalPolicies/ClientPowerPolicies GETs first (write-side
+        /// diagnostics live in the policy layers, so an "applied but clamped"
+        /// result is a driver-policy decision, not a client payload error).
         pub unsafe fn NvAPI_GPU_PerfClientLimitsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pClockLocks: *mut NV_GPU_PERF_CLIENT_LIMITS) -> NvAPI_Status;
     }
 
     nvapi! {
-        /// Pascal only
+        /// Pascal only. See the GET twin: AB 19412 calls this id from
+        /// `VFCurve_SetCurve` — lock table and V/F curve share one writer.
         pub unsafe fn NvAPI_GPU_PerfClientLimitsSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pClockLocks: *const NV_GPU_PERF_CLIENT_LIMITS) -> NvAPI_Status;
     }
 
