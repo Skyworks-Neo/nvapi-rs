@@ -281,93 +281,55 @@ pub mod undocumented {
 }
 
 pub mod driver_v1 {
-    //! The I2C Ex handlers' PRIVATE 80-byte layout on R610+ (RE'd from
-    //! nvapi64 `I2CReadEx` handler: version gate `== 0x10050` else
-    //! INCOMPATIBLE_STRUCT_VERSION; accessMode@0x24 selects the op —
-    //! 6 = N-byte read through one inline register byte, 9 = extended
-    //! pointer read/write). NOT the public NV_I2C_INFO layout.
+    //! The I2C Ex handlers' REAL struct family on the live R610 driver
+    //! (RE'd from the loaded nvapi64_impl.dll handler, RVA 0x1bcf70): the
+    //! version gate accepts exactly {0x10030 (V1, 48B), 0x20038 (V2, 56B),
+    //! 0x30040 (V3, 64B)} — the classic NV_I2C_INFO layout family, NOT the
+    //! 0x10050 stamp seen in an older captured impl build. Field offsets
+    //! below are read straight off the handler's accesses.
 
     #[derive(Copy, Clone, Debug, Default)]
     #[repr(C)]
-    pub struct NV_I2C_INFO_DRIVER_V1 {
-        /// Must stamp exactly `0x10050` (size 0x50 | version 1).
+    pub struct NV_I2C_INFO_DRIVER_V3 {
+        /// Must stamp exactly `0x30060` (V3 | 96).
         pub version: u32,
-        /// Display mask; only bare bits 0/2/4 survive validation (bit 0 is
-        /// auto-cleared) — `0xFFFF` fails INVALID_ARGUMENT.
+        /// +0x04. DDC routing needs this nonzero (DDC without mask = -5).
         pub display_mask: u32,
-        /// +0x08: low byte = DDC flag, second byte = device address << 1.
-        /// Read back as a word when `b_is_port_id_set == 1`.
-        pub ddc_and_dev_addr: u16,
-        pub _pad0: u16,
+        /// +0x08: DDC port flag.
+        pub b_is_ddc_port: u8,
+        /// +0x09: 7-bit slave address << 1 (bit0 is the R/W bit and is
+        /// tested by the handler — keep it 0).
+        pub i2c_dev_address: u8,
+        pub _pad0: [u8; 6],
+        /// +0x10: register address bytes (count in `reg_addr_size`, ≤ 4).
+        pub reg_addr_ptr: *const u8,
+        /// +0x18.
+        pub reg_addr_size: u32,
         pub _pad1: u32,
-        /// +0x10: unused by access modes 0-6 (mode 9 uses +0x38).
-        pub _reserved0: u64,
-        /// +0x18: access port; `0xFF` = driver auto-probe (RM 0x7000045).
+        /// +0x20: data buffer.
+        pub data_ptr: *mut u8,
+        /// +0x28: data size (≤ 0x1000).
+        pub cb_size: u32,
+        /// +0x2C: speed in kHz (≥5000 is divided by 1000 by the handler;
+        /// `0xFFFF` would re-interpret +0x30 as an explicit access-mode slot
+        /// — do not use). 0 = driver default.
+        pub i2c_speed_khz: u32,
+        /// +0x30: reserved while +0x2C is a real speed.
+        pub _reserved_mode_slot: u32,
+        /// +0x34: access port id (V3 field).
         pub port_id: u8,
         pub _pad2: [u8; 3],
-        /// +0x1C: 0 = DDC/mask routing, 1 = use `ddc_and_dev_addr` word.
+        /// +0x38: 1 = route via `port_id` (the handler requires == 1 to
+        /// consume it).
         pub b_is_port_id_set: u32,
-        /// +0x20: speed enum 0-6 (raw > 40000 rejected).
-        pub i2c_speed_khz: u32,
-        /// +0x24: access mode — 0 none, 1 read 1B, 2 read N, 4 read 1B via
-        /// inline reg, 5 read 2B via inline reg, 6 read N via inline reg,
-        /// 9 extended pointers.
-        pub access_mode: u32,
-        /// +0x28: flag byte consumed by the low-level transaction.
-        pub flag: u8,
-        /// +0x29: inline register bytes (modes 4/5/6, count fixed 1).
-        pub inline_reg: [u8; 3],
-        /// +0x2C: data length (modes 2/6; mode 9 reuses 0x30 as reg length).
-        pub length: u32,
-        /// +0x30..0x50: mode-dependent tail (simple data pointer vs mode-9
-        /// pointer set — the slots are mode-exclusive).
-        pub tail: I2cDriverTail,
+        /// +0x3C: zero padding to the 64-byte V3 record.
+        pub _pad3: u32,
     }
 
-    #[derive(Copy, Clone)]
-    #[repr(C)]
-    pub union I2cDriverTail {
-        /// Modes 1/2/4/5/6: data pointer at +0x30.
-        pub simple: I2cDriverTailSimple,
-        /// Mode 9: reg len @+0x30, reg ptr @+0x38, data len @+0x40,
-        /// data ptr @+0x48.
-        pub ext: I2cDriverTailExt,
-    }
+    /// The V3 stamp the live handler validates: `64 | version 3`
+    /// (196672 == 0x30040 — same 64-byte footprint as the public
+    /// NV_I2C_INFO, plus the V3 port fields at +0x34/+0x38).
+    pub const NV_I2C_INFO_DRIVER_V3_STAMP: u32 = 0x3_0040;
 
-    #[derive(Copy, Clone, Debug, Default)]
-    #[repr(C)]
-    pub struct I2cDriverTailSimple {
-        pub data_ptr: *mut u8,
-        pub _pad: [u32; 3],
-    }
-
-    #[derive(Copy, Clone, Debug, Default)]
-    #[repr(C)]
-    pub struct I2cDriverTailExt {
-        pub reg_len: u32,
-        pub _pad: u32,
-        pub reg_ptr: *const u8,
-        pub data_len: u32,
-        pub _pad2: u32,
-        pub data_ptr: *mut u8,
-    }
-
-    impl std::fmt::Debug for I2cDriverTail {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("I2cDriverTail(..)")
-        }
-    }
-
-    impl Default for I2cDriverTail {
-        fn default() -> Self {
-            Self {
-                simple: I2cDriverTailSimple::default(),
-            }
-        }
-    }
-
-    /// The exact stamp the driver validates: `size 0x50 | version 1`.
-    pub const NV_I2C_INFO_DRIVER_V1_STAMP: u32 = 0x10050;
-
-    const _: () = assert!(size_of::<NV_I2C_INFO_DRIVER_V1>() == 0x50);
+    const _: () = assert!(size_of::<NV_I2C_INFO_DRIVER_V3>() == 0x40);
 }

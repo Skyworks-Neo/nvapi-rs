@@ -8746,6 +8746,20 @@ impl PhysicalGpu {
         Ok(())
     }
 
+    /// The Ex handler's +0x2C field takes real kHz (3/10/33/100/200/400),
+    /// not the enum ordinal — it bucket-matches those exact thresholds.
+    fn speed_to_khz(speed: i2c::I2cSpeed) -> u32 {
+        match speed {
+            i2c::I2cSpeed::_3Khz => 3,
+            i2c::I2cSpeed::_10Khz => 10,
+            i2c::I2cSpeed::_33Khz => 33,
+            i2c::I2cSpeed::_100Khz => 100,
+            i2c::I2cSpeed::_200Khz => 200,
+            i2c::I2cSpeed::_400Khz => 400,
+            _ => 0,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn i2c_read(
         &self,
@@ -8798,38 +8812,32 @@ impl PhysicalGpu {
                 status: crate::Status::NotSupported,
                 ..
             }) => unsafe {
-                // The plain call is removed on R610+ (-104). I2CReadEx lives,
-                // but takes the PRIVATE 80-byte struct (RE'd from the nvapi64
-                // handler: version gate == 0x10050, accessMode@0x24) — the
-                // public/EX layouts fail INCOMPATIBLE_STRUCT_VERSION there.
-                // Route a mode-6 read (N bytes via one inline register byte);
-                // port routing per AB: 0-2 DDC mask bit, >=3 portId.
-                let mut drv = i2c::driver_v1::NV_I2C_INFO_DRIVER_V1 {
-                    version: i2c::driver_v1::NV_I2C_INFO_DRIVER_V1_STAMP,
-                    display_mask: display_mask & 0x1,
-                    ddc_and_dev_addr: u16::from(address) << 8,
-                    port_id: match port {
-                        Some(p) if p >= 3 => p,
-                        _ => 0xFF,
-                    },
-                    b_is_port_id_set: u32::from(matches!(port, Some(p) if p >= 3)),
-                    access_mode: 6,
-                    inline_reg: [register.first().copied().unwrap_or(0), 0, 0],
-                    length: bytes.len() as u32,
-                    tail: i2c::driver_v1::I2cDriverTail {
-                        simple: i2c::driver_v1::I2cDriverTailSimple {
-                            data_ptr: bytes.as_mut_ptr(),
-                            ..Default::default()
-                        },
-                    },
+                // Plain I2CRead is gone on R610+ (-104). The Ex entry takes
+                // the classic NV_I2C_INFO family with EXACT stamps
+                // {0x10030/0x20038/0x30060} — RE'd from the loaded
+                // nvapi64_impl.dll handler (older capture showed 0x10050;
+                // that build's gate differs). Send the 96-byte V3 form; read
+                // results are copied back by the handler itself.
+                let (display_mask, ddc, port_id, port_set) = match port {
+                    Some(p) if p < 3 => (1u32 << p, 1u8, 0u8, 0u32),
+                    Some(p) => (0, 0, p, 1),
+                    None => (display_mask, u8::from(port_is_ddc), 0, 0),
+                };
+                let speed_khz = Self::speed_to_khz(speed);
+                let mut drv = i2c::driver_v1::NV_I2C_INFO_DRIVER_V3 {
+                    version: i2c::driver_v1::NV_I2C_INFO_DRIVER_V3_STAMP,
+                    display_mask,
+                    b_is_ddc_port: ddc,
+                    i2c_dev_address: address << 1,
+                    reg_addr_ptr: register.as_ptr(),
+                    reg_addr_size: register.len() as u32,
+                    data_ptr: bytes.as_mut_ptr(),
+                    cb_size: bytes.len() as u32,
+                    i2c_speed_khz: speed_khz,
+                    port_id,
+                    b_is_port_id_set: port_set,
                     ..Default::default()
                 };
-                if let Some(p) = port {
-                    if p < 3 {
-                        drv.display_mask = 1u32 << p;
-                        drv.ddc_and_dev_addr |= 1; // DDC flag in the low byte
-                    }
-                }
                 let mut out_params = [0u32; 2];
                 nvcall!(NvAPI_I2CReadEx(
                     self.0,
@@ -8892,36 +8900,27 @@ impl PhysicalGpu {
                 status: crate::Status::NotSupported,
                 ..
             }) => unsafe {
-                // Write twin of the read fallback: private 80-byte struct,
-                // mode 9 (extended pointers: reg len/ptr + data len/ptr).
-                let mut drv = i2c::driver_v1::NV_I2C_INFO_DRIVER_V1 {
-                    version: i2c::driver_v1::NV_I2C_INFO_DRIVER_V1_STAMP,
-                    display_mask: display_mask & 0x1,
-                    ddc_and_dev_addr: u16::from(address) << 8,
-                    port_id: match port {
-                        Some(p) if p >= 3 => p,
-                        _ => 0xFF,
-                    },
-                    b_is_port_id_set: u32::from(matches!(port, Some(p) if p >= 3)),
-                    access_mode: 9,
-                    length: register.len() as u32,
-                    tail: i2c::driver_v1::I2cDriverTail {
-                        ext: i2c::driver_v1::I2cDriverTailExt {
-                            reg_len: register.len() as u32,
-                            reg_ptr: register.as_ptr(),
-                            data_len: bytes.len() as u32,
-                            data_ptr: bytes.as_ptr() as *mut u8,
-                            ..Default::default()
-                        },
-                    },
+                // Write twin: same V3 form; direction is carried by the Ex
+                // entry point, not the struct.
+                let (display_mask, ddc, port_id, port_set) = match port {
+                    Some(p) if p < 3 => (1u32 << p, 1u8, 0u8, 0u32),
+                    Some(p) => (0, 0, p, 1),
+                    None => (display_mask, u8::from(port_is_ddc), 0, 0),
+                };
+                let mut drv = i2c::driver_v1::NV_I2C_INFO_DRIVER_V3 {
+                    version: i2c::driver_v1::NV_I2C_INFO_DRIVER_V3_STAMP,
+                    display_mask,
+                    b_is_ddc_port: ddc,
+                    i2c_dev_address: address << 1,
+                    reg_addr_ptr: register.as_ptr(),
+                    reg_addr_size: register.len() as u32,
+                    data_ptr: bytes.as_ptr() as *mut u8,
+                    cb_size: bytes.len() as u32,
+                    i2c_speed_khz: Self::speed_to_khz(speed),
+                    port_id,
+                    b_is_port_id_set: port_set,
                     ..Default::default()
                 };
-                if let Some(p) = port {
-                    if p < 3 {
-                        drv.display_mask = 1u32 << p;
-                        drv.ddc_and_dev_addr |= 1;
-                    }
-                }
                 let mut out_params = [0u32; 2];
                 nvcall!(NvAPI_I2CWriteEx(
                     self.0,
