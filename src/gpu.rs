@@ -8788,8 +8788,34 @@ impl PhysicalGpu {
             ..Default::default()
         };
 
-        unsafe {
-            nvcall!(NvAPI_I2CRead(self.0, &mut data)).map(|()| data.cbSize as usize) // TODO: not actually sure if this ever changes?
+        match unsafe { nvcall!(NvAPI_I2CRead(self.0, &mut data)) } {
+            Ok(()) => Ok(data.cbSize as usize), // TODO: not actually sure if this ever changes?
+            // Modern drivers (live R610.47: -104 NOT_SUPPORTED) removed the
+            // plain call; AB 19412's I2CRead wrapper always drives
+            // I2CReadEx (0x4D7B0709) with the NV_I2C_INFO V3 stamp (0x3002C)
+            // and a zeroed 2×u32 pData out-param — mirror that exactly.
+            Err(crate::NvapiError {
+                status: crate::Status::NotSupported,
+                ..
+            }) => unsafe {
+                let mut ex = i2c::undocumented::NV_I2C_INFO_EX {
+                    displayMask: data.displayMask,
+                    bIsDDCPort: data.bIsDDCPort,
+                    i2cDevAddress: data.i2cDevAddress,
+                    pbI2cRegAddress: data.pbI2cRegAddress,
+                    regAddrSize: data.regAddrSize,
+                    pbData: data.pbData,
+                    cbSize: data.cbSize,
+                    i2cSpeedKhz: data.i2cSpeedKhz,
+                    portId: data.portId,
+                    bIsPortIdSet: data.bIsPortIdSet,
+                    ..Default::default()
+                };
+                let mut out_params = [0u32; 2];
+                nvcall!(NvAPI_I2CReadEx(self.0, &mut ex, out_params.as_mut_ptr()))
+                    .map(|()| data.cbSize as usize)
+            },
+            Err(e) => Err(e),
         }
     }
 
@@ -8837,7 +8863,30 @@ impl PhysicalGpu {
             ..Default::default()
         };
 
-        unsafe { nvcall!(NvAPI_I2CWrite(self.0, &mut data)) }
+        match unsafe { nvcall!(NvAPI_I2CWrite(self.0, &mut data)) } {
+            Ok(()) => Ok(()),
+            Err(crate::NvapiError {
+                status: crate::Status::NotSupported,
+                ..
+            }) => unsafe {
+                let mut ex = i2c::undocumented::NV_I2C_INFO_EX {
+                    displayMask: data.displayMask,
+                    bIsDDCPort: data.bIsDDCPort,
+                    i2cDevAddress: data.i2cDevAddress,
+                    pbI2cRegAddress: data.pbI2cRegAddress,
+                    regAddrSize: data.regAddrSize,
+                    pbData: data.pbData,
+                    cbSize: data.cbSize,
+                    i2cSpeedKhz: data.i2cSpeedKhz,
+                    portId: data.portId,
+                    bIsPortIdSet: data.bIsPortIdSet,
+                    ..Default::default()
+                };
+                let mut out_params = [0u32; 2];
+                nvcall!(NvAPI_I2CWriteEx(self.0, &mut ex, out_params.as_mut_ptr()))
+            },
+            Err(e) => Err(e),
+        }
     }
 
     // --- ClockClkVoltController(s) family -----------------------------------

@@ -2058,10 +2058,14 @@ impl RawConversion for power::undocumented::NV_GPU_PERF_POLICIES_INFO_PARAMS {
 pub struct PerfStatus {
     pub unknown: u32,
     pub limits: PerfFlags,
-    /// Active-policy mask decoded from the raw `unknown` dword, with the same
-    /// bit semantics as `limits` (ccminer cross-refs: 1/4/5 while mining,
-    /// 16 idle, 7 in idle clocks). `None` when the raw value carries bits
-    /// PerfFlags does not name yet — the raw dword stays in `unknown`.
+    /// Limit-source mask decoded from the raw `unknown` dword, with the same
+    /// bit semantics as `limits`. RAW SEMANTICS — live 610.47 idle desktops
+    /// read 15 constantly while performance-decrease stays 0, so this reads
+    /// as "sources present/armed", not "currently throttling" (ccminer-era
+    /// cross-refs saw the value vary under load: 1/4/5 mining, 7 idle);
+    /// confirm with an idle-vs-load A/B before treating it as a throttle
+    /// signal. `None` when the raw value carries bits PerfFlags does not name
+    /// yet — the raw dword stays in `unknown`.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
