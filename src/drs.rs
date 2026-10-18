@@ -73,9 +73,11 @@ pub fn framerate_limit() -> crate::Result<Option<u32>> {
 pub fn set_framerate_limit(fps: Option<u32>) -> crate::Result<()> {
     with_session(|session, profile| match fps {
         Some(fps) => {
-            let mut setting = NV_DRS_SETTING::default();
-            setting.setting_id = FRAME_RATE_LIMIT_SETTING_ID;
-            setting.value = (fps & !FRAME_RATE_LIMIT_FLAG) | FRAME_RATE_LIMIT_FLAG;
+            let setting = NV_DRS_SETTING {
+                setting_id: FRAME_RATE_LIMIT_SETTING_ID,
+                value: (fps & !FRAME_RATE_LIMIT_FLAG) | FRAME_RATE_LIMIT_FLAG,
+                ..Default::default()
+            };
             unsafe {
                 nvcall!(NvAPI_DRS_SetSetting(
                     session,

@@ -8746,6 +8746,28 @@ impl PhysicalGpu {
         Ok(())
     }
 
+    /// AB 19412 port convention for the I2C Ex family (see
+    /// docs/reverse-engineering/afterburner/ab-19412-nvapi-id-surface-tier-table.md):
+    /// access ports 0-2 are DDC display-mask bits; port>=3 rides the portId
+    /// field with displayMask=0; displayMask=0xFFFF ("all") is never valid
+    /// on the Ex path.
+    fn normalize_ex_port(port: Option<u8>, ex: &mut i2c::undocumented::NV_I2C_INFO_EX) {
+        let Some(port) = port else { return };
+        if port < 3 {
+            // AB: access ports 0-2 are DDC display-mask bits.
+            ex.displayMask = 1u32 << port;
+            ex.bIsDDCPort = 1;
+            ex.portId = 0;
+            ex.bIsPortIdSet = 0;
+        } else {
+            // AB: port>=3 rides portId with a zeroed display mask.
+            ex.displayMask = 0;
+            ex.bIsDDCPort = 0;
+            ex.portId = port;
+            ex.bIsPortIdSet = sys::NV_TRUE as _;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn i2c_read(
         &self,
@@ -8798,6 +8820,12 @@ impl PhysicalGpu {
                 status: crate::Status::NotSupported,
                 ..
             }) => unsafe {
+                // AB 19412 I2CRead parity: ports 0-2 map to DDC display-mask
+                // bit `1<<port` (bIsDDCPort=1, no portId); port>=3 goes
+                // portId-routed with displayMask=0. AB never sends the
+                // displayMask=0xFFFF "all" form — the driver rejects it
+                // INVALID_ARGUMENT (live 610.47). Stamp ladder: our layout
+                // stamp first, then AB's 32-bit 0x2C-sized stamp.
                 let mut ex = i2c::undocumented::NV_I2C_INFO_EX {
                     displayMask: data.displayMask,
                     bIsDDCPort: data.bIsDDCPort,
@@ -8811,9 +8839,22 @@ impl PhysicalGpu {
                     bIsPortIdSet: data.bIsPortIdSet,
                     ..Default::default()
                 };
+                Self::normalize_ex_port(port, &mut ex);
                 let mut out_params = [0u32; 2];
-                nvcall!(NvAPI_I2CReadEx(self.0, &mut ex, out_params.as_mut_ptr()))
-                    .map(|()| data.cbSize as usize)
+                let mut call = |ex: &mut i2c::undocumented::NV_I2C_INFO_EX| {
+                    nvcall!(NvAPI_I2CReadEx(self.0, ex, out_params.as_mut_ptr()))
+                };
+                match call(&mut ex) {
+                    Ok(()) => Ok(data.cbSize as usize),
+                    Err(crate::NvapiError {
+                        status: crate::Status::InvalidArgument,
+                        ..
+                    }) => {
+                        ex.version = sys::nvapi::NvVersion::with_version(0x3_0002C);
+                        call(&mut ex).map(|()| data.cbSize as usize)
+                    }
+                    Err(e) => Err(e),
+                }
             },
             Err(e) => Err(e),
         }
@@ -8882,8 +8923,22 @@ impl PhysicalGpu {
                     bIsPortIdSet: data.bIsPortIdSet,
                     ..Default::default()
                 };
+                Self::normalize_ex_port(port, &mut ex);
                 let mut out_params = [0u32; 2];
-                nvcall!(NvAPI_I2CWriteEx(self.0, &mut ex, out_params.as_mut_ptr()))
+                let mut call = |ex: &mut i2c::undocumented::NV_I2C_INFO_EX| {
+                    nvcall!(NvAPI_I2CWriteEx(self.0, ex, out_params.as_mut_ptr()))
+                };
+                match call(&mut ex) {
+                    Ok(()) => Ok(()),
+                    Err(crate::NvapiError {
+                        status: crate::Status::InvalidArgument,
+                        ..
+                    }) => {
+                        ex.version = sys::nvapi::NvVersion::with_version(0x3_0002C);
+                        call(&mut ex)
+                    }
+                    Err(e) => Err(e),
+                }
             },
             Err(e) => Err(e),
         }
