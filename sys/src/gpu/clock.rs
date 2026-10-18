@@ -624,18 +624,22 @@ pub mod undocumented {
     nvversion! { @=NV_GPU_PERF_CLIENT_LIMITS NV_GPU_PERF_CLIENT_LIMITS_V2(2) = 0x30c }
 
     nvapi! {
-        /// Pascal only. Dual-named interface: MSI Afterburner 4.6.7.19412's
-        /// `CNVAPIWrapper::VFCurve_SetCurve` drives the SAME id (0x39442CFB) as
-        /// its primary V/F-curve writer — before writing it primes
-        /// ClientThermalPolicies/ClientPowerPolicies GETs first (write-side
-        /// diagnostics live in the policy layers, so an "applied but clamped"
-        /// result is a driver-policy decision, not a client payload error).
+        /// Pascal only. AB 19412 cross-reference: `VFCurve_SetCurve` calls
+        /// this SET id exactly twice inside its apply transaction — entry 6
+        /// (VOLTAGE lock: mode 0 clear, or mode 3 pin at the curve's fixed
+        /// voltage point) and entry 0 (GPU freq upper: mode 0 clear, or
+        /// mode 2 freq cap) — i.e. the lock table manages the curve's
+        /// side-conditions. The curve POINT deltas themselves ride the
+        /// ClockClient VF-points family (0x21537AD4/0x23F1B133), not this id.
+        /// AB fills the same struct: stamp 0x2030C, count=1 per call,
+        /// mode/value/clock_id — identical to nvapi-rs' model here.
         pub unsafe fn NvAPI_GPU_PerfClientLimitsGetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pClockLocks: *mut NV_GPU_PERF_CLIENT_LIMITS) -> NvAPI_Status;
     }
 
     nvapi! {
-        /// Pascal only. See the GET twin: AB 19412 calls this id from
-        /// `VFCurve_SetCurve` — lock table and V/F curve share one writer.
+        /// Pascal only. See the GET twin for the AB 19412 transaction
+        /// cross-reference (entry-6 voltage pin + entry-0 freq cap inside
+        /// VFCurve_SetCurve; not the curve-point path).
         pub unsafe fn NvAPI_GPU_PerfClientLimitsSetStatus(hPhysicalGPU: NvPhysicalGpuHandle, pClockLocks: *const NV_GPU_PERF_CLIENT_LIMITS) -> NvAPI_Status;
     }
 
