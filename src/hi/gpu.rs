@@ -620,6 +620,29 @@ impl Gpu {
         self.gpu.set_core_voltage_boost(boost).map_err(Into::into)
     }
 
+    /// Raw 32-bit global register read (`NvAPI_GPU_RegisterOp` 0x2EB3C140,
+    /// read-only lane) — see [`crate::Gpu::read_register_u32`].
+    pub fn read_register_u32(&self, offset: u32) -> crate::NvapiResult<u64> {
+        self.gpu.read_register_u32(offset)
+    }
+
+    /// Undocumented RAM type — see [`crate::Gpu::ram_type`].
+    pub fn ram_type(&self) -> crate::Result<RamType> {
+        self.gpu.ram_type()
+    }
+
+    /// Blackwell+ aggregated hotspot register fallback (°C) — see
+    /// [`crate::Gpu::blackwell_hotspot_register_c`].
+    pub fn blackwell_hotspot_register_c(&self) -> crate::Result<u32> {
+        self.gpu.blackwell_hotspot_register_c()
+    }
+
+    /// Per-chip GDDR6x/GDDR7 sensor temps, LACT-parity — see
+    /// [`crate::Gpu::vram_chip_temps`].
+    pub fn vram_chip_temps(&self, ram_type: RamType) -> crate::Result<Vec<(String, u64)>> {
+        self.gpu.vram_chip_temps(ram_type)
+    }
+
     pub fn set_power_limits<I: IntoIterator<Item = Percentage>>(
         &self,
         limits: I,

@@ -2,7 +2,7 @@ use crate::Status;
 use crate::clock::{ClockDomain, ClockDomainInfo, VfpMask};
 use crate::pstate::{PState, PStates};
 use crate::sys::api::NvVersion;
-use crate::sys::gpu::{clock, cooler, display, ecc, power, pstate, thermal};
+use crate::sys::gpu::{clock, cooler, display, ecc, power, pstate, register, thermal};
 use crate::sys::types::counted;
 use crate::sys::{self, driverapi, i2c};
 use crate::types::{
@@ -771,6 +771,179 @@ impl PhysicalGpu {
     pub fn ram_partition_count(&self) -> crate::NvapiResult<u32> {
         trace!("gpu.ram_partition_count()");
         unsafe { nvcall!(NvAPI_GPU_GetPartitionCount@get(self.0)) }
+    }
+
+    // --- Raw register reads (NvAPI_GPU_RegisterOp, 0x2EB3C140) --------------
+    // LACT-parity measurement lane (read-only; the op's write flags are
+    // deliberately not exposed). Feeds two surfaces: per-chip GDDR6x/GDDR7
+    // sensor temps and the Blackwell aggregated hotspot fallback.
+    //
+    // Handler anatomy + live matrix (610.47): docs/reverse-engineering/
+    // nvapi/registerop-0x2eb3c140-handler-r61047.md. Contract summary:
+    // our version stamp 0x11808 / 24-byte ops / flag 21 = READ|32BIT|GLOBAL
+    // all match the driver's own decode; the kernel lane (escape
+    // 0x070000F1) REQUIRES an elevated process — non-admin reads fail at
+    // call level with generic NVAPI_ERROR (-1) regardless of offset.
+
+    /// One 32-bit global register read. `value` is the driver's raw u64
+    /// slot (32-bit reads occupy the low dword). Requires an elevated
+    /// process: non-admin callers get `NVAPI_ERROR (-1)` for every offset.
+    /// Poison decodes (`0xBADF****`, e.g. the GDDR windows on non-GDDR6x/7
+    /// parts) surface as raw values, not errors — filter at the caller.
+    pub fn read_register_u32(&self, offset: u32) -> crate::NvapiResult<u64> {
+        trace!("gpu.read_register_u32({offset:#x})");
+        let mut data = register::undocumented::NV_GPU_REGISTER_OP_DATA_V1 {
+            op_count: 1,
+            ..register::undocumented::NV_GPU_REGISTER_OP_DATA_V1::default()
+        };
+        data.op[0] = register::undocumented::NV_GPU_REGISTER_OP {
+            flags: register::undocumented::NV_GPU_REGISTER_OP_FLAG_READ
+                | register::undocumented::NV_GPU_REGISTER_OP_FLAG_32BIT
+                | register::undocumented::NV_GPU_REGISTER_OP_FLAG_TYPE_GLOBAL,
+            status: 0,
+            offset,
+            write_mask: 0,
+            value: 0,
+        };
+        unsafe { nvcall!(NvAPI_GPU_RegisterOp(self.0, &mut data)) }?;
+        Ok(data.op[0].value)
+    }
+
+    /// Blackwell+ aggregated hotspot (register `0xAD0AA0`, 8.8 fixed point
+    /// in the low half-word). Errors on 0/255+ readings — the sentinel
+    /// values the register reports when the sensor is absent.
+    pub fn blackwell_hotspot_register_c(&self) -> crate::Result<u32> {
+        const REG_OFFSET_BLACKWELL_HOTSPOT_AGGREGATED: u32 = 0x00AD_0AA0;
+        trace!("gpu.blackwell_hotspot_register_c()");
+        let raw = self.read_register_u32(REG_OFFSET_BLACKWELL_HOTSPOT_AGGREGATED)?;
+        let value = ((raw & 0xFFFF) / 256) as u32;
+        if value == 0 || value >= u32::from(u8::MAX) {
+            return Err(crate::Error::ArgumentRange(sys::ArgumentRangeError::new(
+                i64::from(value),
+            )));
+        }
+        Ok(value)
+    }
+
+    /// Per-chip GDDR6x/GDDR7 temperature sensors, ported from LACT
+    /// `NvApi::read_vram_temps`: partitions 0..=8 (`A`..`I`), status
+    /// register gating data registers (+0x4000 per partition), `0xBADF0000`
+    /// poison filtering, clamshell front/back split (bit 22 of the
+    /// clamshell register). Non-GDDR6x/7 RAM types return an empty list
+    /// (LACT gates the same way). Raw sensor decode:
+    /// `pc = 2·min(raw, 0x50) − 40 °C`.
+    ///
+    /// The registers are the `NV_PFB_FBPA_DQR_STATUS_DQ` family — the
+    /// framebuffer's readout of the DRAM Mode-Register temperature code
+    /// (JEDEC MR readout, 2 °C steps), which only GDDR6X/GDDR7 packages
+    /// implement. Base pair `0x9024C0/D0` = LACT's walk; on GB202 the same
+    /// block is relocated to `0x9A24C0/D0` (gddr6.c RTX 5090 table), so
+    /// GDDR7 tries the LACT base first and falls back when no module
+    /// answers.
+    ///
+    /// Why the gate is correct (live-proven on TU106/GDDR6, 610.47
+    /// elevated): the GDDR windows decode to `0xBADF****` poison there —
+    /// GDDR6 packages carry no MR temperature readout, and Turing has no
+    /// per-module or aggregated memory-temp window at all. See
+    /// `docs/reverse-engineering/nvapi/registerop-0x2eb3c140-handler-r61047.md`.
+    pub fn vram_chip_temps(&self, ram_type: RamType) -> crate::Result<Vec<(String, u64)>> {
+        const REG_OFFSET_GDDR_CLAMSHELL: u32 = 0x0090_0200;
+        const PARTITION_STRIDE: u32 = 0x4000;
+        const POISON_PREFIX: u64 = 0xBADF_0000;
+        // (data base, status base) per generation: LACT's 0x9024C0 family,
+        // plus the GB202 relocation for GDDR7.
+        const BASE_LACT: (u32, u32) = (0x0090_24C0, 0x0090_24D0);
+        const BASE_GB202: (u32, u32) = (0x009A_24C0, 0x009A_24D0);
+
+        let parse_temp = |raw: u64| 2 * raw.min(0x50) - 40;
+
+        if !matches!(ram_type, RamType::GDDR6X | RamType::GDDR7) {
+            return Ok(Vec::new());
+        }
+
+        let is_clamshell = self
+            .read_register_u32(REG_OFFSET_GDDR_CLAMSHELL)
+            .is_ok_and(|value| (value >> 22) & 1 == 1);
+
+        let base_pairs: &[(u32, u32)] = match ram_type {
+            RamType::GDDR7 => &[BASE_LACT, BASE_GB202],
+            _ => &[BASE_LACT],
+        };
+
+        let mut temps = Vec::new();
+
+        for &(data_base, status_base) in base_pairs {
+            temps.clear();
+
+            for partition in 0..=8u32 {
+                let data_offset = data_base + partition * PARTITION_STRIDE;
+                let status_offset = status_base + partition * PARTITION_STRIDE;
+
+                let Ok(status) = self.read_register_u32(status_offset) else {
+                    continue;
+                };
+
+                // Explicit poison data
+                if status & 0xFFFF_0000 == POISON_PREFIX {
+                    continue;
+                }
+
+                let mut i = 0;
+                'pairs: for slot_pair in [[(0x0u32, 24u32), (0x8, 26)], [(0x4, 25), (0xC, 27)]] {
+                    for (slot, status_bit) in slot_pair {
+                        if (status >> status_bit) & 1 == 1 {
+                            let data = self
+                                .read_register_u32(data_offset + slot)
+                                .map_err(crate::Error::from)?;
+
+                            if data == 0
+                                || data == u64::from(u32::MAX)
+                                || data & 0xFFFF_0000 == POISON_PREFIX
+                            {
+                                continue;
+                            }
+
+                            let pc0 = (data >> 16) & 0xFF;
+                            let pc1 = (data >> 24) & 0xFF;
+
+                            if pc0 == 0 || pc0 == u64::from(u8::MAX) {
+                                continue;
+                            }
+
+                            let partition_letter = char::from_u32(b'A' as u32 + partition)
+                                .ok_or_else(|| {
+                                    crate::Error::ArgumentRange(sys::ArgumentRangeError::new(
+                                        i64::from(partition),
+                                    ))
+                                })?;
+                            let label_base = format!("{partition_letter}{i}");
+
+                            let front_label = if is_clamshell {
+                                format!("{label_base} (Front)")
+                            } else {
+                                label_base.clone()
+                            };
+
+                            temps.push((front_label, parse_temp(pc0)));
+
+                            if is_clamshell && pc1 != 0 && pc1 != u64::from(u8::MAX) {
+                                temps.push((format!("{label_base} (Back)"), parse_temp(pc1)));
+                            }
+
+                            i += 1;
+
+                            continue 'pairs;
+                        }
+                    }
+                }
+            }
+
+            if !temps.is_empty() {
+                return Ok(temps);
+            }
+        }
+
+        Ok(temps)
     }
 
     pub fn foundry(&self) -> crate::Result<Foundry> {

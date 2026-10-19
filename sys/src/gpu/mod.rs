@@ -30,6 +30,9 @@ pub mod thermal;
 
 pub mod power;
 
+/// Raw register access (`NvAPI_GPU_RegisterOp`, 0x2EB3C140).
+pub mod register;
+
 pub mod display;
 
 /// GPU illumination (LED brightness) query/control
@@ -855,6 +858,11 @@ pub mod undocumented {
             NV_GPU_RAM_GDDR5 / GDDR5 = 8,
             NV_GPU_RAM_LPDDR2 / LPDDR2 = 9,
             NV_GPU_RAM_GDDR5X / GDDR5X = 10,
+            /// GDDR6. Live-confirmed on desktop TU106 (RTX 2070, 610.47
+            /// Windows): GetRamType rc=0 raw=14 — the NVAPI encoding slots
+            /// GDDR6 right below GDDR6X=15 (distinct from the RM
+            /// FB_INFO RAM_TYPE encoding, where GDDR6=0x11).
+            NV_GPU_RAM_GDDR6 / GDDR6 = 14,
             NV_GPU_RAM_GDDR6X / GDDR6X = 15,
             /// GDDR7. Live-confirmed on RTX PRO 6000 Blackwell Server Edition
             /// (580.173.02 Linux): NvAPI_GPU_GetRamType rc=0 raw=16 —

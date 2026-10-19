@@ -81,6 +81,7 @@ pub mod api {
         pub use crate::gpu::cooler::undocumented::*;
         pub use crate::gpu::power::undocumented::*;
         pub use crate::gpu::pstate::undocumented::*;
+        pub use crate::gpu::register::undocumented::*;
         pub use crate::gpu::thermal::undocumented::*;
         pub use crate::gpu::undocumented::*;
         pub use crate::i2c::undocumented::*;
