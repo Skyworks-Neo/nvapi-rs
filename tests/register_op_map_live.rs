@@ -110,7 +110,7 @@ fn register_op_map() {
     let mut run_start = 0u32;
     let mut run_sig = String::new();
     let mut run_count = 0usize;
-    let mut flush = |start: u32, sig: &str, count: usize| {
+    let flush = |start: u32, sig: &str, count: usize| {
         if count > 0 {
             println!("  {start:#010x} x{count:<4} {sig}");
         }

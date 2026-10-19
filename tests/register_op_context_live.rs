@@ -53,12 +53,22 @@ fn register_context() {
     );
 
     // PTIMER family @0x9000 (NV50+): counter must tick between reads.
+    // 0xEE50 is co-timed with the same window: the 3060 session showed a
+    // strictly monotonic value whose deltas matched re-run spacing in
+    // MICROSECONDS — µs-counter hypothesis is confirmed when its delta over
+    // this 120 ms sleep lands near 120_000 (PTIMER's ns delta ≈ 120_000_000).
     let t0 = rd(handle, 0x9400);
+    let e0 = rd(handle, 0xEE50);
     sleep(Duration::from_millis(120));
     let t1 = rd(handle, 0x9400);
+    let e1 = rd(handle, 0xEE50);
     println!(
         "[PTIMER? @0x9400] {t0:?} -> {t1:?} (tick delta = {:?})",
         t1.ok().zip(t0.ok()).map(|(a, b)| a.wrapping_sub(b))
+    );
+    println!(
+        "[0xEE50 counter] {e0:?} -> {e1:?} (delta = {:?}; µs-counter iff ≈ 120_000)",
+        e1.ok().zip(e0.ok()).map(|(a, b)| a.wrapping_sub(b))
     );
 
     // LACT GDDR windows (0x9024C0/D0 + partition stride) and neighbors.
